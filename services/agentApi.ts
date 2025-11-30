@@ -9,6 +9,10 @@ export interface AgentJournalDraft {
   summary: string;
   sentiment: string;
   tags: string[];
+  // Optional metadata for journal mapping
+  symbol?: string;
+  direction?: "long" | "short";
+  outcome?: string;
 }
 
 export interface AgentInsight {

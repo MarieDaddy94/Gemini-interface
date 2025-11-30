@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAgentInsights, AgentId } from '../services/agentApi';
+import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 
 // UI Metadata for styling specific agents
@@ -32,7 +32,8 @@ interface ChatOverlayProps {
 
 const ChatOverlay: React.FC<ChatOverlayProps> = ({ 
   chartContext,
-  isBrokerConnected 
+  isBrokerConnected,
+  autoFocusSymbol
 }) => {
   // UI State
   const [isOpen, setIsOpen] = useState(true);
@@ -162,9 +163,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       } else if (isVisionActive) {
         const frame = captureFrame();
         if (frame) {
-          // captureFrame returns base64 string, frame is already just base64 data usually?
-          // Looking at captureFrame impl above: `return dataUrl.split(',')[1];`
-          // So we need to re-add prefix for the backend router which expects Data URL
+          // captureFrame returns base64 string, backend expects Data URL
           screenshot = `data:image/jpeg;base64,${frame}`;
         }
       }
@@ -204,27 +203,41 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         return next;
       });
 
-      // 4. Handle Journal Drafts
+      // 4. Handle Journal Drafts - Strict Wiring
       insights.forEach(i => {
         if (i.journalDraft) {
-          // Map AgentJournalDraft to JournalEntry
+          const draft = i.journalDraft;
+          
+          // Map AgentJournalDraft to JournalEntry strictly for JournalPanel
           addEntry({
-            id: `ai-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: `ai-${i.agentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             timestamp: new Date().toISOString(),
             source: 'ai',
             
-            // Core fields
-            playbook: i.journalDraft.title, 
-            note: i.journalDraft.summary,
-            sentiment: i.journalDraft.sentiment,
-            tags: i.journalDraft.tags,
-            agentId: i.journalDraft.agentId,
-            agentName: i.journalDraft.agentName,
+            // --- MAPPED FIELDS ---
+            // Title -> Playbook column
+            playbook: draft.title, 
+            // Summary -> Notes column
+            note: draft.summary,
+            // Sentiment -> Sentiment
+            sentiment: draft.sentiment,
+            // Tags -> Tags
+            tags: draft.tags,
             
-            // Defaults (User will fill in specific trade data)
-            outcome: 'Open',
-            symbol: 'US30', // Default fallback
-            direction: undefined,
+            // --- PILL COLORING ---
+            agentId: draft.agentId || i.agentId as string,
+            agentName: draft.agentName || i.agentName,
+            
+            // --- DEFAULTS / METADATA ---
+            outcome: (draft.outcome as any) || 'Open',
+            symbol: draft.symbol || autoFocusSymbol || 'US30',
+            direction: draft.direction,
+            
+            // Required placeholders
+            entryPrice: undefined,
+            stopPrice: undefined,
+            targetPrice: undefined,
+            size: undefined,
           });
           console.log(`[ChatOverlay] Added journal draft from ${i.agentName}`);
         }
