@@ -87,3 +87,32 @@ export interface SessionSummary {
   swingPlan: LanePlan;   // Playbook for slower / HTF trades
   riskNotes?: string;    // News / volatility / risk comments
 }
+
+// --- Journaling Types ---
+
+export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';
+
+export interface AccountSnapshot {
+  balance: number;
+  equity: number;
+  openPnl: number;
+  positionsCount: number;
+}
+
+export interface JournalEntry {
+  id: string;
+  timestamp: string; // ISO string
+  focusSymbol: string;
+  bias: TradeBias;
+  confidence: number; // 1-5
+  note: string;
+  accountSnapshot?: AccountSnapshot | null;
+}
+
+export interface NewJournalEntryInput {
+  focusSymbol: string;
+  bias: TradeBias;
+  confidence: number;
+  note: string;
+  accountSnapshot?: AccountSnapshot;
+}

@@ -3,6 +3,7 @@ import { MOCK_CHARTS } from './constants';
 import ChatOverlay from './components/ChatOverlay';
 import WebBrowser from './components/WebBrowser';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
+import JournalPanel from './components/JournalPanel';
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
@@ -31,6 +32,9 @@ const App: React.FC = () => {
 
   const [autoFocusSymbol, setAutoFocusSymbol] =
     useState<FocusSymbol>('Auto');
+
+  // Journal UI
+  const [isJournalOpen, setIsJournalOpen] = useState(false);
 
   // Poll Broker Data when connected
   useEffect(() => {
@@ -90,6 +94,7 @@ const App: React.FC = () => {
     setActiveAccount(null);
     setIsAccountMenuOpen(false);
     setAutoFocusSymbol('Auto');
+    setIsJournalOpen(false);
   };
 
   const handleSelectAccount = async (account: TradeLockerAccountSummary) => {
@@ -299,6 +304,34 @@ const App: React.FC = () => {
               </button>
             )}
 
+            {/* Journal toggle */}
+            <button
+              onClick={() => setIsJournalOpen((prev) => !prev)}
+              className={`flex items-center gap-1 text-xs py-1.5 px-3 rounded font-medium transition-colors border ${
+                isJournalOpen
+                  ? 'bg-[#2962ff] border-[#2962ff] text-white'
+                  : 'bg-[#1e222d] border-[#2a2e39] text-[#d1d4dc] hover:border-[#2962ff]'
+              }`}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20" />
+                <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z" />
+                <path d="M8 7h8" />
+                <path d="M8 11h5" />
+              </svg>
+              <span>Journal</span>
+            </button>
+
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-1"></div>
 
             <div className="flex items-center gap-2 text-xs bg-[#2a2e39] py-1 px-2 rounded text-[#d1d4dc]">
@@ -321,12 +354,23 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {/* AI Analyst Sidebar - Passing the enriched broker data context */}
+      {/* AI Analyst Sidebar */}
       <ChatOverlay
         chartContext={marketContext}
         isBrokerConnected={!!brokerSessionId}
         autoFocusSymbol={autoFocusSymbol}
       />
+
+      {/* Journal Panel */}
+      {isJournalOpen && (
+        <JournalPanel
+          isOpen={isJournalOpen}
+          onClose={() => setIsJournalOpen(false)}
+          sessionId={brokerSessionId}
+          autoFocusSymbol={autoFocusSymbol}
+          brokerData={brokerData}
+        />
+      )}
 
       {/* Broker Modal */}
       <ConnectBrokerModal

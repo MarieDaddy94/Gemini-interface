@@ -10,6 +10,8 @@ const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
 
 // In-memory session store: sessionId -> TradeLocker session info + accounts
 const sessions = new Map();
+// In-memory journaling store: sessionId -> JournalEntry[]
+const journalBySession = new Map();
 
 /**
  * For demo: allow your frontend origin.
@@ -181,6 +183,9 @@ app.post('/api/tradelocker/login', async (req, res) => {
       server,
       accounts
     });
+
+    // Initialize empty journal for this session
+    journalBySession.set(sessionId, []);
 
     res.json({
       sessionId,
@@ -372,6 +377,52 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     console.error('TradeLocker overview fatal error', err);
     res.status(500).send('Internal error while fetching broker data');
   }
+});
+
+/**
+ * GET /api/journal/entries?sessionId=...
+ * Returns all journal entries for this session.
+ */
+app.get('/api/journal/entries', (req, res) => {
+  const sessionId = req.query.sessionId;
+  const session = getSessionOrThrow(sessionId, res);
+  if (!session) return;
+
+  const entries = journalBySession.get(sessionId) || [];
+  res.json(entries);
+});
+
+/**
+ * POST /api/journal/entry
+ * Body: { sessionId, entry: { focusSymbol, bias, confidence, note, accountSnapshot } }
+ */
+app.post('/api/journal/entry', (req, res) => {
+  const { sessionId, entry } = req.body || {};
+  const session = getSessionOrThrow(sessionId, res);
+  if (!session) return;
+
+  if (!entry || !entry.note) {
+    return res.status(400).send('Missing entry or note');
+  }
+
+  const id = crypto.randomUUID();
+  const timestamp = new Date().toISOString();
+
+  const stored = {
+    id,
+    timestamp,
+    focusSymbol: entry.focusSymbol || 'Unknown',
+    bias: entry.bias || 'Neutral',
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : 3,
+    note: entry.note,
+    accountSnapshot: entry.accountSnapshot || null
+  };
+
+  const list = journalBySession.get(sessionId) || [];
+  list.unshift(stored);
+  journalBySession.set(sessionId, list);
+
+  res.json(stored);
 });
 
 // Simple health check
