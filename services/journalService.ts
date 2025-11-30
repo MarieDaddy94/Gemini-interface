@@ -7,6 +7,8 @@ import {
 } from '../types';
 
 const STORAGE_KEY_PREFIX = 'ai-trading-analyst-journal-';
+const API_BASE_URL =
+  (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
 function getStorageKey(sessionId: string): string {
   return `${STORAGE_KEY_PREFIX}${sessionId}`;
@@ -22,7 +24,6 @@ function loadEntries(sessionId: string): JournalEntry[] {
 
   try {
     const parsed = JSON.parse(raw) as JournalEntry[];
-    // Ensure basic shape
     if (!Array.isArray(parsed)) return [];
     return parsed;
   } catch {
@@ -34,53 +35,105 @@ function saveEntries(sessionId: string, entries: JournalEntry[]): void {
   if (typeof window === 'undefined' || !window.localStorage) {
     return;
   }
-  window.localStorage.setItem(
-    getStorageKey(sessionId),
-    JSON.stringify(entries)
-  );
+  window.localStorage.setItem(getStorageKey(sessionId), JSON.stringify(entries));
 }
 
 function generateId(): string {
-  return `${Date.now().toString(36)}-${Math.random()
-    .toString(36)
-    .slice(2, 10)}`;
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-// ==============
-// CRUD
-// ==============
+// =====================================================
+// Backend-first CRUD with localStorage fallback
+// =====================================================
 
-export async function fetchJournalEntries(
-  sessionId: string
-): Promise<JournalEntry[]> {
-  const entries = loadEntries(sessionId);
-  // Sort newest first
-  entries.sort(
-    (a, b) =>
-      new Date(b.timestamp).getTime() -
-      new Date(a.timestamp).getTime()
-  );
-  return entries;
+export async function fetchJournalEntries(sessionId: string): Promise<JournalEntry[]> {
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/journal/entries?sessionId=${encodeURIComponent(sessionId)}`,
+      {
+        method: 'GET',
+        credentials: 'include'
+      }
+    );
+
+    if (!res.ok) {
+      throw new Error(`Backend returned ${res.status}`);
+    }
+
+    const data = (await res.json()) as any[];
+
+    const normalized: JournalEntry[] = data.map((raw) => ({
+      ...raw,
+      sessionId: raw.sessionId || sessionId
+    }));
+
+    normalized.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() -
+        new Date(a.timestamp).getTime()
+    );
+
+    return normalized;
+  } catch (err) {
+    console.error(
+      'Failed to fetch journal entries from backend, falling back to localStorage:',
+      err
+    );
+    const entries = loadEntries(sessionId);
+    entries.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() -
+        new Date(a.timestamp).getTime()
+    );
+    return entries;
+  }
 }
 
 export async function createJournalEntry(
   sessionId: string,
   data: NewJournalEntryInput
 ): Promise<JournalEntry> {
-  const nowIso = new Date().toISOString();
-  const entries = loadEntries(sessionId);
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/journal/entry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ sessionId, entry: data })
+    });
 
-  const entry: JournalEntry = {
-    id: generateId(),
-    sessionId,
-    timestamp: nowIso,
-    ...data
-  };
+    if (!res.ok) {
+      throw new Error(`Backend returned ${res.status}`);
+    }
 
-  const next = [entry, ...entries];
-  saveEntries(sessionId, next);
+    const raw = await res.json();
 
-  return entry;
+    const entry: JournalEntry = {
+      ...raw,
+      sessionId: raw.sessionId || sessionId
+    };
+
+    return entry;
+  } catch (err) {
+    console.error(
+      'Failed to create journal entry via backend, saving locally instead:',
+      err
+    );
+
+    const nowIso = new Date().toISOString();
+    const entries = loadEntries(sessionId);
+
+    const entry: JournalEntry = {
+      id: generateId(),
+      sessionId,
+      timestamp: nowIso,
+      ...data
+    };
+
+    const next = [entry, ...entries];
+    saveEntries(sessionId, next);
+
+    return entry;
+  }
 }
 
 export async function updateJournalEntry(
@@ -88,29 +141,58 @@ export async function updateJournalEntry(
   entryId: string,
   patch: Partial<JournalEntry>
 ): Promise<JournalEntry> {
-  const entries = loadEntries(sessionId);
-  const idx = entries.findIndex((e) => e.id === entryId);
-  if (idx === -1) {
-    throw new Error('Journal entry not found');
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/journal/entry/${encodeURIComponent(entryId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ sessionId, updates: patch })
+      }
+    );
+
+    if (!res.ok) {
+      throw new Error(`Backend returned ${res.status}`);
+    }
+
+    const raw = await res.json();
+    const entry: JournalEntry = {
+      ...raw,
+      sessionId: raw.sessionId || sessionId
+    };
+
+    return entry;
+  } catch (err) {
+    console.error(
+      'Failed to update journal entry via backend, patching local copy instead:',
+      err
+    );
+
+    const entries = loadEntries(sessionId);
+    const idx = entries.findIndex((e) => e.id === entryId);
+    if (idx === -1) {
+      throw new Error('Journal entry not found');
+    }
+
+    const current = entries[idx];
+    const updated: JournalEntry = {
+      ...current,
+      ...patch,
+      id: current.id,
+      sessionId: current.sessionId
+    };
+
+    entries[idx] = updated;
+    saveEntries(sessionId, entries);
+
+    return updated;
   }
-
-  const current = entries[idx];
-  const updated: JournalEntry = {
-    ...current,
-    ...patch,
-    id: current.id,
-    sessionId: current.sessionId
-  };
-
-  entries[idx] = updated;
-  saveEntries(sessionId, entries);
-
-  return updated;
 }
 
-// ==============
-// Tag + Symbol Query
-// ==============
+// =====================================================
+// Tag + Symbol Query (used by /coach and analytics)
+// =====================================================
 
 export interface TagSymbolQueryResult {
   tagSummary: TagSummary | null;
@@ -145,21 +227,13 @@ function computeTagStatsForEntries(
 
   const bySymbol = new Map<string, SymbolSummaryForTag>();
 
-  const closedOutcomes: TradeOutcome[] = [
-    'Win',
-    'Loss',
-    'BreakEven'
-  ];
+  const closedOutcomes: TradeOutcome[] = ['Win', 'Loss', 'BreakEven'];
 
   entries.forEach((e) => {
-    if (
-      !e.tags ||
-      !e.tags.some((t) => t.trim() === normalizedTag)
-    ) {
+    if (!e.tags || !e.tags.some((t) => t.trim() === normalizedTag)) {
       return;
     }
 
-    // Count every entry that has this tag
     tagSummary.total += 1;
 
     let symbolKey = e.focusSymbol || 'Unknown';
@@ -181,7 +255,6 @@ function computeTagStatsForEntries(
 
     symbolStats.total += 1;
 
-    // Only closed outcomes affect W/L/BE and PnL
     if (closedOutcomes.includes(e.outcome)) {
       if (e.outcome === 'Win') {
         tagSummary.wins += 1;
@@ -195,8 +268,7 @@ function computeTagStatsForEntries(
       }
 
       const pnl =
-        typeof e.finalPnl === 'number' &&
-        !Number.isNaN(e.finalPnl)
+        typeof e.finalPnl === 'number' && !Number.isNaN(e.finalPnl)
           ? e.finalPnl
           : null;
 
@@ -210,7 +282,6 @@ function computeTagStatsForEntries(
     }
   });
 
-  // If nothing matched, return null summary
   if (tagSummary.total === 0) {
     return {
       tagSummary: null,
@@ -229,15 +300,7 @@ function computeTagStatsForEntries(
 }
 
 /**
- * High-level query for AI "coach" or analytics:
- *
- * - tag (required): e.g. "LondonOpen"
- * - symbol (optional): e.g. "US30", "XAUUSD"
- *
- * Returns:
- *   - tagSummary: global stats across all symbols for that tag
- *   - perSymbol: symbol × tag stats
- *   - entries: the raw entries that match (filtered by symbol if provided)
+ * High-level query for AI "coach" or analytics.
  */
 export async function queryJournalByTagAndSymbol(
   sessionId: string,
@@ -246,33 +309,24 @@ export async function queryJournalByTagAndSymbol(
 ): Promise<TagSymbolQueryResult> {
   const allEntries = await fetchJournalEntries(sessionId);
   const normalizedTag = tag.trim();
-  const normalizedSymbol = symbol
-    ? symbol.trim().toUpperCase()
-    : null;
+  const normalizedSymbol = symbol ? symbol.trim().toUpperCase() : null;
 
-  // First, narrow to entries that have this tag
   let matchingEntries = allEntries.filter(
-    (e) =>
-      e.tags &&
-      e.tags.some((t) => t.trim() === normalizedTag)
+    (e) => e.tags && e.tags.some((t) => t.trim() === normalizedTag)
   );
 
-  // Optionally filter by symbol for the entries list
   if (normalizedSymbol) {
     matchingEntries = matchingEntries.filter((e) => {
       const focus = (e.focusSymbol || '').toUpperCase();
       const linked = (e.linkedSymbol || '').toUpperCase();
-      return (
-        focus === normalizedSymbol || linked === normalizedSymbol
-      );
+      return focus === normalizedSymbol || linked === normalizedSymbol;
     });
   }
 
-  // Compute stats using ALL entries with that tag (across symbols),
-  // so you can say things like:
-  // "LondonOpen overall is 62% WR, but on US30 specifically it's 75%."
-  const { tagSummary, perSymbol } =
-    computeTagStatsForEntries(normalizedTag, allEntries);
+  const { tagSummary, perSymbol } = computeTagStatsForEntries(
+    normalizedTag,
+    allEntries
+  );
 
   return {
     tagSummary,
@@ -283,7 +337,7 @@ export async function queryJournalByTagAndSymbol(
 
 /**
  * Optional helper: compute a full matrix of Tag × Symbol stats
- * across all entries. Useful if you ever want a heatmap.
+ * across all entries.
  */
 export async function computeTagSymbolMatrix(
   sessionId: string
@@ -291,12 +345,7 @@ export async function computeTagSymbolMatrix(
   const allEntries = await fetchJournalEntries(sessionId);
 
   const matrix = new Map<string, SymbolSummaryForTag>();
-
-  const closedOutcomes: TradeOutcome[] = [
-    'Win',
-    'Loss',
-    'BreakEven'
-  ];
+  const closedOutcomes: TradeOutcome[] = ['Win', 'Loss', 'BreakEven'];
 
   allEntries.forEach((e) => {
     if (!e.tags || !e.tags.length) return;
@@ -304,8 +353,7 @@ export async function computeTagSymbolMatrix(
 
     const symbolKey = e.focusSymbol;
     const pnl =
-      typeof e.finalPnl === 'number' &&
-      !Number.isNaN(e.finalPnl)
+      typeof e.finalPnl === 'number' && !Number.isNaN(e.finalPnl)
         ? e.finalPnl
         : null;
 

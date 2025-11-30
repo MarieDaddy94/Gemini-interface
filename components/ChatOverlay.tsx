@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage, AnalystPersona } from '../types';
 import { ANALYST_AVATARS } from '../constants';
-import { getAnalystInsights, getCoachFeedback } from '../services/geminiService';
+import { getAnalystInsights, getCoachFeedback, getSessionSummary } from '../services/geminiService';
 import { queryJournalByTagAndSymbol } from '../services/journalService';
+import { logSessionPlaybook } from '../services/playbookService';
 
 interface ChatOverlayProps {
   chartContext: string;
@@ -35,6 +36,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isThinking, setIsThinking] = useState(false);
+  const [isSavingPlaybook, setIsSavingPlaybook] = useState(false);
   
   // Vision / Screen Share State
   const [isVisionActive, setIsVisionActive] = useState(false);
@@ -63,7 +65,6 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
 
   const toggleVision = async () => {
     if (isVisionActive) {
-      // Stop sharing
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
         streamRef.current = null;
@@ -73,18 +74,16 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       }
       setIsVisionActive(false);
     } else {
-      // Start sharing
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: { 
-            displaySurface: 'browser', // Encourages browser tab sharing
+            displaySurface: 'browser',
           }, 
           audio: false 
         });
         
         streamRef.current = stream;
         
-        // Handle user stopping stream via browser UI
         stream.getVideoTracks()[0].onended = () => {
           setIsVisionActive(false);
           streamRef.current = null;
@@ -112,7 +111,6 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           isUser: false
         }]);
 
-        // Force reset if failed
         setIsVisionActive(false);
       }
     }
@@ -124,11 +122,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     const canvas = document.createElement('canvas');
     const video = videoRef.current;
     
-    // Check if video is ready
     if (video.videoWidth === 0 || video.videoHeight === 0) return undefined;
 
-    // Set canvas dimensions to match video (or scale down for performance/tokens)
-    const scale = 0.5; // Scale down to 50% to save tokens/bandwidth
+    const scale = 0.5;
     canvas.width = video.videoWidth * scale;
     canvas.height = video.videoHeight * scale;
     
@@ -137,7 +133,6 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Return base64 string without prefix
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     return dataUrl.split(',')[1];
   };
@@ -146,10 +141,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   // Coach command handler
   // -----------------------
   const handleCoachCommand = async (commandText: string) => {
-    // /coach LondonOpen US30
     const parts = commandText.trim().split(/\s+/);
     const tag = parts[1];
-    const symbol = parts[2]; // optional
+    const symbol = parts[2];
 
     if (!tag) {
       setMessages(prev => [
@@ -231,6 +225,61 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   };
 
   // -----------------------
+  // Save Playbook handler
+  // -----------------------
+  const handleSavePlaybook = async () => {
+    if (isSavingPlaybook) return;
+
+    setIsSavingPlaybook(true);
+    try {
+      const summary = await getSessionSummary(
+        chartContext,
+        messages.map((m) => ({
+          sender: typeof m.sender === 'string' ? m.sender : String(m.sender),
+          text: m.text,
+          isUser: m.isUser
+        }))
+      );
+
+      const focusSymbol =
+        autoFocusSymbol && autoFocusSymbol !== 'Auto'
+          ? autoFocusSymbol
+          : 'Unknown';
+
+      await logSessionPlaybook(summary, {
+        focusSymbol,
+        chartContext,
+        history: messages
+      });
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now().toString()}-playbook-saved`,
+          sender: "System",
+          text: '✅ Session playbook saved. You can review it later in the Analysis tab.',
+          timestamp: new Date(),
+          isUser: false
+        }
+      ]);
+    } catch (err) {
+      console.error('Save playbook failed', err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now().toString()}-playbook-error`,
+          sender: "System",
+          text: '⚠️ Could not save playbook. Check your backend and try again.',
+          timestamp: new Date(),
+          isUser: false
+        }
+      ]);
+    } finally {
+      setIsSavingPlaybook(false);
+    }
+  };
+
+  // -----------------------
   // Send message handler
   // -----------------------
   const handleSendMessage = async () => {
@@ -256,13 +305,11 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
 
     const trimmed = userText.trim();
 
-    // Slash command: /coach
     if (trimmed.toLowerCase().startsWith('/coach')) {
       await handleCoachCommand(trimmed);
       return;
     }
 
-    // Normal analyst query
     setIsThinking(true);
 
     try {
@@ -344,6 +391,27 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <button 
+            onClick={handleSavePlaybook}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium border transition-colors ${
+              isSavingPlaybook
+                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-wait'
+                : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+            }`}
+            title="Save Session Playbook"
+          >
+            {isSavingPlaybook ? (
+              <>
+                <span className="w-2 h-2 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+                <span>Saving</span>
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h11l3 3v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                <span>Save</span>
+              </>
+            )}
+          </button>
           <button 
             onClick={toggleVision}
             className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${

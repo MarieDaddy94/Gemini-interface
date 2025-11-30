@@ -4,6 +4,7 @@ import ChatOverlay from './components/ChatOverlay';
 import WebBrowser from './components/WebBrowser';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
 import JournalPanel from './components/JournalPanel';
+import PlaybookArchive from './components/PlaybookArchive';
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
@@ -35,6 +36,9 @@ const App: React.FC = () => {
     return fresh;
   });
 
+  // Top-level tab state
+  const [activeTab, setActiveTab] = useState<'Terminal' | 'Analysis' | 'Screeners'>('Terminal');
+
   // Broker State
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
   const [brokerSessionId, setBrokerSessionId] = useState<string | null>(null);
@@ -47,6 +51,11 @@ const App: React.FC = () => {
 
   const [autoFocusSymbol, setAutoFocusSymbol] =
     useState<FocusSymbol>('Auto');
+
+  // Effective journal id:
+  // - If connected to TradeLocker, use backend session id (enables auto-outcome logic)
+  // - Otherwise, use local persistent session id for offline journaling
+  const effectiveJournalSessionId = brokerSessionId || journalSessionId;
 
   // Poll Broker Data when connected
   useEffect(() => {
@@ -62,8 +71,8 @@ const App: React.FC = () => {
         }
       };
 
-      fetchData(); // Initial fetch
-      interval = window.setInterval(fetchData, 3000); // Poll every 3s
+      fetchData();
+      interval = window.setInterval(fetchData, 3000);
     }
 
     return () => {
@@ -119,7 +128,6 @@ const App: React.FC = () => {
       );
       setActiveAccount(account);
       setIsAccountMenuOpen(false);
-      // Broker polling loop will pick up the new account on next poll
     } catch (err) {
       console.error('Failed to switch TradeLocker account', err);
     }
@@ -188,15 +196,23 @@ const App: React.FC = () => {
             </div>
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-2"></div>
             <div className="flex gap-4 text-sm font-medium text-[#d1d4dc]">
-              <span className="text-white border-b-2 border-[#2962ff] pb-3.5 mt-3.5 cursor-pointer">
-                Terminal
-              </span>
-              <span className="hover:text-white cursor-pointer py-3.5">
-                Analysis
-              </span>
-              <span className="hover:text-white cursor-pointer py-3.5">
-                Screeners
-              </span>
+              {(['Terminal', 'Analysis', 'Screeners'] as const).map((tab) => {
+                const isActive = activeTab === tab;
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className={
+                      isActive
+                        ? 'text-white border-b-2 border-[#2962ff] pb-3.5 mt-3.5 cursor-pointer'
+                        : 'hover:text-white cursor-pointer py-3.5'
+                    }
+                  >
+                    {tab}
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -331,16 +347,31 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Browser Container + Journal Panel */}
+        {/* Main content */}
         <main className="flex-1 relative bg-[#131722] flex flex-col">
-          <div className="flex-1 min-h-0">
-            <WebBrowser />
-          </div>
-          {/* New Fixed Journal panel */}
-          <JournalPanel 
-            sessionId={journalSessionId} 
-            brokerData={brokerData} 
-          />
+          {activeTab === 'Terminal' && (
+            <>
+              <div className="flex-1 min-h-0">
+                <WebBrowser />
+              </div>
+              <JournalPanel 
+                sessionId={effectiveJournalSessionId} 
+                brokerData={brokerData} 
+              />
+            </>
+          )}
+
+          {activeTab === 'Analysis' && (
+            <div className="flex-1 min-h-0 p-4 overflow-y-auto">
+              <PlaybookArchive />
+            </div>
+          )}
+
+          {activeTab === 'Screeners' && (
+            <div className="flex-1 min-h-0 flex items-center justify-center text-sm text-gray-400">
+              Screeners view coming soon.
+            </div>
+          )}
         </main>
       </div>
 
@@ -348,7 +379,7 @@ const App: React.FC = () => {
       <ChatOverlay
         chartContext={marketContext}
         isBrokerConnected={!!brokerSessionId}
-        sessionId={journalSessionId}
+        sessionId={effectiveJournalSessionId}
         autoFocusSymbol={autoFocusSymbol}
       />
 

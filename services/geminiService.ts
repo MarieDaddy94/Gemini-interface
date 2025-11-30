@@ -1,8 +1,7 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { AnalystPersona } from "../types";
+import { AnalystPersona, SessionSummary } from "../types";
 
-const apiKey = process.env.API_KEY || "";
-const ai = new GoogleGenAI({ apiKey });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 // Schema for multi-persona analyst responses
 const analysisSchema: Schema = {
@@ -28,12 +27,44 @@ const analysisSchema: Schema = {
   },
 };
 
+// Schema for session playbook summary
+const sessionSummarySchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    headlineBias: { type: Type.STRING },
+    keyLevels: { type: Type.STRING, nullable: true },
+    scalpPlan: {
+      type: Type.OBJECT,
+      properties: {
+        bias: { type: Type.STRING },
+        entryPlan: { type: Type.STRING },
+        invalidation: { type: Type.STRING },
+        targets: { type: Type.STRING },
+        rr: { type: Type.STRING }
+      },
+      required: ["bias", "entryPlan", "invalidation", "targets", "rr"]
+    },
+    swingPlan: {
+      type: Type.OBJECT,
+      properties: {
+        bias: { type: Type.STRING },
+        entryPlan: { type: Type.STRING },
+        invalidation: { type: Type.STRING },
+        targets: { type: Type.STRING },
+        rr: { type: Type.STRING }
+      },
+      required: ["bias", "entryPlan", "invalidation", "targets", "rr"]
+    },
+    riskNotes: { type: Type.STRING, nullable: true }
+  },
+  required: ["headlineBias", "scalpPlan", "swingPlan"]
+};
+
 function extractJson(text: string | undefined): string | null {
   if (!text) return null;
   let jsonStr = text.trim();
   if (!jsonStr) return null;
 
-  // If the model wrapped it in ```json ... ``` fences, strip them
   const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
   const match = jsonStr.match(fenceRegex);
   if (match && match[2]) {
@@ -175,18 +206,98 @@ ${prettyJson}
 };
 
 // ---------------------------------------------------------------------
-// 3) Legacy / Optional: Session Summary (kept for compatibility)
+// 3) Session Summary: build structured playbook / lane plans
 // ---------------------------------------------------------------------
+
 export const getSessionSummary = async (
-    // kept as placeholder if needed, or fully replaced if not used by updated components
-    chartContext: string,
-    history: any[]
-  ) => {
-    // This function is currently not used by the new Coach overlay, 
-    // but kept to prevent breakages if other components import it.
+  chartContext: string,
+  history: { sender: string; text: string; isUser: boolean }[]
+): Promise<SessionSummary> => {
+  try {
+    const modelId = "gemini-2.5-flash";
+
+    const lastMessages = history.slice(-30);
+    const historyText = lastMessages
+      .map((m) => `${m.isUser ? "Trader" : m.sender}: ${m.text}`)
+      .join("\n");
+
+    const prompt = `
+You are an elite trading desk assistant.
+
+You will receive:
+- A compact description of the current market / broker context.
+- A transcript of the most recent conversation between the trader and an AI team of analysts.
+
+Your job is to output a *structured* session playbook in JSON with this exact shape:
+
+{
+  "headlineBias": "Short sentence summarizing the session bias (e.g. 'US30 mildly bullish into NY open').",
+  "keyLevels": "Optional quick list of key HTF levels or zones, if they are clearly implied.",
+  "scalpPlan": {
+    "bias": "Bullish/Bearish/Neutral for scalps.",
+    "entryPlan": "Concrete rules for aggressive intraday entries.",
+    "invalidation": "Where the idea is clearly wrong / must step aside.",
+    "targets": "Realistic scaling/TP ideas for scalps.",
+    "rr": "How to think about risk:reward for scalps."
+  },
+  "swingPlan": {
+    "bias": "Bullish/Bearish/Neutral for swings.",
+    "entryPlan": "Rules for higher timeframe swing entries, if relevant.",
+    "invalidation": "Invalidation conditions for the swing idea.",
+    "targets": "Potential swing targets.",
+    "rr": "Risk:reward perspective for swing trades."
+  },
+  "riskNotes": "Short note on risk (e.g. news, overtrading, sizing, account pressure)."
+}
+
+Keep it practical and short – like a one-page laminated card a trader could glance at before clicking.
+
+Market / broker context:
+${chartContext}
+
+Recent conversation:
+${historyText}
+`;
+
+    const response = await ai.models.generateContent({
+      model: modelId,
+      contents: { parts: [{ text: prompt }] },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: sessionSummarySchema,
+        systemInstruction:
+          "You are a professional trading session summarizer. Always return valid JSON that matches the provided schema."
+      }
+    });
+
+    const rawText = (response as any).text as string | undefined;
+    const jsonStr = extractJson(rawText);
+    if (!jsonStr) {
+      throw new Error("No JSON in session summary response");
+    }
+
+    const parsed = JSON.parse(jsonStr) as SessionSummary;
+    return parsed;
+  } catch (error) {
+    console.error("Gemini Session Summary API Error:", error);
     return {
-        headlineBias: "System update",
-        scalpPlan: { bias: "Neutral", entryPlan: "", invalidation: "", targets: "", rr: "" },
-        swingPlan: { bias: "Neutral", entryPlan: "", invalidation: "", targets: "", rr: "" }
+      headlineBias: "Session tagged, but summary generation failed.",
+      keyLevels: "",
+      scalpPlan: {
+        bias: "Neutral",
+        entryPlan: "",
+        invalidation: "",
+        targets: "",
+        rr: ""
+      },
+      swingPlan: {
+        bias: "Neutral",
+        entryPlan: "",
+        invalidation: "",
+        targets: "",
+        rr: ""
+      },
+      riskNotes: "Review risk manually; AI summary unavailable."
     };
+  }
 };
