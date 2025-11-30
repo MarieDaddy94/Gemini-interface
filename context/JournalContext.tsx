@@ -5,7 +5,59 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import { JournalEntry } from "../types";
+
+export type JournalSource = "user" | "ai" | "broker";
+export type TradeDirection = "long" | "short";
+
+export interface JournalEntry {
+  id: string;
+  timestamp: string;         // ISO datetime
+
+  // Trading metadata
+  symbol?: string;           // "US30", "NAS100", "XAUUSD", etc.
+  direction?: TradeDirection;
+  timeframe?: string;        // "1m", "5m", "15m", "1h", etc.
+  session?: string;          // "Asia", "London", "NY", etc.
+
+  entryPrice?: number;
+  stopPrice?: number;
+  targetPrice?: number;
+  exitPrice?: number;
+
+  size?: number;             // lots/contracts
+  netPnl?: number;           // in currency
+  currency?: string;         // "USD"
+  rMultiple?: number;        // PnL in R
+
+  playbook?: string;         // name of setup / play
+  preTradePlan?: string;     // what was planned
+  postTradeNotes?: string;   // what actually happened
+  sentiment?: string;        // "A+", "A", "B", etc.
+
+  tags?: string[];
+  relatedTradeId?: string;   // broker trade id, if any
+
+  // Agent metadata
+  agentId?: string;          // e.g. "quant", "pattern", "risk", "macro", "coach"
+  agentName?: string;        // e.g. "Quant Strategist"
+
+  // Provenance
+  source: JournalSource;     // "ai", "user", "broker"
+  raw?: any;                 // raw tool payload / event if needed
+  
+  // Legacy compatibility fields
+  focusSymbol?: string; 
+  bias?: string; 
+  note?: string; 
+  outcome?: string;
+  finalPnl?: number | null;
+  linkedPositionId?: string | null;
+  linkedSymbol?: string | null;
+  accountSnapshot?: any;
+  entryType?: string;
+  sessionId?: string;
+  confidence?: number;
+}
 
 export interface ToolResult {
   toolName: string;
@@ -15,9 +67,9 @@ export interface ToolResult {
 
 interface JournalContextValue {
   entries: JournalEntry[];
-  setEntries: (entries: JournalEntry[]) => void;
   addEntry: (entry: JournalEntry) => void;
   addEntryFromToolResult: (toolResult: ToolResult) => void;
+  setEntries: (entries: JournalEntry[]) => void;
 }
 
 const JournalContext = createContext<JournalContextValue | undefined>(
@@ -27,14 +79,10 @@ const JournalContext = createContext<JournalContextValue | undefined>(
 export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [entries, setEntriesState] = useState<JournalEntry[]>([]);
-
-  const setEntries = (newEntries: JournalEntry[]) => {
-    setEntriesState(newEntries);
-  };
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
 
   const addEntry = (entry: JournalEntry) => {
-    setEntriesState((prev) => [entry, ...prev]);
+    setEntries((prev) => [entry, ...prev]);
   };
 
   const addEntryFromToolResult = (toolResult: ToolResult) => {
@@ -45,14 +93,21 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
 
     const entry: JournalEntry = {
       id:
-        args.id ??
-        `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      timestamp: args.timestamp ?? nowIso,
+        typeof args.id === "string"
+          ? args.id
+          : `ai-${nowIso}-${Math.random().toString(16).slice(2)}`,
+      timestamp:
+        typeof args.timestamp === "string" ? args.timestamp : nowIso,
 
-      symbol: args.symbol,
-      direction: args.direction,
-      timeframe: args.timeframe,
-      session: args.session,
+      symbol: typeof args.symbol === "string" ? args.symbol : undefined,
+      direction:
+        args.direction === "long" || args.direction === "short"
+          ? args.direction
+          : undefined,
+      timeframe:
+        typeof args.timeframe === "string" ? args.timeframe : undefined,
+      session:
+        typeof args.session === "string" ? args.session : undefined,
 
       entryPrice:
         typeof args.entryPrice === "number"
@@ -99,25 +154,31 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
           ? args.relatedTradeId
           : undefined,
 
+      // NEW: agent metadata
+      agentId:
+        typeof args.agentId === "string" ? args.agentId : undefined,
+      agentName:
+        typeof args.agentName === "string" ? args.agentName : undefined,
+
       source: "ai",
       raw: toolResult,
       
-      // Legacy compatibility mapping
+      // Legacy compatibility
       focusSymbol: args.symbol,
       note: args.postTradeNotes || args.preTradePlan || args.note,
       bias: args.direction === 'long' ? 'Bullish' : args.direction === 'short' ? 'Bearish' : 'Neutral',
       outcome: 'Open'
     };
 
-    setEntriesState((prev) => [entry, ...prev]);
+    setEntries((prev) => [entry, ...prev]);
   };
 
   const value = useMemo(
     () => ({
       entries,
-      setEntries,
       addEntry,
       addEntryFromToolResult,
+      setEntries
     }),
     [entries]
   );

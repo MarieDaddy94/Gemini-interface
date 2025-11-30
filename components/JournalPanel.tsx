@@ -1,6 +1,10 @@
+
 import React from "react";
-import { useJournal } from "../context/JournalContext";
-import { JournalEntry } from "../types";
+import {
+  useJournal,
+  JournalEntry,
+  JournalSource,
+} from "../context/JournalContext";
 
 const formatDateTime = (iso: string) => {
   try {
@@ -58,8 +62,40 @@ const getDirectionBadge = (entry: JournalEntry) => {
   );
 };
 
-// Renamed internally to TradingJournalPanel but keeping export as JournalPanel for App.tsx compatibility
-const JournalPanel: React.FC<any> = () => {
+const getAgentPillClass = (agentId?: string) => {
+  switch (agentId) {
+    case "quant-bot":
+      return "agent-pill agent-quant";
+    case "pattern-seer":
+      return "agent-pill agent-pattern";
+    case "risk-guardian":
+      return "agent-pill agent-risk";
+    case "macro-mind":
+      return "agent-pill agent-macro";
+    case "trade-coach":
+      return "agent-pill agent-coach";
+    case "quant":
+      return "agent-pill agent-quant";
+    case "pattern":
+      return "agent-pill agent-pattern";
+    case "risk":
+      return "agent-pill agent-risk";
+    case "macro":
+      return "agent-pill agent-macro";
+    case "coach":
+      return "agent-pill agent-coach";
+    default:
+      return "agent-pill";
+  }
+};
+
+const formatSource = (source: JournalSource) => {
+  if (source === "ai") return "AI";
+  if (source === "broker") return "BRK";
+  return "User";
+};
+
+const JournalPanel: React.FC = () => {
   const { entries } = useJournal();
 
   return (
@@ -68,7 +104,7 @@ const JournalPanel: React.FC<any> = () => {
         <div className="journal-header-left">
           <h3 className="m-0 text-sm font-semibold text-gray-200">Trading Journal</h3>
           <span className="journal-subtitle block text-[11px] text-gray-500">
-            AI + manual notes linked to your trades
+            AI agents + broker trades logged in one place
           </span>
         </div>
         <div className="journal-header-right">
@@ -80,7 +116,7 @@ const JournalPanel: React.FC<any> = () => {
 
       {entries.length === 0 ? (
         <div className="journal-empty flex-1 flex items-center justify-center italic text-gray-600">
-          No journal entries yet. When you trade and talk to the AI, it will start writing structured logs here.
+          No journal entries yet. As you trade and talk to your AI team, structured logs will start showing up here.
         </div>
       ) : (
         <div className="journal-table-wrapper flex-1 overflow-auto">
@@ -97,6 +133,7 @@ const JournalPanel: React.FC<any> = () => {
                 <th className="w-12">R</th>
                 <th className="w-32">Playbook</th>
                 <th>Notes</th>
+                <th className="w-24">Agent</th>
                 <th className="w-12">Src</th>
               </tr>
             </thead>
@@ -133,8 +170,17 @@ const JournalPanel: React.FC<any> = () => {
                     </td>
                     <td>{entry.playbook ?? ""}</td>
                     <td>{shorten(notes, 70)}</td>
+                    <td>
+                      {entry.agentName && (
+                        <span
+                          className={getAgentPillClass(entry.agentId)}
+                        >
+                          {entry.agentName}
+                        </span>
+                      )}
+                    </td>
                     <td className="journal-source text-center">
-                      {entry.source === "ai" ? "AI" : "User"}
+                      {formatSource(entry.source)}
                     </td>
                   </tr>
                 );

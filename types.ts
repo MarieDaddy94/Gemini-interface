@@ -92,7 +92,7 @@ export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';
 export type TradeEntryType = 'Pre-Trade' | 'Post-Trade' | 'SessionReview';
 export type TradeOutcome = 'Open' | 'Win' | 'Loss' | 'BreakEven';
 
-export type JournalSource = 'user' | 'ai';
+export type JournalSource = 'user' | 'ai' | 'broker';
 export type TradeDirection = 'long' | 'short';
 
 export interface AccountSnapshot {
@@ -132,6 +132,10 @@ export interface JournalEntry {
   relatedTradeId?: string;
   source: JournalSource;
   raw?: any;
+
+  // Agent metadata
+  agentId?: string;
+  agentName?: string;
 
   // Legacy fields (optional compatibility)
   focusSymbol?: string; 

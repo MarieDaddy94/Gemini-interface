@@ -1,4 +1,5 @@
 
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay from './components/ChatOverlay';
@@ -7,6 +8,8 @@ import ConnectBrokerModal from './components/ConnectBrokerModal';
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import { JournalProvider } from './context/JournalContext';
+import { TradeEventsProvider } from './context/TradeEventsContext';
+import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
@@ -179,6 +182,8 @@ const App: React.FC = () => {
 
   return (
     <JournalProvider>
+    <TradeEventsProvider>
+    <TradeEventsToJournal />
     <div className="flex h-screen w-full bg-[#131722] text-[#d1d4dc] overflow-hidden">
       {/* Main Trading Area */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -391,6 +396,7 @@ const App: React.FC = () => {
         onConnect={handleBrokerConnect}
       />
     </div>
+    </TradeEventsProvider>
     </JournalProvider>
   );
 };
