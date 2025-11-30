@@ -21,7 +21,6 @@ import {
 
 const App: React.FC = () => {
   // Persistent journal session id (per browser)
-  // This allows the user to have a persistent journal even if they re-connect to the broker
   const [journalSessionId] = useState<string>(() => {
     if (typeof window === 'undefined') {
       return 'local-session';
@@ -48,9 +47,6 @@ const App: React.FC = () => {
 
   const [autoFocusSymbol, setAutoFocusSymbol] =
     useState<FocusSymbol>('Auto');
-
-  // Journal UI
-  const [isJournalOpen, setIsJournalOpen] = useState(false);
 
   // Poll Broker Data when connected
   useEffect(() => {
@@ -90,7 +86,7 @@ const App: React.FC = () => {
   }, [brokerData]);
 
   const handleBrokerConnect = async (creds: TradeLockerCredentials) => {
-    const { sessionId, accounts, accountId, accNum } =
+    const { sessionId, accounts, accountId } =
       await connectToTradeLocker(creds);
 
     setBrokerSessionId(sessionId);
@@ -110,7 +106,6 @@ const App: React.FC = () => {
     setActiveAccount(null);
     setIsAccountMenuOpen(false);
     setAutoFocusSymbol('Auto');
-    setIsJournalOpen(false);
   };
 
   const handleSelectAccount = async (account: TradeLockerAccountSummary) => {
@@ -320,34 +315,6 @@ const App: React.FC = () => {
               </button>
             )}
 
-            {/* Journal toggle */}
-            <button
-              onClick={() => setIsJournalOpen((prev) => !prev)}
-              className={`flex items-center gap-1 text-xs py-1.5 px-3 rounded font-medium transition-colors border ${
-                isJournalOpen
-                  ? 'bg-[#2962ff] border-[#2962ff] text-white'
-                  : 'bg-[#1e222d] border-[#2a2e39] text-[#d1d4dc] hover:border-[#2962ff]'
-              }`}
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20" />
-                <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z" />
-                <path d="M8 7h8" />
-                <path d="M8 11h5" />
-              </svg>
-              <span>Journal</span>
-            </button>
-
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-1"></div>
 
             <div className="flex items-center gap-2 text-xs bg-[#2a2e39] py-1 px-2 rounded text-[#d1d4dc]">
@@ -364,9 +331,16 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Browser Container */}
+        {/* Browser Container + Journal Panel */}
         <main className="flex-1 relative bg-[#131722] flex flex-col">
-          <WebBrowser />
+          <div className="flex-1 min-h-0">
+            <WebBrowser />
+          </div>
+          {/* New Fixed Journal panel */}
+          <JournalPanel 
+            sessionId={journalSessionId} 
+            brokerData={brokerData} 
+          />
         </main>
       </div>
 
@@ -377,17 +351,6 @@ const App: React.FC = () => {
         sessionId={journalSessionId}
         autoFocusSymbol={autoFocusSymbol}
       />
-
-      {/* Journal Panel */}
-      {isJournalOpen && (
-        <JournalPanel
-          isOpen={isJournalOpen}
-          onClose={() => setIsJournalOpen(false)}
-          sessionId={journalSessionId}
-          autoFocusSymbol={autoFocusSymbol}
-          brokerData={brokerData}
-        />
-      )}
 
       {/* Broker Modal */}
       <ConnectBrokerModal
