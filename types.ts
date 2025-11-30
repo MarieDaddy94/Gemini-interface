@@ -56,3 +56,21 @@ export interface BrokerAccountInfo {
   marginUsed: number;
   positions: BrokerPosition[];
 }
+
+// --- High-level AI Session Summary ---
+
+export interface LanePlan {
+  bias: string;        // Direction + timeframe context, e.g. "Bullish scalp while 4H still range-bound"
+  entryPlan: string;   // Where/when to enter, in bullet-like text
+  invalidation: string; // Where the idea is wrong / stop logic
+  targets: string;     // TP ideas / partials
+  rr: string;          // Explicit R:R style, e.g. "Aim for 2R–3R"
+}
+
+export interface SessionSummary {
+  headlineBias: string;  // Overall one-liner bias for the session
+  keyLevels?: string;    // Text description of key levels / zones
+  scalpPlan: LanePlan;   // Playbook for fast trades
+  swingPlan: LanePlan;   // Playbook for slower / HTF trades
+  riskNotes?: string;    // News / volatility / risk comments
+}

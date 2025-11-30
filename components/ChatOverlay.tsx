@@ -1,12 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChatMessage, AnalystPersona } from '../types';
+import { ChatMessage, AnalystPersona, SessionSummary } from '../types';
 import { ANALYST_AVATARS } from '../constants';
-import { getAnalystInsights } from '../services/geminiService';
+import { getAnalystInsights, getSessionSummary } from '../services/geminiService';
 
 interface ChatOverlayProps {
   chartContext: string;
   isBrokerConnected?: boolean;
 }
+
+const SYMBOL_PRESETS = ['Auto', 'US30', 'NAS100', 'XAUUSD', 'BTCUSD'];
 
 const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnected }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -27,6 +29,13 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isThinking, setIsThinking] = useState(false);
+
+  // Session Playbook state
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null);
+  const [isUpdatingSummary, setIsUpdatingSummary] = useState(false);
+
+  // Symbol focus state
+  const [focusSymbol, setFocusSymbol] = useState<string>('Auto');
   
   // Vision / Screen Share State
   const [isVisionActive, setIsVisionActive] = useState(false);
@@ -53,6 +62,23 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
     };
   }, []);
 
+  // Initial session summary off the welcome messages + current context
+  useEffect(() => {
+    const initSummary = async () => {
+      try {
+        setIsUpdatingSummary(true);
+        const summary = await getSessionSummary(chartContext, messages, undefined, focusSymbol);
+        setSessionSummary(summary);
+      } catch (err) {
+        console.error("Failed to generate initial session summary", err);
+      } finally {
+        setIsUpdatingSummary(false);
+      }
+    };
+    initSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only once on mount
+
   const toggleVision = async () => {
     if (isVisionActive) {
       // Stop sharing
@@ -61,7 +87,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         streamRef.current = null;
       }
       if (videoRef.current) {
-        videoRef.current.srcObject = null;
+        (videoRef.current as HTMLVideoElement).srcObject = null;
       }
       setIsVisionActive(false);
     } else {
@@ -69,7 +95,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: { 
-            displaySurface: 'browser', // Encourages browser tab sharing
+            displaySurface: 'browser',
           }, 
           audio: false 
         });
@@ -83,7 +109,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         };
 
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
+          (videoRef.current as HTMLVideoElement).srcObject = stream;
         }
         setIsVisionActive(true);
       } catch (err: any) {
@@ -104,7 +130,6 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
           isUser: false
         }]);
 
-        // Force reset if failed
         setIsVisionActive(false);
       }
     }
@@ -116,11 +141,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
     const canvas = document.createElement('canvas');
     const video = videoRef.current;
     
-    // Check if video is ready
     if (video.videoWidth === 0 || video.videoHeight === 0) return undefined;
 
-    // Set canvas dimensions to match video (or scale down for performance/tokens)
-    const scale = 0.5; // Scale down to 50% to save tokens/bandwidth
+    const scale = 0.5;
     canvas.width = video.videoWidth * scale;
     canvas.height = video.videoHeight * scale;
     
@@ -129,7 +152,6 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
     
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
-    // Return base64 string without prefix
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     return dataUrl.split(',')[1];
   };
@@ -151,14 +173,24 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
       attachment: screenshot
     };
 
+    const historyBefore = [...messages];
+
     setMessages(prev => [...prev, userMsg]);
     setInputValue('');
     setIsThinking(true);
 
+    const historyForModel: ChatMessage[] = [...historyBefore, userMsg];
+
     try {
-      const insights = await getAnalystInsights(userMsg.text, chartContext, screenshot);
+      const insights = await getAnalystInsights(
+        userMsg.text,
+        chartContext,
+        screenshot,
+        historyForModel,
+        focusSymbol
+      );
       
-      const newMessages = insights.map((insight, index) => ({
+      const newMessages: ChatMessage[] = insights.map((insight, index) => ({
         id: (Date.now() + index + 1).toString(),
         sender: insight.analystName,
         text: insight.message,
@@ -166,7 +198,21 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         isUser: false
       }));
 
+      const historyWithAI: ChatMessage[] = [...historyForModel, ...newMessages];
+
       setMessages(prev => [...prev, ...newMessages]);
+
+      // Update the Session Playbook based on full history
+      try {
+        setIsUpdatingSummary(true);
+        const summary = await getSessionSummary(chartContext, historyWithAI, screenshot, focusSymbol);
+        setSessionSummary(summary);
+      } catch (err) {
+        console.error("Failed to update session summary", err);
+      } finally {
+        setIsUpdatingSummary(false);
+      }
+
     } catch (e) {
       console.error("Failed to get insights", e);
       setMessages(prev => [...prev, {
@@ -223,7 +269,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
                 <span className="px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-bold border border-green-200">LIVE FEED</span>
               )}
             </h2>
-            <p className="text-[10px] text-gray-400 font-medium">Gemini 2.5 Flash • {isBrokerConnected ? 'TradeLocker Active' : 'Market Watch Mode'}</p>
+            <p className="text-[10px] text-gray-400 font-medium">
+              Gemini 2.5 Flash • {isBrokerConnected ? 'TradeLocker Active' : 'Market Watch Mode'}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -257,8 +305,127 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         </div>
       </div>
 
-      {/* Messages */}
+      {/* Messages + Session Playbook */}
       <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-5 scrollbar-thin">
+        {/* Session Playbook Card */}
+        <div className="bg-white border border-[#d0e2ff] rounded-2xl p-3 shadow-sm sticky top-0 z-10">
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#2962ff] animate-pulse"></span>
+              <span className="text-[11px] font-bold tracking-wide text-[#2962ff] uppercase">
+                Session Playbook
+              </span>
+            </div>
+            {isUpdatingSummary && (
+              <div className="flex items-center gap-1 text-[10px] text-gray-400">
+                <span>Updating</span>
+                <span className="w-3 h-3 border-2 border-gray-300 border-t-transparent rounded-full animate-spin"></span>
+              </div>
+            )}
+          </div>
+
+          {/* Symbol focus selector */}
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-gray-500">Symbol focus:</span>
+            <div className="flex items-center gap-1">
+              {SYMBOL_PRESETS.map((sym) => {
+                const active = focusSymbol === sym;
+                return (
+                  <button
+                    key={sym}
+                    onClick={() => setFocusSymbol(sym)}
+                    className={
+                      "px-1.5 py-0.5 rounded-full text-[10px] font-medium border transition-colors " +
+                      (active
+                        ? "bg-[#2962ff] text-white border-[#2962ff]"
+                        : "bg-white text-gray-500 border-gray-200 hover:bg-[#eef2ff]")
+                    }
+                  >
+                    {sym}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {sessionSummary ? (
+            <div className="space-y-1.5">
+              <p className="text-[11px] text-gray-800 font-semibold">
+                {sessionSummary.headlineBias}
+              </p>
+              {sessionSummary.keyLevels && (
+                <p className="text-[11px] text-gray-700">
+                  <span className="font-semibold">Key Levels:</span> {sessionSummary.keyLevels}
+                </p>
+              )}
+
+              {/* Scalp / Swing lanes */}
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                {/* Scalp Lane */}
+                <div className="bg-[#f4f6ff] border border-[#c3d3ff] rounded-xl p-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-[#2949ff]">
+                      Scalp Lane
+                    </span>
+                    <span className="text-[10px] text-[#2949ff] font-semibold">
+                      {sessionSummary.scalpPlan.rr}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-gray-800 mb-1">
+                    <span className="font-semibold">Bias:</span> {sessionSummary.scalpPlan.bias}
+                  </p>
+                  <p className="text-[10px] text-gray-700 mb-1">
+                    <span className="font-semibold">Entry:</span> {sessionSummary.scalpPlan.entryPlan}
+                  </p>
+                  <p className="text-[10px] text-gray-700 mb-1">
+                    <span className="font-semibold">Invalid:</span> {sessionSummary.scalpPlan.invalidation}
+                  </p>
+                  <p className="text-[10px] text-gray-700">
+                    <span className="font-semibold">Targets:</span> {sessionSummary.scalpPlan.targets}
+                  </p>
+                </div>
+
+                {/* Swing Lane */}
+                <div className="bg-[#f3fbf4] border border-[#b6e7c2] rounded-xl p-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-[#22723a]">
+                      Swing Lane
+                    </span>
+                    <span className="text-[10px] text-[#22723a] font-semibold">
+                      {sessionSummary.swingPlan.rr}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-gray-800 mb-1">
+                    <span className="font-semibold">Bias:</span> {sessionSummary.swingPlan.bias}
+                  </p>
+                  <p className="text-[10px] text-gray-700 mb-1">
+                    <span className="font-semibold">Entry:</span> {sessionSummary.swingPlan.entryPlan}
+                  </p>
+                  <p className="text-[10px] text-gray-700 mb-1">
+                    <span className="font-semibold">Invalid:</span> {sessionSummary.swingPlan.invalidation}
+                  </p>
+                  <p className="text-[10px] text-gray-700">
+                    <span className="font-semibold">Targets:</span> {sessionSummary.swingPlan.targets}
+                  </p>
+                </div>
+              </div>
+
+              {sessionSummary.riskNotes && (
+                <p className="text-[10px] text-gray-700 mt-2">
+                  <span className="font-semibold">Risk Notes:</span> {sessionSummary.riskNotes}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="animate-pulse space-y-2">
+              <div className="h-2.5 bg-gray-200/80 rounded w-3/4" />
+              <div className="h-2 bg-gray-200/80 rounded w-full" />
+              <div className="h-2 bg-gray-200/80 rounded w-5/6" />
+            </div>
+          )}
+        </div>
+
+        {/* Chat messages */}
         {messages.map((msg) => {
           const isUser = msg.isUser;
           let avatar = ANALYST_AVATARS[AnalystPersona.USER];
@@ -307,7 +474,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
                    )}
                    {msg.text}
                  </div>
-                 <span className="text-[9px] text-gray-300 mt-1 mx-1">{msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                 <span className="text-[9px] text-gray-300 mt-1 mx-1">
+                  {msg.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                 </span>
               </div>
             </div>
           );
