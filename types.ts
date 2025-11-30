@@ -32,11 +32,12 @@ export interface ChartConfig {
 
 // --- TradeLocker / Broker Types ---
 
+/**
+ * TradeLocker login credentials.
+ * "server" is the TradeLocker server name (e.g. "EightCap-Demo"),
+ * not a URL.
+ */
 export interface TradeLockerCredentials {
-  /**
-   * TradeLocker "server" name from the login dialog (NOT a URL),
-   * e.g. "EightCap-Demo" / "EightCap-Live" / your prop firm server name.
-   */
   server: string;
   email: string;
   password: string;
@@ -70,27 +71,31 @@ export interface BrokerAccountInfo {
   positions: BrokerPosition[];
 }
 
-// --- High-level AI Session Summary ---
+// --- High-level AI Session Summary (Preserved) ---
 
 export interface LanePlan {
-  bias: string;        // Direction + timeframe context, e.g. "Bullish scalp while 4H still range-bound"
-  entryPlan: string;   // Where/when to enter, in bullet-like text
-  invalidation: string; // Where the idea is wrong / stop logic
-  targets: string;     // TP ideas / partials
-  rr: string;          // Explicit R:R style, e.g. "Aim for 2R–3R"
+  bias: string;
+  entryPlan: string;
+  invalidation: string;
+  targets: string;
+  rr: string;
 }
 
 export interface SessionSummary {
-  headlineBias: string;  // Overall one-liner bias for the session
-  keyLevels?: string;    // Text description of key levels / zones
-  scalpPlan: LanePlan;   // Playbook for fast trades
-  swingPlan: LanePlan;   // Playbook for slower / HTF trades
-  riskNotes?: string;    // News / volatility / risk comments
+  headlineBias: string;
+  keyLevels?: string;
+  scalpPlan: LanePlan;
+  swingPlan: LanePlan;
+  riskNotes?: string;
 }
 
 // --- Journaling Types ---
 
 export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';
+
+export type TradeEntryType = 'Pre-Trade' | 'Post-Trade' | 'SessionReview';
+
+export type TradeOutcome = 'Open' | 'Win' | 'Loss' | 'BreakEven';
 
 export interface AccountSnapshot {
   balance: number;
@@ -106,6 +111,9 @@ export interface JournalEntry {
   bias: TradeBias;
   confidence: number; // 1-5
   note: string;
+  entryType: TradeEntryType;
+  outcome: TradeOutcome;
+  tags: string[];
   accountSnapshot?: AccountSnapshot | null;
 }
 
@@ -114,5 +122,14 @@ export interface NewJournalEntryInput {
   bias: TradeBias;
   confidence: number;
   note: string;
+  entryType: TradeEntryType;
+  outcome?: TradeOutcome;
+  tags?: string[];
   accountSnapshot?: AccountSnapshot;
+}
+
+export interface JournalEntryPatch {
+  outcome?: TradeOutcome;
+  tags?: string[];
+  note?: string;
 }

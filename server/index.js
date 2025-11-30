@@ -381,6 +381,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
 
 /**
  * GET /api/journal/entries?sessionId=...
+ *
  * Returns all journal entries for this session.
  */
 app.get('/api/journal/entries', (req, res) => {
@@ -394,7 +395,19 @@ app.get('/api/journal/entries', (req, res) => {
 
 /**
  * POST /api/journal/entry
- * Body: { sessionId, entry: { focusSymbol, bias, confidence, note, accountSnapshot } }
+ * Body: {
+ *   sessionId,
+ *   entry: {
+ *     focusSymbol,
+ *     bias, // 'Bullish' | 'Bearish' | 'Neutral'
+ *     confidence, // 1-5
+ *     note,
+ *     entryType?: 'Pre-Trade' | 'Post-Trade' | 'SessionReview'
+ *     outcome?: 'Open' | 'Win' | 'Loss' | 'BreakEven'
+ *     tags?: string[]
+ *     accountSnapshot?: { balance, equity, openPnl, positionsCount }
+ *   }
+ * }
  */
 app.post('/api/journal/entry', (req, res) => {
   const { sessionId, entry } = req.body || {};
@@ -408,13 +421,35 @@ app.post('/api/journal/entry', (req, res) => {
   const id = crypto.randomUUID();
   const timestamp = new Date().toISOString();
 
+  const entryType =
+    entry.entryType === 'Post-Trade' ||
+    entry.entryType === 'SessionReview'
+      ? entry.entryType
+      : 'Pre-Trade';
+
+  const validOutcomes = ['Open', 'Win', 'Loss', 'BreakEven'];
+  const requestedOutcome = entry.outcome;
+  let outcome =
+    typeof requestedOutcome === 'string' &&
+    validOutcomes.includes(requestedOutcome)
+      ? requestedOutcome
+      : 'Open';
+
+  const tags = Array.isArray(entry.tags)
+    ? entry.tags.map((t) => String(t)).filter((t) => t.trim().length > 0)
+    : [];
+
   const stored = {
     id,
     timestamp,
     focusSymbol: entry.focusSymbol || 'Unknown',
     bias: entry.bias || 'Neutral',
-    confidence: typeof entry.confidence === 'number' ? entry.confidence : 3,
+    confidence:
+      typeof entry.confidence === 'number' ? entry.confidence : 3,
     note: entry.note,
+    entryType,
+    outcome,
+    tags,
     accountSnapshot: entry.accountSnapshot || null
   };
 
@@ -423,6 +458,59 @@ app.post('/api/journal/entry', (req, res) => {
   journalBySession.set(sessionId, list);
 
   res.json(stored);
+});
+
+/**
+ * PATCH /api/journal/entry/:id
+ * Body: {
+ *   sessionId,
+ *   updates: {
+ *     outcome?: 'Open' | 'Win' | 'Loss' | 'BreakEven'
+ *     tags?: string[]
+ *     note?: string
+ *   }
+ * }
+ */
+app.patch('/api/journal/entry/:id', (req, res) => {
+  const { sessionId, updates } = req.body || {};
+  const entryId = req.params.id;
+
+  const session = getSessionOrThrow(sessionId, res);
+  if (!session) return;
+
+  const list = journalBySession.get(sessionId) || [];
+  const idx = list.findIndex((e) => e.id === entryId);
+
+  if (idx === -1) {
+    return res.status(404).send('Journal entry not found');
+  }
+
+  const current = list[idx];
+  const next = { ...current };
+
+  if (updates) {
+    if (typeof updates.note === 'string') {
+      next.note = updates.note;
+    }
+
+    if (Array.isArray(updates.tags)) {
+      next.tags = updates.tags
+        .map((t) => String(t))
+        .filter((t) => t.trim().length > 0);
+    }
+
+    if (typeof updates.outcome === 'string') {
+      const validOutcomes = ['Open', 'Win', 'Loss', 'BreakEven'];
+      if (validOutcomes.includes(updates.outcome)) {
+        next.outcome = updates.outcome;
+      }
+    }
+  }
+
+  list[idx] = next;
+  journalBySession.set(sessionId, list);
+
+  res.json(next);
 });
 
 // Simple health check
