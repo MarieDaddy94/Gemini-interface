@@ -1,0 +1,7 @@
+{
+  "name": "AI Trading Analyst Overlay",
+  "description": "A sophisticated financial dashboard featuring real-time market charts and an interactive AI Analysts' Corner overlay powered by Gemini 2.5 Flash, simulating a team of expert trading bots.",
+  "requestFramePermissions": [
+    "display-capture"
+  ]
+}
