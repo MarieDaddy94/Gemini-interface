@@ -20,6 +20,22 @@ import {
 } from './symbolMap';
 
 const App: React.FC = () => {
+  // Persistent journal session id (per browser)
+  // This allows the user to have a persistent journal even if they re-connect to the broker
+  const [journalSessionId] = useState<string>(() => {
+    if (typeof window === 'undefined') {
+      return 'local-session';
+    }
+    const key = 'ai-trading-analyst-session-id';
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const fresh = `sess-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    window.localStorage.setItem(key, fresh);
+    return fresh;
+  });
+
   // Broker State
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
   const [brokerSessionId, setBrokerSessionId] = useState<string | null>(null);
@@ -358,6 +374,7 @@ const App: React.FC = () => {
       <ChatOverlay
         chartContext={marketContext}
         isBrokerConnected={!!brokerSessionId}
+        sessionId={journalSessionId}
         autoFocusSymbol={autoFocusSymbol}
       />
 
@@ -366,7 +383,7 @@ const App: React.FC = () => {
         <JournalPanel
           isOpen={isJournalOpen}
           onClose={() => setIsJournalOpen(false)}
-          sessionId={brokerSessionId}
+          sessionId={journalSessionId}
           autoFocusSymbol={autoFocusSymbol}
           brokerData={brokerData}
         />

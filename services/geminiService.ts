@@ -1,10 +1,10 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { AnalystPersona, ChatMessage, SessionSummary } from "../types";
+import { AnalystPersona } from "../types";
 
-const apiKey = process.env.API_KEY || '';
+const apiKey = process.env.API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
 
-// Schema for multi-persona chat responses
+// Schema for multi-persona analyst responses
 const analysisSchema: Schema = {
   type: Type.ARRAY,
   items: {
@@ -12,148 +12,81 @@ const analysisSchema: Schema = {
     properties: {
       analystName: {
         type: Type.STRING,
-        enum: [AnalystPersona.QUANT_BOT, AnalystPersona.TREND_MASTER, AnalystPersona.PATTERN_GPT],
-        description: "The name of the AI analyst persona speaking."
+        enum: [
+          AnalystPersona.QUANT_BOT,
+          AnalystPersona.TREND_MASTER,
+          AnalystPersona.PATTERN_GPT,
+        ],
+        description: "The name of the AI analyst persona speaking.",
       },
       message: {
         type: Type.STRING,
-        description: "The analysis or comment from this persona."
-      }
-    },
-    required: ["analystName", "message"]
-  }
-};
-
-// Schema for structured Session Playbook with Scalp/Swing lanes
-const summarySchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    headlineBias: {
-      type: Type.STRING,
-      description: "Overall directional bias and timeframe context, e.g. 'Intraday bullish while daily still corrective'."
-    },
-    keyLevels: {
-      type: Type.STRING,
-      description: "Key support/resistance, zones, VWAP or HTF anchors in compact text."
-    },
-    scalpPlan: {
-      type: Type.OBJECT,
-      properties: {
-        bias: {
-          type: Type.STRING,
-          description: "Directional bias specifically for scalping."
-        },
-        entryPlan: {
-          type: Type.STRING,
-          description: "How to enter scalps: trigger conditions, zones, timing."
-        },
-        invalidation: {
-          type: Type.STRING,
-          description: "Where the scalp idea is wrong / stop logic."
-        },
-        targets: {
-          type: Type.STRING,
-          description: "Scalp targets / partials."
-        },
-        rr: {
-          type: Type.STRING,
-          description: "Explicit R:R expectations for scalps, like '2R–3R only'."
-        }
+        description: "The analysis or comment from this persona.",
       },
-      required: ["bias", "entryPlan", "invalidation", "targets", "rr"]
     },
-    swingPlan: {
-      type: Type.OBJECT,
-      properties: {
-        bias: {
-          type: Type.STRING,
-          description: "Directional bias for swing ideas."
-        },
-        entryPlan: {
-          type: Type.STRING,
-          description: "How to enter swings: HTF conditions, pullbacks, confirmations."
-        },
-        invalidation: {
-          type: Type.STRING,
-          description: "Where the swing thesis is invalid."
-        },
-        targets: {
-          type: Type.STRING,
-          description: "Swing targets / partials."
-        },
-        rr: {
-          type: Type.STRING,
-          description: "Explicit R:R expectations for swings."
-        }
-      },
-      required: ["bias", "entryPlan", "invalidation", "targets", "rr"]
-    },
-    riskNotes: {
-      type: Type.STRING,
-      description: "Warnings about volatility, news events, or risk management."
-    }
+    required: ["analystName", "message"],
   },
-  required: ["headlineBias", "scalpPlan", "swingPlan"]
 };
 
+function extractJson(text: string | undefined): string | null {
+  if (!text) return null;
+  let jsonStr = text.trim();
+  if (!jsonStr) return null;
+
+  // If the model wrapped it in ```json ... ``` fences, strip them
+  const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+  const match = jsonStr.match(fenceRegex);
+  if (match && match[2]) {
+    jsonStr = match[2].trim();
+  }
+  return jsonStr;
+}
+
+// ---------------------------------------------------------------------
+// 1) Multi-analyst insight generator (QuantBot, TrendMaster, Pattern_GPT)
+// ---------------------------------------------------------------------
 export const getAnalystInsights = async (
   userPrompt: string,
   chartContext: string,
-  imageBase64?: string,
-  history?: ChatMessage[],
-  focusSymbol?: string
+  imageBase64?: string
 ) => {
   try {
-    const modelId = "gemini-2.5-flash"; 
-    
+    const modelId = "gemini-2.5-flash";
+
     const parts: any[] = [];
 
-    const symbolFocusText = focusSymbol && focusSymbol !== 'Auto'
-      ? `Current focus symbol: ${focusSymbol}. Anchor all analysis primarily to this instrument unless the user clearly asks otherwise.`
-      : `Current focus symbol: Auto. Infer the most relevant symbol from charts, broker positions, and the conversation. If ambiguous, prioritize major indices (US30/NAS100) or XAUUSD/BTCUSD being discussed.`;
-
-    // Compress conversation history to last N messages
-    const recentHistory = (history ?? []).slice(-12);
-    const historyText = recentHistory.length
-      ? recentHistory
-          .map((msg) => `${msg.isUser ? "Trader" : msg.sender}: ${msg.text}`)
-          .join("\n")
-      : "No prior conversation context. Start fresh based on the current question and data.";
-    
-    // If an image is provided, add it as the first part
     if (imageBase64) {
       parts.push({
         inlineData: {
-          mimeType: 'image/jpeg',
-          data: imageBase64
-        }
+          mimeType: "image/jpeg",
+          data: imageBase64,
+        },
       });
     }
 
-    // Add the text prompt
     parts.push({
       text: `
         Context: The user is looking at a trading dashboard with a TradingView chart.
-        Broker Data Feed Summary: ${chartContext}
+        Broker / Market Data Feed Summary: ${chartContext}
 
-        ${symbolFocusText}
-
-        Conversation so far (most recent messages, trader + AI):
-        ${historyText}
-        
         User Question: "${userPrompt}"
-        
+
         Task: You are simulating a team of AI financial analysts.
         1. QuantBot: Focuses on numbers, volatility, and statistical probability.
         2. TrendMaster AI: Focuses on moving averages, momentum, and macro trends.
-        3. ChartPattern_GPT: Focuses on support/resistance, shapes (double bottom, head and shoulders), and technical indicators.
-        
-        ${imageBase64 ? "IMPORTANT: A screenshot of the user's screen is attached. Analyze the visual chart data (candlesticks, lines, indicators) to answer the user's question. The chat overlay you are residing in is on the right side of the image; ignore it and focus only on the trading charts on the left." : ""}
+        3. ChartPattern_GPT: Focuses on support/resistance, chart patterns, and classic TA.
 
-        Based on the user's question, the ongoing conversation, and the visual/data context, provide 1 to 2 distinct responses from the most relevant personas.
-        Keep responses concise, professional, yet conversational like a trader chat room.
-        Always speak as if you are primarily analyzing the focus symbol.
-      `
+        ${
+          imageBase64
+            ? "IMPORTANT: A screenshot of the user's screen is attached. Analyze the TRADING CHARTS only (candles, indicators, levels). Ignore the chat overlay."
+            : ""
+        }
+
+        Based on the user's question and the visual/data context, provide 1 to 2 distinct responses
+        from the most relevant personas.
+
+        Output: JSON ONLY, matching the schema: an array of { analystName, message }.
+      `,
     });
 
     const response = await ai.models.generateContent({
@@ -162,148 +95,98 @@ export const getAnalystInsights = async (
       config: {
         responseMimeType: "application/json",
         responseSchema: analysisSchema,
-        systemInstruction: "You are a specialized AI trading team. Always reply in JSON format as an array of analyst messages."
-      }
+        systemInstruction:
+          "You are a specialized AI trading team. Always reply in JSON format as an array of analyst messages.",
+      },
     });
 
-    const jsonText = (response as any).text;
-    if (!jsonText) return [];
-    
-    return JSON.parse(jsonText) as { analystName: string; message: string }[];
+    const rawText = (response as any).text as string | undefined;
+    const jsonStr = extractJson(rawText);
+    if (!jsonStr) return [];
 
+    return JSON.parse(jsonStr) as { analystName: string; message: string }[];
   } catch (error) {
-    console.error("Gemini API Error (getAnalystInsights):", error);
-    return [{
-      analystName: AnalystPersona.QUANT_BOT,
-      message: "I'm having trouble analyzing the data stream right now. Please try again."
-    }];
+    console.error("Gemini Analyst API Error:", error);
+    return [
+      {
+        analystName: AnalystPersona.QUANT_BOT,
+        message:
+          "I'm having trouble analyzing the data stream right now. Please try again.",
+      },
+    ];
   }
 };
 
-export const getSessionSummary = async (
-  chartContext: string,
-  history: ChatMessage[],
-  imageBase64?: string,
-  focusSymbol?: string
-): Promise<SessionSummary> => {
+// ---------------------------------------------------------------------
+// 2) Journal coach: summarize tag/symbol stats and coach the trader
+// ---------------------------------------------------------------------
+
+export const getCoachFeedback = async (coachContext: any): Promise<string> => {
   try {
     const modelId = "gemini-2.5-flash";
 
-    const parts: any[] = [];
-
-    const recentHistory = (history ?? []).slice(-20);
-    const historyText = recentHistory.length
-      ? recentHistory
-          .map((msg) => `${msg.isUser ? "Trader" : msg.sender}: ${msg.text}`)
-          .join("\n")
-      : "No prior conversation yet. Use only the market context.";
-
-    const symbolFocusText = focusSymbol && focusSymbol !== 'Auto'
-      ? `Focus this Session Playbook specifically on ${focusSymbol}. If you mention levels or zones, they should belong to this symbol.`
-      : `Symbol focus is Auto. Infer the most relevant symbol from the context (charts, broker positions, conversation). If ambiguous, lean towards the primary risk driver / most discussed symbol.`;
-
-    if (imageBase64) {
-      parts.push({
-        inlineData: {
-          mimeType: 'image/jpeg',
-          data: imageBase64
-        }
-      });
-    }
-
-    parts.push({
-      text: `
-        You are summarizing an intraday trading session for a team of AI analysts.
-
-        Broker / Market Context Snapshot:
-        ${chartContext}
-
-        ${symbolFocusText}
-
-        Conversation Transcript (latest messages first to last):
-        ${historyText}
-
-        Task:
-        - Produce a compact "Session Playbook" for the top of the chat.
-        - This is NOT chat-style output; it's a summary object for humans to glance at before placing trades.
-        - You MUST fill two separate lanes:
-          * Scalp lane (fast trades, smaller targets, tighter invalidation).
-          * Swing lane (slower ideas, HTF context, wider invalidation).
-        - Each lane must explicitly state:
-          * bias (direction + timeframe)
-          * entryPlan (when/where to enter)
-          * invalidation (where the idea is wrong)
-          * targets (TP / partials)
-          * rr (explicit risk:reward like "2R–3R", "≥1.5R", etc.)
-
-        Style:
-        - Each field should read like short bullet points, not long paragraphs.
-        - You can separate bullets using semicolons or "•" characters inside the strings.
-        - Keep everything punchy and directly actionable.
-        - Treat all commentary as referring to the focus symbol.
-
-        Output:
-        - Strictly follow the provided JSON schema for SessionSummary.
-        - Do not include explanations outside the JSON object.
-      `
-    });
+    const prettyJson = JSON.stringify(coachContext, null, 2);
 
     const response = await ai.models.generateContent({
       model: modelId,
-      contents: { parts },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: summarySchema,
-        systemInstruction: "You are a trading desk summarizer. Always respond as a single JSON object matching the SessionSummary schema."
-      }
+      contents: {
+        parts: [
+          {
+            text: `
+You are a trading performance coach.
+
+You will receive JSON describing this trader's performance for a specific "playbook tag"
+(e.g. "LondonOpen", "Nas100_M5_Scalp") and optionally a specific symbol (e.g. "US30", "XAUUSD").
+
+Your job:
+- Read the stats and entries.
+- Identify patterns: where this tag does well, where it leaks money, how confidence and outcomes line up.
+- Speak directly to the trader in 2–3 short sections:
+
+1) "Quick Snapshot":
+   - Mention the tag and symbol (if provided)
+   - Show win-rate, total trades, average PnL (roughly from totalPnl/closedWithPnl).
+   - Call out any obvious skew: overtrading, revenge trading, tiny sample size, etc.
+
+2) "What’s Working":
+   - 3–5 bullet points focusing on strengths and setups they seem to execute well.
+
+3) "Fix These Leaks Next":
+   - 3–5 bullet points focusing on mistakes, over-confidence/under-confidence, or conditions where this tag underperforms.
+   - Be honest but constructive, like a coach in a locker room.
+
+Keep it concise and conversational, like a coach talking between sessions.
+
+Here is the JSON context to analyze:
+
+${prettyJson}
+          `,
+          },
+        ],
+      },
     });
 
-    const jsonText = (response as any).text;
-    if (!jsonText) {
-      return {
-        headlineBias: "No clear bias yet.",
-        keyLevels: "Waiting for more price action and context.",
-        scalpPlan: {
-          bias: "Neutral scalp bias.",
-          entryPlan: "Wait for clear intraday structure and confirmation.",
-          invalidation: "Scalp invalid once structure flips against the idea.",
-          targets: "Small intraday pushes only; take profit quickly.",
-          rr: "Aim for at least 1.5R on scalps."
-        },
-        swingPlan: {
-          bias: "No strong swing bias yet.",
-          entryPlan: "Wait for HTF trend and levels to be clearer.",
-          invalidation: "Swing invalid once HTF structure flips.",
-          targets: "Use major HTF levels as targets once bias appears.",
-          rr: "Aim for 2R+ on swings."
-        },
-        riskNotes: "Ask the analysts a question or let more data come in to refine this playbook."
-      };
-    }
-
-    const parsed = JSON.parse(jsonText) as SessionSummary;
-    return parsed;
-
+    const text = ((response as any).text as string | undefined) || "";
+    return text.trim() || "Coach summary is empty. Try again after a few more trades.";
   } catch (error) {
-    console.error("Gemini API Error (getSessionSummary):", error);
-    return {
-      headlineBias: "Summary unavailable (API error).",
-      keyLevels: "Use your marked zones and recent highs/lows as provisional levels.",
-      scalpPlan: {
-        bias: "Neutral until tools stabilize.",
-        entryPlan: "Scalp only the clearest setups if you trade; otherwise, sit out.",
-        invalidation: "Cut losers fast; avoid averaging down.",
-        targets: "Take quick profits at logical intraday pivots.",
-        rr: "Keep at least ~1.5R even on small scalps."
-      },
-      swingPlan: {
-        bias: "Avoid new swings while the AI tools are unstable.",
-        entryPlan: "Prefer to wait for stable data and a clear HTF trend before new swing entries.",
-        invalidation: "Abandon swing ideas when structure breaks on HTF.",
-        targets: "Favor conservative targets until confidence increases.",
-        rr: "Do not take swings under 2R expected."
-      },
-      riskNotes: "When tools or data feeds are flaky, size down or stay flat. Protect capital first."
-    };
+    console.error("Gemini Coach API Error:", error);
+    return "I'm having trouble reading your journal stats right now. Try again later.";
   }
+};
+
+// ---------------------------------------------------------------------
+// 3) Legacy / Optional: Session Summary (kept for compatibility)
+// ---------------------------------------------------------------------
+export const getSessionSummary = async (
+    // kept as placeholder if needed, or fully replaced if not used by updated components
+    chartContext: string,
+    history: any[]
+  ) => {
+    // This function is currently not used by the new Coach overlay, 
+    // but kept to prevent breakages if other components import it.
+    return {
+        headlineBias: "System update",
+        scalpPlan: { bias: "Neutral", entryPlan: "", invalidation: "", targets: "", rr: "" },
+        swingPlan: { bias: "Neutral", entryPlan: "", invalidation: "", targets: "", rr: "" }
+    };
 };
