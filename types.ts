@@ -71,7 +71,7 @@ export interface BrokerAccountInfo {
   positions: BrokerPosition[];
 }
 
-// --- High-level AI Session Summary (Preserved) ---
+// --- High-level AI Session Summary ---
 
 export interface LanePlan {
   bias: string;
@@ -104,46 +104,50 @@ export interface AccountSnapshot {
   positionsCount: number;
 }
 
-export interface JournalEntry {
-  id: string;
-  timestamp: string; // ISO string
+// Payload when creating a new entry
+export interface NewJournalEntryInput {
   focusSymbol: string;
   bias: TradeBias;
-  confidence: number; // 1-5
+  confidence: number; // 1–5
   note: string;
   entryType: TradeEntryType;
   outcome: TradeOutcome;
   tags: string[];
-
-  accountSnapshot?: AccountSnapshot | null;
-
-  // Linking to TradeLocker position
-  linkedPositionId?: string | null;
-  linkedSymbol?: string | null;
-
-  // Auto-updated when linked position closes
-  finalPnl?: number | null;
-  closedAt?: string | null;
-}
-
-export interface NewJournalEntryInput {
-  focusSymbol: string;
-  bias: TradeBias;
-  confidence: number;
-  note: string;
-  entryType: TradeEntryType;
-  outcome?: TradeOutcome;
-  tags?: string[];
-
   accountSnapshot?: AccountSnapshot;
-
-  linkedPositionId?: string | null;
-  linkedSymbol?: string | null;
+  linkedPositionId: string | null;
+  linkedSymbol: string | null;
+  // Optional close information (for when you auto-close + log)
+  finalPnl?: number | null;
+  closedAt?: string | null; // ISO string
 }
 
-export interface JournalEntryPatch {
-  outcome?: TradeOutcome;
-  tags?: string[];
-  note?: string;
-  linkedPositionId?: string | null;
+// Full stored entry
+export interface JournalEntry extends NewJournalEntryInput {
+  id: string;
+  sessionId: string;
+  timestamp: string; // ISO string
+}
+
+// Helper alias for component compatibility
+export type JournalEntryPatch = Partial<JournalEntry>;
+
+// Stats objects for tag / symbol queries
+export interface TagSummary {
+  tag: string;
+  total: number;
+  wins: number;
+  losses: number;
+  breakEven: number;
+  closedWithPnl: number;
+  totalPnl: number;
+}
+
+export interface SymbolSummaryForTag {
+  symbol: string;
+  total: number;
+  wins: number;
+  losses: number;
+  breakEven: number;
+  closedWithPnl: number;
+  totalPnl: number;
 }
