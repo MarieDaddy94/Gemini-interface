@@ -69,7 +69,6 @@ app.get('/api/playbooks', (req, res) => {
 // --- TradeLocker Proxy Logic ---
 
 function getBaseUrl(isDemo) {
-  // demo.tradelocker.com/backend-api/ or live.tradelocker.com/backend-api/
   return isDemo
     ? 'https://demo.tradelocker.com/backend-api'
     : 'https://live.tradelocker.com/backend-api';
@@ -112,7 +111,7 @@ app.post('/api/tradelocker/login', async (req, res) => {
       return res.status(500).send('TradeLocker did not return an access token');
     }
 
-    // 2) List accounts to get accNum + accountId
+    // 2) List accounts
     const accountsRes = await fetch(`${baseUrl}/auth/jwt/all-accounts`, {
       method: 'GET',
       headers: {
@@ -137,19 +136,13 @@ app.post('/api/tradelocker/login', async (req, res) => {
       return res.status(400).send('No TradeLocker accounts found for this user');
     }
 
-    // Normalize accounts into a small summary list for the frontend
     const accounts = accountsRaw.map((a, idx) => {
       const id = String(a.accountId ?? a.id ?? `acc-${idx}`);
       const accNum = Number(a.accNum ?? a.acc_num ?? idx + 1);
-      const balance =
-        a.balance ?? a.Balance ?? a.accountBalance ?? 0;
-      const currency =
-        a.currency ?? a.ccy ?? a.accountCurrency ?? 'USD';
+      const balance = a.balance ?? a.Balance ?? a.accountBalance ?? 0;
+      const currency = a.currency ?? a.ccy ?? a.accountCurrency ?? 'USD';
       const name =
-        a.name ??
-        a.accountName ??
-        a.broker ??
-        `Account ${accNum}`;
+        a.name ?? a.accountName ?? a.broker ?? `Account ${accNum}`;
       const isDemo =
         a.isDemo ?? a.demo ?? a.accountType === 'DEMO';
 
@@ -163,12 +156,10 @@ app.post('/api/tradelocker/login', async (req, res) => {
       };
     });
 
-    // Pick first account as default active
     const primary = accounts[0];
     const accountId = String(primary.id);
     const accNum = Number(primary.accNum);
 
-    // 3) Create local session
     const sessionId = crypto.randomUUID();
 
     sessions.set(sessionId, {
@@ -181,7 +172,8 @@ app.post('/api/tradelocker/login', async (req, res) => {
       isDemo: !!isDemo,
       email,
       server,
-      accounts
+      accounts,
+      lastPositionsById: {} // id -> { id, symbol, pnl }
     });
 
     // Initialize empty journal for this session
@@ -215,8 +207,6 @@ function getSessionOrThrow(sessionId, res) {
 /**
  * POST /api/tradelocker/select-account
  * Body: { sessionId, accountId, accNum }
- *
- * Switches the active TradeLocker account inside this session.
  */
 app.post('/api/tradelocker/select-account', (req, res) => {
   const { sessionId, accountId, accNum } = req.body || {};
@@ -240,6 +230,7 @@ app.post('/api/tradelocker/select-account', (req, res) => {
 
   session.accountId = String(target.id);
   session.accNum = Number(target.accNum);
+  session.lastPositionsById = {};
 
   res.json({
     ok: true,
@@ -261,7 +252,6 @@ app.get('/api/tradelocker/overview', async (req, res) => {
   try {
     const headers = {
       Authorization: `Bearer ${accessToken}`,
-      // accNum must be sent on /trade endpoints
       accNum: String(accNum)
     };
 
@@ -364,6 +354,59 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       };
     });
 
+    // === Auto-outcome detection for linked journal entries ===
+    const prevPositionsById = session.lastPositionsById || {};
+    const currentPositionsById = {};
+    for (const pos of positions) {
+      currentPositionsById[pos.id] = {
+        id: pos.id,
+        symbol: pos.symbol,
+        pnl: pos.pnl
+      };
+    }
+
+    const closedIds = Object.keys(prevPositionsById).filter(
+      (id) => !currentPositionsById[id]
+    );
+
+    if (closedIds.length && journalBySession.has(sessionId)) {
+      const list = journalBySession.get(sessionId) || [];
+      let changed = false;
+
+      for (const closedId of closedIds) {
+        const prev = prevPositionsById[closedId];
+        if (!prev) continue;
+        const finalPnl = typeof prev.pnl === 'number' ? prev.pnl : 0;
+
+        let outcome = 'BreakEven';
+        const threshold = 0.5; // small buffer
+        if (finalPnl > threshold) outcome = 'Win';
+        else if (finalPnl < -threshold) outcome = 'Loss';
+
+        for (let i = 0; i < list.length; i++) {
+          const entry = list[i];
+          if (
+            entry.linkedPositionId === closedId &&
+            entry.outcome === 'Open'
+          ) {
+            list[i] = {
+              ...entry,
+              outcome,
+              finalPnl,
+              closedAt: new Date().toISOString()
+            };
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        journalBySession.set(sessionId, list);
+      }
+    }
+
+    session.lastPositionsById = currentPositionsById;
+
     const overview = {
       isConnected: true,
       balance: Number(balance),
@@ -381,8 +424,6 @@ app.get('/api/tradelocker/overview', async (req, res) => {
 
 /**
  * GET /api/journal/entries?sessionId=...
- *
- * Returns all journal entries for this session.
  */
 app.get('/api/journal/entries', (req, res) => {
   const sessionId = req.query.sessionId;
@@ -399,13 +440,15 @@ app.get('/api/journal/entries', (req, res) => {
  *   sessionId,
  *   entry: {
  *     focusSymbol,
- *     bias, // 'Bullish' | 'Bearish' | 'Neutral'
- *     confidence, // 1-5
+ *     bias,
+ *     confidence,
  *     note,
  *     entryType?: 'Pre-Trade' | 'Post-Trade' | 'SessionReview'
  *     outcome?: 'Open' | 'Win' | 'Loss' | 'BreakEven'
  *     tags?: string[]
  *     accountSnapshot?: { balance, equity, openPnl, positionsCount }
+ *     linkedPositionId?: string
+ *     linkedSymbol?: string
  *   }
  * }
  */
@@ -439,6 +482,18 @@ app.post('/api/journal/entry', (req, res) => {
     ? entry.tags.map((t) => String(t)).filter((t) => t.trim().length > 0)
     : [];
 
+  const linkedPositionId =
+    typeof entry.linkedPositionId === 'string' &&
+    entry.linkedPositionId.trim().length > 0
+      ? entry.linkedPositionId.trim()
+      : null;
+
+  const linkedSymbol =
+    typeof entry.linkedSymbol === 'string' &&
+    entry.linkedSymbol.trim().length > 0
+      ? entry.linkedSymbol.trim()
+      : null;
+
   const stored = {
     id,
     timestamp,
@@ -450,7 +505,11 @@ app.post('/api/journal/entry', (req, res) => {
     entryType,
     outcome,
     tags,
-    accountSnapshot: entry.accountSnapshot || null
+    accountSnapshot: entry.accountSnapshot || null,
+    linkedPositionId,
+    linkedSymbol,
+    finalPnl: null,
+    closedAt: null
   };
 
   const list = journalBySession.get(sessionId) || [];
@@ -468,6 +527,7 @@ app.post('/api/journal/entry', (req, res) => {
  *     outcome?: 'Open' | 'Win' | 'Loss' | 'BreakEven'
  *     tags?: string[]
  *     note?: string
+ *     linkedPositionId?: string | null
  *   }
  * }
  */
@@ -503,6 +563,17 @@ app.patch('/api/journal/entry/:id', (req, res) => {
       const validOutcomes = ['Open', 'Win', 'Loss', 'BreakEven'];
       if (validOutcomes.includes(updates.outcome)) {
         next.outcome = updates.outcome;
+      }
+    }
+
+    if (updates.hasOwnProperty('linkedPositionId')) {
+      if (
+        typeof updates.linkedPositionId === 'string' &&
+        updates.linkedPositionId.trim().length > 0
+      ) {
+        next.linkedPositionId = updates.linkedPositionId.trim();
+      } else {
+        next.linkedPositionId = null;
       }
     }
   }

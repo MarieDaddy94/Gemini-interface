@@ -114,7 +114,16 @@ export interface JournalEntry {
   entryType: TradeEntryType;
   outcome: TradeOutcome;
   tags: string[];
+
   accountSnapshot?: AccountSnapshot | null;
+
+  // Linking to TradeLocker position
+  linkedPositionId?: string | null;
+  linkedSymbol?: string | null;
+
+  // Auto-updated when linked position closes
+  finalPnl?: number | null;
+  closedAt?: string | null;
 }
 
 export interface NewJournalEntryInput {
@@ -125,11 +134,16 @@ export interface NewJournalEntryInput {
   entryType: TradeEntryType;
   outcome?: TradeOutcome;
   tags?: string[];
+
   accountSnapshot?: AccountSnapshot;
+
+  linkedPositionId?: string | null;
+  linkedSymbol?: string | null;
 }
 
 export interface JournalEntryPatch {
   outcome?: TradeOutcome;
   tags?: string[];
   note?: string;
+  linkedPositionId?: string | null;
 }

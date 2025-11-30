@@ -12,13 +12,12 @@ import {
   fetchJournalEntries,
   updateJournalEntry
 } from '../services/journalService';
-import { FocusSymbol } from '../symbolMap';
 
 interface JournalPanelProps {
   isOpen: boolean;
   onClose: () => void;
   sessionId: string | null;
-  autoFocusSymbol: FocusSymbol;
+  autoFocusSymbol: string | null;
   brokerData: BrokerAccountInfo | null;
 }
 
@@ -61,6 +60,9 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
     useState<TradeOutcome | 'All'>('All');
   const [onlyLosers, setOnlyLosers] = useState<boolean>(false);
 
+  // Position link for this note
+  const [linkedPositionId, setLinkedPositionId] = useState<string>('');
+
   const openPnl =
     brokerData && brokerData.isConnected
       ? brokerData.equity - brokerData.balance
@@ -84,13 +86,39 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
   }, [isOpen, sessionId]);
 
   useEffect(() => {
-    // Whenever focus symbol changes, reset note entry type to Pre-Trade
     if (autoFocusSymbol && autoFocusSymbol !== 'Auto') {
       setEntryType('Pre-Trade');
     }
   }, [autoFocusSymbol]);
 
+  // If focus symbol changes, and a linked position doesn't match anymore, clear link
+  useEffect(() => {
+    if (!brokerData || !brokerData.positions.length) {
+      setLinkedPositionId('');
+      return;
+    }
+    const exists = brokerData.positions.some(
+      (p) => p.id === linkedPositionId
+    );
+    if (!exists) {
+      setLinkedPositionId('');
+    }
+  }, [brokerData, linkedPositionId]);
+
   if (!isOpen) return null;
+
+  const availablePositions = useMemo(() => {
+    if (!brokerData || !brokerData.positions.length) return [];
+    // Optionally prioritize positions that match the focus symbol
+    if (!autoFocusSymbol) return brokerData.positions;
+    const primary = brokerData.positions.filter((p) =>
+      p.symbol.toUpperCase().includes(autoFocusSymbol.toUpperCase())
+    );
+    const others = brokerData.positions.filter(
+      (p) => !p.symbol.toUpperCase().includes(autoFocusSymbol.toUpperCase())
+    );
+    return [...primary, ...others];
+  }, [brokerData, autoFocusSymbol]);
 
   const handleSave = async () => {
     if (!sessionId) {
@@ -112,16 +140,22 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
           }
         : undefined;
 
+    const linkedPos =
+      linkedPositionId && brokerData
+        ? brokerData.positions.find((p) => p.id === linkedPositionId)
+        : undefined;
+
     const payload: NewJournalEntryInput = {
       focusSymbol: autoFocusSymbol || 'Auto',
       bias,
       confidence,
       note: note.trim(),
       entryType,
-      // default outcome: Pre-Trade is "Open" by definition
-      outcome: entryType === 'Pre-Trade' ? 'Open' : 'Open',
+      outcome: 'Open',
       tags,
-      accountSnapshot: snapshot
+      accountSnapshot: snapshot,
+      linkedPositionId: linkedPos ? linkedPos.id : null,
+      linkedSymbol: linkedPos ? linkedPos.symbol : null
     };
 
     try {
@@ -130,6 +164,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
       setNote('');
       setTags([]);
       setTagInput('');
+      setLinkedPositionId('');
     } catch (err: any) {
       setError(err.message || 'Failed to save journal entry');
     } finally {
@@ -208,7 +243,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                 Trading Journal
               </span>
               <span className="text-[10px] text-gray-400">
-                Tag pre/post trades and outcomes for pattern hunting.
+                Tag pre/post trades, link positions, and auto-mark outcomes.
               </span>
             </div>
           </div>
@@ -308,7 +343,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
 
           {/* Form */}
           <div className="md:flex-1 bg-[#131722] rounded-lg border border-[#2a2e39] p-3 flex flex-col gap-2">
-            {/* Bias + entry type + confidence */}
+            {/* Bias + entry type + confidence + position link */}
             <div className="flex flex-wrap items-center gap-3">
               {/* Bias selector */}
               <div className="flex items-center gap-2">
@@ -350,7 +385,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                           : 'bg-[#1e222d] text-gray-300 border-[#2a2e39] hover:border-[#2962ff]'
                       }`}
                     >
-                      {t.replace('SessionReview', 'Session')}
+                      {t === 'SessionReview' ? 'Session' : t}
                     </button>
                   ))}
                 </div>
@@ -378,6 +413,27 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                   ))}
                 </div>
               </div>
+
+              {/* Link to position */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-gray-400 uppercase">
+                  Link Trade
+                </span>
+                <select
+                  value={linkedPositionId}
+                  onChange={(e) => setLinkedPositionId(e.target.value)}
+                  className="bg-[#0f131a] border border-[#2a2e39] text-[10px] text-gray-200 rounded px-2 py-1 focus:outline-none focus:border-[#2962ff]"
+                >
+                  <option value="">None</option>
+                  {availablePositions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.symbol} • {p.side.toUpperCase()} {p.size} @{' '}
+                      {p.entryPrice.toFixed(2)} • PnL{' '}
+                      {p.pnl.toFixed(2)}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Note + tags */}
@@ -388,7 +444,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                   onChange={(e) => setNote(e.target.value)}
                   rows={2}
                   className="flex-1 bg-[#0f131a] border border-[#2a2e39] rounded-lg px-3 py-2 text-xs text-gray-100 focus:outline-none focus:border-[#2962ff] focus:ring-1 focus:ring-[#2962ff]/60 resize-none"
-                  placeholder="What are you seeing? Why do you like or hate this setup? What would invalidate your idea?"
+                  placeholder="What are you seeing? Why this trade? What invalidates the idea?"
                 />
                 <button
                   type="button"
@@ -428,7 +484,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                     value={tagInput}
                     onChange={(e) => setTagInput(e.target.value)}
                     onKeyDown={handleTagKeyDown}
-                    placeholder="Add tag (press Enter)"
+                    placeholder="Add tag (Enter)"
                     className="bg-[#0f131a] border border-[#2a2e39] text-[11px] text-gray-200 rounded px-2 py-1 focus:outline-none focus:border-[#2962ff]"
                   />
                 </div>
@@ -557,6 +613,13 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                         >
                           {e.outcome === 'Open' ? 'Open / Pre' : e.outcome}
                         </span>
+                        {e.linkedPositionId && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#1e222d] text-blue-300 border border-blue-500/40">
+                            Linked:{' '}
+                            {e.linkedSymbol || 'Position'} •{' '}
+                            {e.linkedPositionId}
+                          </span>
+                        )}
                       </div>
                       <span className="text-[10px] text-gray-500">
                         {date.toLocaleDateString()} •{' '}
@@ -581,6 +644,26 @@ const JournalPanel: React.FC<JournalPanelProps> = ({
                             #{t}
                           </span>
                         ))}
+                      </div>
+                    )}
+
+                    {e.finalPnl != null && e.closedAt && (
+                      <div className="text-[10px] text-gray-400 mb-1">
+                        Trade closed:{' '}
+                        <span
+                          className={
+                            e.finalPnl < 0
+                              ? 'text-[#f23645]'
+                              : 'text-[#089981]'
+                          }
+                        >
+                          ${e.finalPnl.toFixed(2)}
+                        </span>{' '}
+                        @{' '}
+                        {new Date(e.closedAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
                       </div>
                     )}
 
