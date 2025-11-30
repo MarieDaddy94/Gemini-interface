@@ -8,9 +8,13 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
 
-// In-memory session store: sessionId -> TradeLocker session info
+// In-memory session store: sessionId -> TradeLocker session info + accounts
 const sessions = new Map();
 
+/**
+ * For demo: allow your frontend origin.
+ * Change origin to match where your React app runs (e.g. http://localhost:5173 or http://localhost:3000).
+ */
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
@@ -20,7 +24,7 @@ app.use(
 
 app.use(express.json());
 
-// --- Playbook Logging Logic (Merged) ---
+// --- Playbook Logging Logic ---
 function readLogFile() {
   try {
     if (!fs.existsSync(LOG_FILE)) {
@@ -63,12 +67,16 @@ app.get('/api/playbooks', (req, res) => {
 // --- TradeLocker Proxy Logic ---
 
 function getBaseUrl(isDemo) {
-  // Official base URLs per TradeLocker docs
+  // demo.tradelocker.com/backend-api/ or live.tradelocker.com/backend-api/
   return isDemo
     ? 'https://demo.tradelocker.com/backend-api'
     : 'https://live.tradelocker.com/backend-api';
 }
 
+/**
+ * POST /api/tradelocker/login
+ * Body: { email, password, server, isDemo }
+ */
 app.post('/api/tradelocker/login', async (req, res) => {
   const { email, password, server, isDemo } = req.body || {};
 
@@ -89,7 +97,9 @@ app.post('/api/tradelocker/login', async (req, res) => {
     if (!authRes.ok) {
       const errorText = await authRes.text();
       console.error('TradeLocker auth error:', errorText);
-      return res.status(authRes.status).send(errorText || 'Failed to authenticate with TradeLocker');
+      return res
+        .status(authRes.status)
+        .send(errorText || 'Failed to authenticate with TradeLocker');
     }
 
     const authJson = await authRes.json();
@@ -103,24 +113,58 @@ app.post('/api/tradelocker/login', async (req, res) => {
     // 2) List accounts to get accNum + accountId
     const accountsRes = await fetch(`${baseUrl}/auth/jwt/all-accounts`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
     });
 
     if (!accountsRes.ok) {
       const errorText = await accountsRes.text();
-      return res.status(accountsRes.status).send(errorText || 'Failed to fetch TradeLocker accounts');
+      console.error('TradeLocker accounts error:', errorText);
+      return res
+        .status(accountsRes.status)
+        .send(errorText || 'Failed to fetch TradeLocker accounts');
     }
 
     const accountsJson = await accountsRes.json();
-    const accounts = Array.isArray(accountsJson) ? accountsJson : accountsJson.accounts || [];
+    const accountsRaw = Array.isArray(accountsJson)
+      ? accountsJson
+      : accountsJson.accounts || [];
 
-    if (!accounts.length) {
+    if (!accountsRaw.length) {
       return res.status(400).send('No TradeLocker accounts found for this user');
     }
 
+    // Normalize accounts into a small summary list for the frontend
+    const accounts = accountsRaw.map((a, idx) => {
+      const id = String(a.accountId ?? a.id ?? `acc-${idx}`);
+      const accNum = Number(a.accNum ?? a.acc_num ?? idx + 1);
+      const balance =
+        a.balance ?? a.Balance ?? a.accountBalance ?? 0;
+      const currency =
+        a.currency ?? a.ccy ?? a.accountCurrency ?? 'USD';
+      const name =
+        a.name ??
+        a.accountName ??
+        a.broker ??
+        `Account ${accNum}`;
+      const isDemo =
+        a.isDemo ?? a.demo ?? a.accountType === 'DEMO';
+
+      return {
+        id,
+        accNum,
+        name,
+        currency,
+        balance: Number(balance),
+        isDemo: !!isDemo
+      };
+    });
+
+    // Pick first account as default active
     const primary = accounts[0];
-    const accountId = String(primary.accountId ?? primary.id ?? primary.account_id);
-    const accNum = Number(primary.accNum ?? primary.acc_num ?? 1);
+    const accountId = String(primary.id);
+    const accNum = Number(primary.accNum);
 
     // 3) Create local session
     const sessionId = crypto.randomUUID();
@@ -134,10 +178,16 @@ app.post('/api/tradelocker/login', async (req, res) => {
       createdAt: Date.now(),
       isDemo: !!isDemo,
       email,
-      server
+      server,
+      accounts
     });
 
-    res.json({ sessionId, accountId, accNum });
+    res.json({
+      sessionId,
+      accounts,
+      accountId,
+      accNum
+    });
   } catch (err) {
     console.error('TradeLocker login fatal error', err);
     res.status(500).send('Internal error while connecting to TradeLocker');
@@ -157,6 +207,45 @@ function getSessionOrThrow(sessionId, res) {
   return session;
 }
 
+/**
+ * POST /api/tradelocker/select-account
+ * Body: { sessionId, accountId, accNum }
+ *
+ * Switches the active TradeLocker account inside this session.
+ */
+app.post('/api/tradelocker/select-account', (req, res) => {
+  const { sessionId, accountId, accNum } = req.body || {};
+  const session = getSessionOrThrow(sessionId, res);
+  if (!session) return;
+
+  if (!accountId && accNum == null) {
+    return res.status(400).send('Provide accountId or accNum to select account');
+  }
+
+  const accounts = session.accounts || [];
+  const target = accounts.find((a) => {
+    if (accountId && String(a.id) === String(accountId)) return true;
+    if (accNum != null && Number(a.accNum) === Number(accNum)) return true;
+    return false;
+  });
+
+  if (!target) {
+    return res.status(400).send('Account not found in this session');
+  }
+
+  session.accountId = String(target.id);
+  session.accNum = Number(target.accNum);
+
+  res.json({
+    ok: true,
+    accountId: session.accountId,
+    accNum: session.accNum
+  });
+});
+
+/**
+ * GET /api/tradelocker/overview?sessionId=...
+ */
 app.get('/api/tradelocker/overview', async (req, res) => {
   const sessionId = req.query.sessionId;
   const session = getSessionOrThrow(sessionId, res);
@@ -167,6 +256,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
   try {
     const headers = {
       Authorization: `Bearer ${accessToken}`,
+      // accNum must be sent on /trade endpoints
       accNum: String(accNum)
     };
 
@@ -175,29 +265,91 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       fetch(`${baseUrl}/trade/accounts/${accountId}/positions`, { headers })
     ]);
 
-    if (!stateRes.ok) return res.status(stateRes.status).send('Failed to fetch account state');
-    if (!positionsRes.ok) return res.status(positionsRes.status).send('Failed to fetch positions');
+    if (!stateRes.ok) {
+      const errorText = await stateRes.text();
+      console.error('TradeLocker state error:', errorText);
+      return res
+        .status(stateRes.status)
+        .send(errorText || 'Failed to fetch account state');
+    }
+
+    if (!positionsRes.ok) {
+      const errorText = await positionsRes.text();
+      console.error('TradeLocker positions error:', errorText);
+      return res
+        .status(positionsRes.status)
+        .send(errorText || 'Failed to fetch open positions');
+    }
 
     const stateJson = await stateRes.json();
     const positionsJson = await positionsRes.json();
 
-    const balance = stateJson.balance ?? stateJson.Balance ?? stateJson.accountBalance ?? 0;
-    const equity = stateJson.equity ?? stateJson.Equity ?? stateJson.accountEquity ?? balance;
-    const marginUsed = stateJson.marginUsed ?? stateJson.margin ?? stateJson.Margin ?? 0;
+    const balance =
+      stateJson.balance ??
+      stateJson.Balance ??
+      stateJson.accountBalance ??
+      0;
 
-    const rawPositions = Array.isArray(positionsJson) ? positionsJson : positionsJson.positions || positionsJson.data || [];
+    const equity =
+      stateJson.equity ??
+      stateJson.Equity ??
+      stateJson.accountEquity ??
+      balance;
+
+    const marginUsed =
+      stateJson.marginUsed ??
+      stateJson.margin ??
+      stateJson.Margin ??
+      0;
+
+    const rawPositions = Array.isArray(positionsJson)
+      ? positionsJson
+      : positionsJson.positions || positionsJson.data || [];
 
     const positions = rawPositions.map((p) => {
-      const sideRaw = (p.side ?? p.positionSide ?? p.direction ?? '').toString().toLowerCase();
-      const side = sideRaw.includes('sell') || sideRaw.includes('short') ? 'sell' : 'buy';
+      const sideRaw = (
+        p.side ??
+        p.positionSide ??
+        p.direction ??
+        ''
+      )
+        .toString()
+        .toLowerCase();
+
+      const side =
+        sideRaw.includes('sell') || sideRaw.includes('short') ? 'sell' : 'buy';
+
       const symbol = p.symbol ?? p.instrument ?? p.symbolName ?? 'UNKNOWN';
+
       const size = p.volume ?? p.lots ?? p.positionVolume ?? 0;
-      const entryPrice = p.openPrice ?? p.priceOpen ?? p.entryPrice ?? p.price ?? 0;
-      const currentPrice = p.currentPrice ?? p.priceCurrent ?? p.closePrice ?? p.lastPrice ?? entryPrice;
-      const pnl = p.unrealizedPnL ?? p.unrealisedPnl ?? p.pnl ?? p.profit ?? 0;
+
+      const entryPrice =
+        p.openPrice ??
+        p.priceOpen ??
+        p.entryPrice ??
+        p.price ??
+        0;
+
+      const currentPrice =
+        p.currentPrice ??
+        p.priceCurrent ??
+        p.closePrice ??
+        p.lastPrice ??
+        entryPrice;
+
+      const pnl =
+        p.unrealizedPnL ??
+        p.unrealisedPnl ??
+        p.pnl ??
+        p.profit ??
+        0;
 
       return {
-        id: String(p.positionId ?? p.id ?? `${symbol}-${entryPrice}-${currentPrice}`),
+        id: String(
+          p.positionId ??
+            p.id ??
+            `${symbol}-${entryPrice}-${currentPrice}`
+        ),
         symbol,
         side,
         size: Number(size),
@@ -222,11 +374,12 @@ app.get('/api/tradelocker/overview', async (req, res) => {
   }
 });
 
+// Simple health check
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, sessions: sessions.size });
 });
 
 app.listen(PORT, () => {
-  console.log(`Backend server (TradeLocker Proxy + Playbook Logs) listening on http://localhost:${PORT}`);
+  console.log(`TradeLocker proxy API & Playbook Logger listening on http://localhost:${PORT}`);
   console.log(`Playbook log file: ${LOG_FILE}`);
 });

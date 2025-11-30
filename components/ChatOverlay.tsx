@@ -8,13 +8,22 @@ import type { PlaybookLogPayload } from '../services/sessionLogService';
 interface ChatOverlayProps {
   chartContext: string;
   isBrokerConnected?: boolean;
+  /**
+   * Optional symbol focus hint from the broker side,
+   * e.g. "US30", "NAS100", "XAUUSD", "BTCUSD", or "Auto".
+   */
+  autoFocusSymbol?: string;
 }
 
 const SYMBOL_PRESETS = ['Auto', 'US30', 'NAS100', 'XAUUSD', 'BTCUSD'];
 
 type ActiveTab = 'chat' | 'history';
 
-const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnected }) => {
+const ChatOverlay: React.FC<ChatOverlayProps> = ({
+  chartContext,
+  isBrokerConnected,
+  autoFocusSymbol
+}) => {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome-1',
@@ -178,7 +187,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         streamRef.current = null;
       }
       if (videoRef.current) {
-        (videoRef.current as HTMLVideoElement).srcObject = null;
+        videoRef.current.srcObject = null;
       }
       setIsVisionActive(false);
     } else {
@@ -186,7 +195,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
       try {
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: { 
-            displaySurface: 'browser',
+            displaySurface: 'browser', // Encourages browser tab sharing
           }, 
           audio: false 
         });
@@ -200,7 +209,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         };
 
         if (videoRef.current) {
-          (videoRef.current as HTMLVideoElement).srcObject = stream;
+          videoRef.current.srcObject = stream;
         }
         setIsVisionActive(true);
       } catch (err: any) {
@@ -221,6 +230,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
           isUser: false
         }]);
 
+        // Force reset if failed
         setIsVisionActive(false);
       }
     }
@@ -232,9 +242,11 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
     const canvas = document.createElement('canvas');
     const video = videoRef.current;
     
+    // Check if video is ready
     if (video.videoWidth === 0 || video.videoHeight === 0) return undefined;
 
-    const scale = 0.5;
+    // Set canvas dimensions to match video (or scale down for performance/tokens)
+    const scale = 0.5; // Scale down to 50% to save tokens/bandwidth
     canvas.width = video.videoWidth * scale;
     canvas.height = video.videoHeight * scale;
     
@@ -243,6 +255,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
     
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
+    // Return base64 string without prefix
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     return dataUrl.split(',')[1];
   };
@@ -264,24 +277,28 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
       attachment: screenshot
     };
 
-    const historyBefore = [...messages];
-
     setMessages(prev => [...prev, userMsg]);
     setInputValue('');
     setIsThinking(true);
 
-    const historyForModel: ChatMessage[] = [...historyBefore, userMsg];
+    // Adjust chart context with symbol focus hint if provided
+    const contextWithFocus =
+      autoFocusSymbol && autoFocusSymbol !== 'Auto'
+        ? `${chartContext}\n\nCurrent focus symbol (from broker data): ${autoFocusSymbol}.`
+        : chartContext;
+
+    const historyForModel: ChatMessage[] = [...messages, userMsg];
 
     try {
       const insights = await getAnalystInsights(
         userMsg.text,
-        chartContext,
+        contextWithFocus,
         screenshot,
         historyForModel,
         focusSymbol
       );
       
-      const newMessages: ChatMessage[] = insights.map((insight, index) => ({
+      const newMessages = insights.map((insight, index) => ({
         id: (Date.now() + index + 1).toString(),
         sender: insight.analystName,
         text: insight.message,
@@ -296,7 +313,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
       // Update the Session Playbook based on full history, then log it
       try {
         setIsUpdatingSummary(true);
-        const summary = await getSessionSummary(chartContext, historyWithAI, screenshot, focusSymbol);
+        const summary = await getSessionSummary(contextWithFocus, historyWithAI, screenshot, focusSymbol);
         setSessionSummary(summary);
         setLiveSessionSummary(summary);
         setIsReplaying(false);
@@ -304,7 +321,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
         setReplayTimestamp(null);
         await logSessionPlaybook(summary, {
           focusSymbol,
-          chartContext,
+          chartContext: contextWithFocus,
           history: historyWithAI
         });
       } catch (err) {
@@ -391,8 +408,13 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
                 <span className="px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-bold border border-green-200">LIVE FEED</span>
               )}
             </h2>
-            <p className="text-[10px] text-gray-400 font-medium">
-              {isReplaying ? 'Replay Mode • Static Playbook' : `Gemini 2.5 Flash • ${isBrokerConnected ? 'TradeLocker Active' : 'Market Watch Mode'}`}
+            <p className="text-[10px] text-gray-400 font-medium flex items-center gap-2">
+              Gemini 2.5 Flash • {isBrokerConnected ? 'TradeLocker Active' : 'Market Watch Mode'}
+              {autoFocusSymbol && (
+                <span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[9px] font-semibold border border-gray-200">
+                  Focus: {autoFocusSymbol}
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -798,9 +820,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ chartContext, isBrokerConnect
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (activeTab === 'chat') {
-                  handleSendMessage();
-                }
+                handleSendMessage();
               }
             }}
             placeholder={

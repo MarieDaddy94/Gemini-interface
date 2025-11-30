@@ -1,20 +1,31 @@
-import { TradeLockerCredentials, BrokerAccountInfo } from '../types';
+import {
+  TradeLockerCredentials,
+  BrokerAccountInfo,
+  TradeLockerAccountSummary
+} from '../types';
 
-// Backend base URL. If you're using Vite, you can set VITE_API_BASE_URL in .env
+// Backend base URL. If you're using Vite, set VITE_API_BASE_URL in .env
 // Fallback is http://localhost:4000 where the Express server runs.
 const API_BASE_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
+export interface ConnectResult {
+  sessionId: string;
+  accounts: TradeLockerAccountSummary[];
+  accountId: string;
+  accNum: number;
+}
+
 /**
- * Connects to the backend, which:
+ * Connects to your backend, which:
  *  - logs into TradeLocker
  *  - fetches accounts
  *  - stores JWT + account info in memory
- * Returns a sessionId that the frontend will use when polling broker data.
+ * Returns a sessionId + list of accounts for the frontend.
  */
 export const connectToTradeLocker = async (
   creds: TradeLockerCredentials
-): Promise<string> => {
+): Promise<ConnectResult> => {
   const res = await fetch(`${API_BASE_URL}/api/tradelocker/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -34,11 +45,33 @@ export const connectToTradeLocker = async (
 
   const data = (await res.json()) as {
     sessionId: string;
+    accounts: TradeLockerAccountSummary[];
     accountId: string;
     accNum: number;
   };
 
-  return data.sessionId;
+  return data;
+};
+
+/**
+ * Switch active account for this session.
+ */
+export const selectTradeLockerAccount = async (
+  sessionId: string,
+  accountId: string,
+  accNum: number
+): Promise<void> => {
+  const res = await fetch(`${API_BASE_URL}/api/tradelocker/select-account`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ sessionId, accountId, accNum })
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || 'Failed to select TradeLocker account');
+  }
 };
 
 /**

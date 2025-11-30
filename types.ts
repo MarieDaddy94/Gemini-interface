@@ -35,13 +35,21 @@ export interface ChartConfig {
 export interface TradeLockerCredentials {
   /**
    * TradeLocker "server" name from the login dialog (NOT a URL),
-   * e.g. "EightCap-Demo" / "EightCap-Live".
-   * This is sent as the `server` field in /auth/jwt/token.
+   * e.g. "EightCap-Demo" / "EightCap-Live" / your prop firm server name.
    */
   server: string;
   email: string;
   password: string;
   isDemo?: boolean; // true = demo.tradelocker.com, false = live.tradelocker.com
+}
+
+export interface TradeLockerAccountSummary {
+  id: string;
+  accNum: number;
+  name: string;
+  currency: string;
+  balance: number;
+  isDemo: boolean;
 }
 
 export interface BrokerPosition {

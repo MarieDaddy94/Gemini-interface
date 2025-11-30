@@ -3,24 +3,43 @@ import { MOCK_CHARTS } from './constants';
 import ChatOverlay from './components/ChatOverlay';
 import WebBrowser from './components/WebBrowser';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
-import { TradeLockerCredentials, BrokerAccountInfo } from './types';
-import { connectToTradeLocker, fetchBrokerData } from './services/tradeLockerService';
+import {
+  TradeLockerCredentials,
+  BrokerAccountInfo,
+  TradeLockerAccountSummary
+} from './types';
+import {
+  connectToTradeLocker,
+  fetchBrokerData,
+  selectTradeLockerAccount
+} from './services/tradeLockerService';
+import {
+  detectFocusSymbolFromPositions,
+  FocusSymbol
+} from './symbolMap';
 
 const App: React.FC = () => {
   // Broker State
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
-  // This now holds the backend sessionId, not the raw TradeLocker JWT
-  const [brokerToken, setBrokerToken] = useState<string | null>(null);
+  const [brokerSessionId, setBrokerSessionId] = useState<string | null>(null);
   const [brokerData, setBrokerData] = useState<BrokerAccountInfo | null>(null);
+
+  const [accounts, setAccounts] = useState<TradeLockerAccountSummary[]>([]);
+  const [activeAccount, setActiveAccount] =
+    useState<TradeLockerAccountSummary | null>(null);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+
+  const [autoFocusSymbol, setAutoFocusSymbol] =
+    useState<FocusSymbol>('Auto');
 
   // Poll Broker Data when connected
   useEffect(() => {
     let interval: number | undefined;
 
-    if (brokerToken) {
+    if (brokerSessionId) {
       const fetchData = async () => {
         try {
-          const data = await fetchBrokerData(brokerToken);
+          const data = await fetchBrokerData(brokerSessionId);
           setBrokerData(data);
         } catch (e) {
           console.error('Failed to poll broker data', e);
@@ -36,16 +55,58 @@ const App: React.FC = () => {
         window.clearInterval(interval);
       }
     };
-  }, [brokerToken]);
+  }, [brokerSessionId]);
+
+  // Auto-detect focus symbol from open positions
+  useEffect(() => {
+    if (brokerData && brokerData.isConnected) {
+      const detected = detectFocusSymbolFromPositions(
+        brokerData.positions
+      );
+      setAutoFocusSymbol(detected);
+    } else {
+      setAutoFocusSymbol('Auto');
+    }
+  }, [brokerData]);
 
   const handleBrokerConnect = async (creds: TradeLockerCredentials) => {
-    const sessionId = await connectToTradeLocker(creds);
-    setBrokerToken(sessionId);
+    const { sessionId, accounts, accountId, accNum } =
+      await connectToTradeLocker(creds);
+
+    setBrokerSessionId(sessionId);
+    setAccounts(accounts);
+
+    const initial =
+      accounts.find((a) => String(a.id) === String(accountId)) ||
+      accounts[0] ||
+      null;
+    setActiveAccount(initial);
   };
 
   const handleDisconnect = () => {
-    setBrokerToken(null);
+    setBrokerSessionId(null);
     setBrokerData(null);
+    setAccounts([]);
+    setActiveAccount(null);
+    setIsAccountMenuOpen(false);
+    setAutoFocusSymbol('Auto');
+  };
+
+  const handleSelectAccount = async (account: TradeLockerAccountSummary) => {
+    if (!brokerSessionId) return;
+
+    try {
+      await selectTradeLockerAccount(
+        brokerSessionId,
+        account.id,
+        account.accNum
+      );
+      setActiveAccount(account);
+      setIsAccountMenuOpen(false);
+      // Broker polling loop will pick up the new account on next poll
+    } catch (err) {
+      console.error('Failed to switch TradeLocker account', err);
+    }
   };
 
   // Merge Mock Market Data with Real Broker Data for the AI Context
@@ -68,16 +129,22 @@ const App: React.FC = () => {
         )
         .join('; ');
 
+      const focusLine =
+        autoFocusSymbol && autoFocusSymbol !== 'Auto'
+          ? `Focus Symbol: ${autoFocusSymbol}.`
+          : '';
+
       return `
         ACCOUNT STATUS: Connected to TradeLocker.
         Equity: $${brokerData.equity.toFixed(2)}. Balance: $${brokerData.balance.toFixed(2)}.
+        ${focusLine}
         Open Positions: [${positionsStr || 'None'}].
         Market Prices (Reference): ${baseContext}
       `;
     }
 
     return `Market Prices (Reference): ${baseContext}`;
-  }, [brokerData]);
+  }, [brokerData, autoFocusSymbol]);
 
   const openPnl =
     brokerData && brokerData.isConnected
@@ -117,10 +184,10 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            {/* Broker Status */}
-            {brokerToken ? (
-              <div className="flex items-center gap-3 bg-[#1e222d] border border-[#2a2e39] rounded px-3 py-1">
-                <div className="flex flex-col items-end leading-tight">
+            {/* Broker Status + Account Picker */}
+            {brokerSessionId ? (
+              <div className="flex items-center gap-3 bg-[#1e222d] border border-[#2a2e39] rounded px-3 py-1 relative">
+                <div className="flex flex-col items-end leading-tight mr-2">
                   <span className="text-[10px] text-gray-400">Equity</span>
                   <span
                     className={`text-xs font-bold ${
@@ -133,8 +200,10 @@ const App: React.FC = () => {
                   </span>
                 </div>
                 {brokerData && (
-                  <div className="flex flex-col items-end leading-tight">
-                    <span className="text-[10px] text-gray-400">Open PnL</span>
+                  <div className="flex flex-col items-end leading-tight mr-2">
+                    <span className="text-[10px] text-gray-400">
+                      Open PnL
+                    </span>
                     <span
                       className={`text-xs font-bold ${
                         openPnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'
@@ -144,7 +213,76 @@ const App: React.FC = () => {
                     </span>
                   </div>
                 )}
-                <div className="h-6 w-[1px] bg-[#2a2e39]"></div>
+
+                {/* Account picker */}
+                {activeAccount && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setIsAccountMenuOpen((prev) => !prev)
+                      }
+                      className="flex items-center gap-1 text-[10px] bg-[#131722] px-2 py-1 rounded border border-[#2a2e39] hover:border-[#2962ff] transition-colors"
+                    >
+                      <span className="font-semibold">
+                        {activeAccount.name}
+                      </span>
+                      <span className="text-[9px] text-gray-400">
+                        #{activeAccount.accNum}
+                      </span>
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </button>
+                    {isAccountMenuOpen && (
+                      <div className="absolute right-0 mt-1 w-56 bg-[#1e222d] border border-[#2a2e39] rounded shadow-lg z-30">
+                        <div className="px-3 py-2 border-b border-[#2a2e39] text-[10px] text-gray-400">
+                          Select Account
+                        </div>
+                        <div className="max-h-60 overflow-y-auto">
+                          {accounts.map((acc) => (
+                            <button
+                              key={acc.id}
+                              type="button"
+                              onClick={() => handleSelectAccount(acc)}
+                              className={`w-full text-left px-3 py-2 text-[11px] hover:bg-[#2a2e39] flex justify-between items-center ${
+                                activeAccount &&
+                                activeAccount.id === acc.id
+                                  ? 'bg-[#2a2e39]'
+                                  : ''
+                              }`}
+                            >
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-gray-100">
+                                  {acc.name}
+                                </span>
+                                <span className="text-[10px] text-gray-400">
+                                  #{acc.accNum} • {acc.currency}{' '}
+                                  {acc.isDemo ? '• Demo' : '• Live'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-[#089981] font-semibold">
+                                ${acc.balance.toFixed(2)}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="h-6 w-[1px] bg-[#2a2e39] mx-1"></div>
                 <button
                   onClick={handleDisconnect}
                   className="text-[10px] text-red-400 hover:text-red-300 font-medium"
@@ -166,10 +304,10 @@ const App: React.FC = () => {
             <div className="flex items-center gap-2 text-xs bg-[#2a2e39] py-1 px-2 rounded text-[#d1d4dc]">
               <span
                 className={`w-2 h-2 rounded-full ${
-                  brokerToken ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
+                  brokerSessionId ? 'bg-green-500 animate-pulse' : 'bg-gray-500'
                 }`}
               ></span>
-              {brokerToken ? 'TradeLocker Linked' : 'System Idle'}
+              {brokerSessionId ? 'TradeLocker Linked' : 'System Idle'}
             </div>
             <div className="w-8 h-8 rounded-full bg-[#2a2e39] flex items-center justify-center text-xs border border-[#2a2e39] hover:border-[#2962ff] cursor-pointer transition-colors">
               JD
@@ -184,7 +322,11 @@ const App: React.FC = () => {
       </div>
 
       {/* AI Analyst Sidebar - Passing the enriched broker data context */}
-      <ChatOverlay chartContext={marketContext} isBrokerConnected={!!brokerToken} />
+      <ChatOverlay
+        chartContext={marketContext}
+        isBrokerConnected={!!brokerSessionId}
+        autoFocusSymbol={autoFocusSymbol}
+      />
 
       {/* Broker Modal */}
       <ConnectBrokerModal
