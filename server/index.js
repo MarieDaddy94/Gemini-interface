@@ -4,6 +4,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+// Import AI Handlers
+const { handleAiRoute } = require('./ai-service');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
@@ -24,7 +27,21 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Increased limit for vision/base64
+
+// --- AI ROUTE ---
+app.post('/api/ai/route', async (req, res) => {
+  try {
+    const result = await handleAiRoute(req.body, sessions, journalBySession);
+    res.json(result);
+  } catch (err) {
+    console.error('AI Route Error:', err);
+    res.status(500).json({ 
+      error: err.message || 'Internal AI Error',
+      message: { role: 'assistant', content: 'I encountered an error processing your request.' }
+    });
+  }
+});
 
 // --- Playbook Logging Logic ---
 function readLogFile() {
@@ -436,21 +453,6 @@ app.get('/api/journal/entries', (req, res) => {
 
 /**
  * POST /api/journal/entry
- * Body: {
- *   sessionId,
- *   entry: {
- *     focusSymbol,
- *     bias,
- *     confidence,
- *     note,
- *     entryType?: 'Pre-Trade' | 'Post-Trade' | 'SessionReview'
- *     outcome?: 'Open' | 'Win' | 'Loss' | 'BreakEven'
- *     tags?: string[]
- *     accountSnapshot?: { balance, equity, openPnl, positionsCount }
- *     linkedPositionId?: string
- *     linkedSymbol?: string
- *   }
- * }
  */
 app.post('/api/journal/entry', (req, res) => {
   const { sessionId, entry } = req.body || {};
@@ -521,15 +523,6 @@ app.post('/api/journal/entry', (req, res) => {
 
 /**
  * PATCH /api/journal/entry/:id
- * Body: {
- *   sessionId,
- *   updates: {
- *     outcome?: 'Open' | 'Win' | 'Loss' | 'BreakEven'
- *     tags?: string[]
- *     note?: string
- *     linkedPositionId?: string | null
- *   }
- * }
  */
 app.patch('/api/journal/entry/:id', (req, res) => {
   const { sessionId, updates } = req.body || {};

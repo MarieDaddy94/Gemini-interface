@@ -32,16 +32,11 @@ export interface ChartConfig {
 
 // --- TradeLocker / Broker Types ---
 
-/**
- * TradeLocker login credentials.
- * "server" is the TradeLocker server name (e.g. "EightCap-Demo"),
- * not a URL.
- */
 export interface TradeLockerCredentials {
   server: string;
   email: string;
   password: string;
-  isDemo?: boolean; // true = demo.tradelocker.com, false = live.tradelocker.com
+  isDemo?: boolean; 
 }
 
 export interface TradeLockerAccountSummary {
@@ -104,7 +99,6 @@ export interface AccountSnapshot {
   positionsCount: number;
 }
 
-// Payload when creating a new entry
 export interface NewJournalEntryInput {
   focusSymbol: string;
   bias: TradeBias;
@@ -116,22 +110,18 @@ export interface NewJournalEntryInput {
   accountSnapshot?: AccountSnapshot;
   linkedPositionId: string | null;
   linkedSymbol: string | null;
-  // Optional close information (for when you auto-close + log)
   finalPnl?: number | null;
   closedAt?: string | null; // ISO string
 }
 
-// Full stored entry
 export interface JournalEntry extends NewJournalEntryInput {
   id: string;
   sessionId: string;
   timestamp: string; // ISO string
 }
 
-// Helper alias for component compatibility
 export type JournalEntryPatch = Partial<JournalEntry>;
 
-// Stats objects for tag / symbol queries
 export interface TagSummary {
   tag: string;
   total: number;
@@ -150,4 +140,70 @@ export interface SymbolSummaryForTag {
   breakEven: number;
   closedWithPnl: number;
   totalPnl: number;
+}
+
+// --- NEW AI ROUTING TYPES ---
+
+export type AiRole = 'system' | 'user' | 'assistant' | 'tool';
+
+export interface ClientMessage {
+  id?: string;
+  role: AiRole;
+  content: string;
+  name?: string;          
+  toolCallId?: string;    
+}
+
+export interface VisionAttachment {
+  type: 'chart-screenshot';
+  mimeType: string;       
+  dataBase64: string;     
+}
+
+export interface MarketContext {
+  symbol?: string;        
+  timeframe?: string;     
+  brokerSessionId?: string;
+  journalSessionId?: string;
+}
+
+export interface AiRouteRequest {
+  agentId: string;            
+  messages: ClientMessage[];  
+  vision?: VisionAttachment | null;  
+  marketContext?: MarketContext;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
+}
+
+export interface AiRouteResponse {
+  message: ClientMessage;
+  toolCalls?: ToolCall[];
+  metadata?: {
+    sentiment?: 'bullish' | 'bearish' | 'neutral';
+    convictionScore?: number;         
+    suggestedTrade?: {
+      direction: 'long' | 'short';
+      entryZone?: { from: number; to: number };
+      stopLoss?: number;
+      tp1?: number;
+      tp2?: number;
+      rrEstimate?: number;
+      confidence?: number;
+    } | null;
+    journalEntryId?: string | null;
+    playbookVariantId?: string | null;
+  };
+}
+
+export interface AgentConfig {
+  id: string;
+  label: string;
+  description: string;
+  avatar: string;
+  color: string;
 }
