@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   AgentConfig, 
 } from '../types';
-import { sendAgentChat, UIMessage, AgentId } from '../services/aiClient';
+import { sendAgentChat, UIMessage, AgentId, VisionImagePayload } from '../services/aiClient';
+import { useJournal } from '../context/JournalContext';
 
 // Updated Agent Definitions matching server/ai-config.js
 const AGENTS: AgentConfig[] = [
@@ -84,12 +85,16 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     return initial;
   });
 
-  // Vision / Screen Share State
+  // Vision / Screen Share / File State
   const [isVisionActive, setIsVisionActive] = useState(false);
+  const [pendingFileImage, setPendingFileImage] = useState<VisionImagePayload | null>(null);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const { addEntryFromToolResult } = useJournal();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -157,8 +162,35 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     return dataUrl.split(',')[1];
   };
 
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        // strip "data:...;base64," prefix
+        const commaIndex = result.indexOf(",");
+        const base64 = commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
+
+        setPendingFileImage({
+          mimeType: file.type,
+          data: base64,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+    // Reset input so same file can be selected again
+    e.target.value = '';
+  };
+
   const handleSendMessage = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() && !pendingFileImage && !isVisionActive) return;
 
     const currentAgent = AGENTS.find(a => a.id === activeAgentId)!;
     const userText = inputValue;
@@ -167,9 +199,18 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       content: userText
     };
 
-    let screenshot: string | undefined = undefined;
+    // Gather vision data: prefer uploaded file, fallback to screen capture
+    let visionPayloads: VisionImagePayload[] = [];
+    
+    if (pendingFileImage) {
+      visionPayloads.push(pendingFileImage);
+    }
+    
     if (isVisionActive) {
-      screenshot = captureFrame();
+      const frame = captureFrame();
+      if (frame) {
+        visionPayloads.push({ mimeType: 'image/jpeg', data: frame });
+      }
     }
 
     // Optimistic Update
@@ -181,7 +222,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         isThinking: true
       }
     }));
+    
     setInputValue('');
+    setPendingFileImage(null); // Clear pending file after send
 
     try {
       const history = agentsState[activeAgentId].messages.concat(userMsg);
@@ -189,7 +232,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       const response = await sendAgentChat(activeAgentId as AgentId, history, {
         accountId: brokerSessionId || undefined,
         symbol: (autoFocusSymbol && autoFocusSymbol !== 'Auto') ? autoFocusSymbol : undefined,
-        visionImages: screenshot ? [{ mimeType: 'image/jpeg', data: screenshot }] : undefined
+        visionImages: visionPayloads.length > 0 ? visionPayloads : undefined
       });
 
       setAgentsState(prev => ({
@@ -203,6 +246,13 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           isThinking: false
         }
       }));
+
+      // Feed any journal tool calls into the journal context
+      if (response.toolResults?.length) {
+        response.toolResults.forEach((tr) => {
+          addEntryFromToolResult(tr);
+        });
+      }
 
     } catch (e: any) {
       console.error("Agent Error", e);
@@ -249,6 +299,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   return (
     <div className="w-[400px] h-full bg-white flex flex-col border-l border-[#2a2e39] shadow-xl relative z-30 animate-fade-in-right shrink-0">
       <video ref={videoRef} autoPlay playsInline muted className="hidden" />
+      <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
 
       {/* Header */}
       <div className="h-14 px-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm shrink-0">
@@ -375,20 +426,38 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
               }
             }}
             placeholder={`Ask ${activeAgentConfig.label}...`}
-            className="w-full bg-gray-50 border border-gray-200 rounded-2xl py-3 px-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[#2962ff]/50 focus:bg-white transition-all text-gray-800 placeholder-gray-400 resize-none h-12 max-h-32"
+            className="w-full bg-gray-50 border border-gray-200 rounded-2xl py-3 px-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[#2962ff]/50 focus:bg-white transition-all text-gray-800 placeholder-gray-400 resize-none h-12 max-h-32 pl-10" 
           />
+          {/* Attachment Button */}
+          <button 
+             onClick={handleFileClick}
+             className="absolute left-2 top-3 text-gray-400 hover:text-[#2962ff] p-1 transition-colors"
+             title="Attach Screenshot"
+          >
+             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
+
           <button 
             onClick={handleSendMessage}
-            disabled={!inputValue.trim() || activeState.isThinking}
+            disabled={(!inputValue.trim() && !pendingFileImage && !isVisionActive) || activeState.isThinking}
             className="absolute right-2 top-2 p-1.5 bg-[#2962ff] text-white rounded-xl hover:bg-[#1e53e5] disabled:opacity-50 transition-colors shadow-sm"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
           </button>
         </div>
-        <div className="mt-2 px-1 flex justify-between">
-           <p className="text-[10px] text-gray-400">
-             {activeAgentConfig.description}
-           </p>
+        <div className="mt-2 px-1 flex justify-between items-center">
+           <div className="flex items-center gap-2">
+             <p className="text-[10px] text-gray-400">
+               {activeAgentConfig.description}
+             </p>
+             {pendingFileImage && (
+               <div className="flex items-center gap-1 bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-[10px] border border-blue-100">
+                 <span>📎 Screenshot Attached</span>
+                 <button onClick={(e) => { e.stopPropagation(); setPendingFileImage(null); }} className="hover:text-blue-800">×</button>
+               </div>
+             )}
+           </div>
+           
            {isVisionActive && (
              <span className="text-[10px] text-red-500 font-medium animate-pulse">
                Screen Analysis Ready

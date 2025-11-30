@@ -11,6 +11,7 @@ import {
   fetchJournalEntries,
   createJournalEntry,
 } from '../services/journalService';
+import { useJournal } from '../context/JournalContext';
 
 interface JournalPanelProps {
   sessionId: string;
@@ -22,8 +23,8 @@ const ENTRY_TYPES: TradeEntryType[] = ['Pre-Trade', 'Post-Trade', 'SessionReview
 const OUTCOMES: TradeOutcome[] = ['Open', 'Win', 'Loss', 'BreakEven'];
 
 const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) => {
-  const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [loadingEntries, setLoadingEntries] = useState(false);
+  const { entries, setEntries, addEntry } = useJournal();
 
   // Form state
   const [symbol, setSymbol] = useState('');
@@ -115,11 +116,14 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
 
     setSaving(true);
     try {
-      await createJournalEntry(sessionId, payload);
+      // Save to backend
+      const newEntry = await createJournalEntry(sessionId, payload);
+      // Update local context
+      addEntry(newEntry);
+      
       setNote('');
       setTagsInput('');
       setOutcome(entryType === 'Pre-Trade' ? 'Open' : outcome);
-      await loadEntries();
     } catch (err: any) {
       console.error('Failed to save journal entry', err);
       setError(err.message || 'Failed to save entry.');
@@ -503,11 +507,13 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
           {filteredEntries.slice(0, 10).map((e) => (
             <div
               key={e.id}
-              className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1 text-[10px] text-gray-200 min-w-[170px]"
+              className={`border rounded px-2 py-1 text-[10px] text-gray-200 min-w-[170px] ${
+                  e.id.startsWith('ai-') ? 'bg-[#1a1f2b] border-purple-500/30' : 'bg-[#131722] border-[#2a2e39]'
+              }`}
             >
               <div className="flex justify-between items-center mb-0.5">
                 <span className="font-semibold text-white">
-                  {e.focusSymbol}
+                  {e.focusSymbol} {e.id.startsWith('ai-') && <span className="text-[8px] text-purple-400 ml-1">AI</span>}
                 </span>
                 <span
                   className={`px-1 py-[1px] rounded-full border ${
