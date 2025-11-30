@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BrokerAccountInfo,
   JournalEntry,
@@ -17,34 +17,40 @@ interface JournalPanelProps {
   brokerData: BrokerAccountInfo | null;
 }
 
-const biases: TradeBias[] = ['Bullish', 'Bearish', 'Neutral'];
-const entryTypes: TradeEntryType[] = ['Pre-Trade', 'Post-Trade', 'SessionReview'];
-const outcomes: TradeOutcome[] = ['Open', 'Win', 'Loss', 'BreakEven'];
+const BIASES: TradeBias[] = ['Bullish', 'Bearish', 'Neutral'];
+const ENTRY_TYPES: TradeEntryType[] = ['Pre-Trade', 'Post-Trade', 'SessionReview'];
+const OUTCOMES: TradeOutcome[] = ['Open', 'Win', 'Loss', 'BreakEven'];
 
 const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) => {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [loadingEntries, setLoadingEntries] = useState(false);
 
-  const [focusSymbol, setFocusSymbol] = useState('');
-  const [bias, setBias] = useState<TradeBias>('Bullish');
+  // Form state
+  const [symbol, setSymbol] = useState('');
+  const [bias, setBias] = useState<TradeBias>('Neutral');
   const [confidence, setConfidence] = useState<number>(3);
   const [entryType, setEntryType] = useState<TradeEntryType>('Pre-Trade');
   const [outcome, setOutcome] = useState<TradeOutcome>('Open');
   const [tagsInput, setTagsInput] = useState('');
   const [note, setNote] = useState('');
   const [linkedPositionId, setLinkedPositionId] = useState<string>('');
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Filters for RECENT ENTRIES
+  const [symbolFilter, setSymbolFilter] = useState<string>('All');
+  const [outcomeFilter, setOutcomeFilter] = useState<'All' | TradeOutcome>('All');
+  const [onlyLosers, setOnlyLosers] = useState(false);
+
   const openPositions = brokerData?.positions ?? [];
 
-  // When broker data or positions change, auto-fill focusSymbol & linked position
   useEffect(() => {
-    if (!focusSymbol && openPositions.length > 0) {
-      setFocusSymbol(openPositions[0].symbol);
+    if (!symbol && openPositions.length > 0) {
+      setSymbol(openPositions[0].symbol);
       setLinkedPositionId(openPositions[0].id);
     }
-  }, [openPositions, focusSymbol]);
+  }, [openPositions, symbol]);
 
   const loadEntries = async () => {
     setLoadingEntries(true);
@@ -63,11 +69,11 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
-    if (!focusSymbol.trim()) {
+    if (!symbol.trim()) {
       setError('Symbol is required.');
       return;
     }
@@ -93,7 +99,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
         : undefined;
 
     const payload: NewJournalEntryInput = {
-      focusSymbol: focusSymbol.trim(),
+      focusSymbol: symbol.trim(),
       bias,
       confidence: Math.min(5, Math.max(1, Number(confidence) || 1)),
       note: note.trim(),
@@ -103,7 +109,6 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
       accountSnapshot,
       linkedPositionId: linkedPositionId || null,
       linkedSymbol: linkedPos ? linkedPos.symbol : null,
-      // PnL + close time can be filled later by another feature if you want
       finalPnl: null,
       closedAt: null,
     };
@@ -113,10 +118,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
       await createJournalEntry(sessionId, payload);
       setNote('');
       setTagsInput('');
-      if (entryType === 'Pre-Trade') {
-        // keep outcome Open by default for pre-trade notes
-        setOutcome('Open');
-      }
+      setOutcome(entryType === 'Pre-Trade' ? 'Open' : outcome);
       await loadEntries();
     } catch (err: any) {
       console.error('Failed to save journal entry', err);
@@ -136,242 +138,408 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ sessionId, brokerData }) =>
     });
   };
 
+  const uniqueSymbols = useMemo(() => {
+    const set = new Set<string>();
+    entries.forEach((e) => {
+      if (e.focusSymbol) set.add(e.focusSymbol);
+    });
+    return Array.from(set).sort();
+  }, [entries]);
+
+  const filteredEntries = useMemo(() => {
+    return entries.filter((e) => {
+      if (symbolFilter !== 'All' && e.focusSymbol !== symbolFilter) return false;
+      if (outcomeFilter !== 'All' && e.outcome !== outcomeFilter) return false;
+      if (onlyLosers && e.outcome !== 'Loss') return false;
+      return true;
+    });
+  }, [entries, symbolFilter, outcomeFilter, onlyLosers]);
+
+  const accountConnected = brokerData && brokerData.isConnected;
+
   return (
-    <div className="h-72 bg-[#1e222d] border-t border-[#2a2e39] flex text-xs shrink-0">
-      {/* Left: New entry form */}
-      <div className="w-2/3 border-r border-[#2a2e39] px-4 py-3 flex flex-col gap-2 overflow-y-auto">
-        <div className="flex items-center justify-between mb-1 shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] uppercase tracking-wide text-gray-400">
-              Trade Journal
-            </span>
-            <span className="px-1.5 py-0.5 rounded-full bg-[#2962ff]/10 text-[#2962ff] text-[9px] font-semibold border border-[#2962ff]/40">
-              /coach powered
-            </span>
-          </div>
-          <div className="text-[10px] text-gray-500">
-            Entries: {entries.length}
-          </div>
+    <div className="bg-[#1e222d] border-t border-[#2a2e39] px-4 py-3 text-xs flex flex-col gap-2">
+      {/* Header row: title + entries count */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-gray-400">
+            Trading Journal
+          </span>
+          <span className="px-1.5 py-0.5 rounded-full bg-[#2962ff]/10 text-[#2962ff] text-[9px] font-semibold border border-[#2962ff]/40">
+            coach powered
+          </span>
         </div>
-
-        <form
-          onSubmit={handleSubmit}
-          className="grid grid-cols-12 gap-2 items-start"
-        >
-          {/* Symbol + Bias */}
-          <div className="col-span-3 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">Symbol</label>
-            <input
-              type="text"
-              value={focusSymbol}
-              onChange={(e) => setFocusSymbol(e.target.value)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-              placeholder="US30 / XAUUSD / BTCUSD"
-            />
-          </div>
-
-          <div className="col-span-3 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">Bias</label>
-            <select
-              value={bias}
-              onChange={(e) => setBias(e.target.value as TradeBias)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-            >
-              {biases.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="col-span-2 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">
-              Confidence
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={confidence}
-              onChange={(e) => setConfidence(Number(e.target.value) || 1)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-            />
-          </div>
-
-          <div className="col-span-2 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">Type</label>
-            <select
-              value={entryType}
-              onChange={(e) => setEntryType(e.target.value as TradeEntryType)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-            >
-              {entryTypes.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="col-span-2 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">
-              Outcome
-            </label>
-            <select
-              value={outcome}
-              onChange={(e) => setOutcome(e.target.value as TradeOutcome)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-            >
-              {outcomes.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Tags */}
-          <div className="col-span-4 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">
-              Tags (space or comma)
-            </label>
-            <input
-              type="text"
-              value={tagsInput}
-              onChange={(e) => setTagsInput(e.target.value)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-              placeholder="LondonOpen US30_M5 newsFade"
-            />
-          </div>
-
-          {/* Link to open position (optional) */}
-          <div className="col-span-4 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">
-              Link to Position (optional)
-            </label>
-            <select
-              value={linkedPositionId}
-              onChange={(e) => setLinkedPositionId(e.target.value)}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
-            >
-              <option value="">None</option>
-              {openPositions.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.symbol} {p.side.toUpperCase()} {p.size} @ {p.entryPrice} (PnL $
-                  {p.pnl})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Note */}
-          <div className="col-span-12 space-y-1">
-            <label className="text-[10px] text-gray-400 uppercase">
-              Note / Playbook reasoning
-            </label>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={2}
-              className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff] resize-none"
-              placeholder="Why are you taking this? What is the exact playbook (tag) and risk context?"
-            />
-          </div>
-
-          {/* Error + Save button */}
-          <div className="col-span-8">
-            {error && (
-              <div className="mt-1 text-[10px] text-red-400">
-                {error}
-              </div>
-            )}
-          </div>
-          <div className="col-span-4 flex justify-end items-end">
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-3 py-1.5 rounded bg-[#2962ff] text-white text-[11px] font-semibold hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-            >
-              {saving && (
-                <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              )}
-              <span>Save Journal Entry</span>
-            </button>
-          </div>
-        </form>
-
-        <p className="mt-1 text-[9px] text-gray-500">
-          Tip: keep your tags consistent (e.g. <span className="font-mono">LondonOpen</span>,{' '}
-          <span className="font-mono">NYReversal</span>) so you can ask{' '}
-          <span className="font-mono">/coach LondonOpen US30</span> in the chat.
-        </p>
+        <div className="flex items-center gap-3 text-[10px] text-gray-400">
+          <span>
+            Entries: <span className="text-gray-200">{entries.length}</span>
+          </span>
+        </div>
       </div>
 
-      {/* Right: Recent entries */}
-      <div className="w-1/3 px-3 py-3 flex flex-col">
-        <div className="flex items-center justify-between mb-2 shrink-0">
-          <span className="text-[10px] text-gray-400 uppercase tracking-wide">
-            Recent Entries
-          </span>
-          {loadingEntries && (
-            <span className="text-[9px] text-gray-500">Refreshing...</span>
-          )}
-        </div>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-          {entries.slice(0, 8).map((e) => (
-            <div
-              key={e.id}
-              className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-gray-200"
-            >
-              <div className="flex justify-between items-center mb-0.5">
-                <div className="flex items-center gap-1">
-                  <span className="font-semibold text-white">
-                    {e.focusSymbol}
-                  </span>
-                  <span
-                    className={`px-1 py-[1px] rounded-full text-[9px] border ${
-                      e.outcome === 'Win'
-                        ? 'bg-[#089981]/10 text-[#089981] border-[#089981]/40'
-                        : e.outcome === 'Loss'
-                        ? 'bg-[#f23645]/10 text-[#f23645] border-[#f23645]/40'
-                        : e.outcome === 'BreakEven'
-                        ? 'bg-gray-500/10 text-gray-300 border-gray-500/40'
-                        : 'bg-gray-700/40 text-gray-300 border-gray-600'
-                    }`}
-                  >
-                    {e.outcome}
+      {/* Main content row: account snapshot + form */}
+      <form
+        onSubmit={handleSave}
+        className="flex gap-4 items-stretch mt-1"
+      >
+        {/* ACCOUNT SNAPSHOT */}
+        <div className="w-56 bg-[#131722] border border-[#2a2e39] rounded-md px-3 py-2 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-gray-400 uppercase tracking-wide">
+                Account Snapshot
+              </span>
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                  accountConnected
+                    ? 'bg-[#089981]/10 text-[#089981] border-[#089981]/40'
+                    : 'bg-gray-700/40 text-gray-300 border-gray-600'
+                }`}
+              >
+                {accountConnected ? 'Connected' : 'Not Connected'}
+              </span>
+            </div>
+            {accountConnected && brokerData ? (
+              <div className="space-y-1 text-[11px] text-gray-200">
+                <div className="flex justify-between">
+                  <span>Balance</span>
+                  <span className="font-semibold">
+                    ${brokerData.balance.toFixed(2)}
                   </span>
                 </div>
-                <span className="text-[9px] text-gray-500">
-                  {formatTime(e.timestamp)}
+                <div className="flex justify-between">
+                  <span>Equity</span>
+                  <span
+                    className={
+                      brokerData.equity >= brokerData.balance
+                        ? 'text-[#089981] font-semibold'
+                        : 'text-[#f23645] font-semibold'
+                    }
+                  >
+                    ${brokerData.equity.toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Open PnL</span>
+                  <span
+                    className={
+                      brokerData.equity - brokerData.balance >= 0
+                        ? 'text-[#089981]'
+                        : 'text-[#f23645]'
+                    }
+                  >
+                    ${(brokerData.equity - brokerData.balance).toFixed(2)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Open Positions</span>
+                  <span>{brokerData.positions.length}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[10px] text-gray-500 mt-1.5 leading-snug">
+                Connect your TradeLocker account to snapshot live stats with each
+                journal entry.
+              </p>
+            )}
+          </div>
+          <p className="mt-2 text-[9px] text-gray-500">
+            Keep your tags consistent (e.g. <span className="font-mono">LondonOpen</span>,{' '}
+            <span className="font-mono">NYReversal</span>) so chat can coach you with{' '}
+            <span className="font-mono">/coach Tag Symbol</span>.
+          </p>
+        </div>
+
+        {/* Form area */}
+        <div className="flex-1 flex flex-col gap-2">
+          {/* Symbol + bias + confidence + type + outcome + link trade */}
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* Symbol */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">Symbol</span>
+              <input
+                type="text"
+                value={symbol}
+                onChange={(e) => setSymbol(e.target.value)}
+                className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff] min-w-[110px]"
+                placeholder="US30 / XAUUSD / BTCUSD"
+              />
+            </div>
+
+            {/* Bias pill group */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">Bias</span>
+              <div className="flex bg-[#131722] rounded-full border border-[#2a2e39] overflow-hidden">
+                {BIASES.map((b) => {
+                  const active = b === bias;
+                  return (
+                    <button
+                      key={b}
+                      type="button"
+                      onClick={() => setBias(b)}
+                      className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+                        active
+                          ? 'bg-[#2962ff] text-white'
+                          : 'text-gray-300 hover:bg-[#2a2e39]'
+                      }`}
+                    >
+                      {b}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Confidence pills */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">
+                Confidence
+              </span>
+              <div className="flex bg-[#131722] rounded-full border border-[#2a2e39] overflow-hidden">
+                {[1, 2, 3, 4, 5].map((n) => {
+                  const active = n === confidence;
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setConfidence(n)}
+                      className={`px-2 py-1 text-[11px] font-medium transition-colors ${
+                        active
+                          ? 'bg-white text-[#131722]'
+                          : 'text-gray-300 hover:bg-[#2a2e39]'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Type pills */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">Type</span>
+              <div className="flex bg-[#131722] rounded-full border border-[#2a2e39] overflow-hidden">
+                {ENTRY_TYPES.map((t) => {
+                  const label =
+                    t === 'Pre-Trade'
+                      ? 'Pre-Trade'
+                      : t === 'Post-Trade'
+                      ? 'Post-Trade'
+                      : 'Session';
+                  const active = t === entryType;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => {
+                        setEntryType(t);
+                        if (t === 'Pre-Trade') setOutcome('Open');
+                      }}
+                      className={`px-3 py-1 text-[11px] font-medium transition-colors ${
+                        active
+                          ? 'bg-[#2962ff] text-white'
+                          : 'text-gray-300 hover:bg-[#2a2e39]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Outcome select */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">
+                Outcome
+              </span>
+              <select
+                value={outcome}
+                onChange={(e) =>
+                  setOutcome(e.target.value as TradeOutcome)
+                }
+                className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff] min-w-[90px]"
+              >
+                {OUTCOMES.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Link Trade */}
+            <div className="flex flex-col gap-1 min-w-[160px]">
+              <span className="text-[9px] text-gray-400 uppercase">
+                Link Trade
+              </span>
+              <select
+                value={linkedPositionId}
+                onChange={(e) => setLinkedPositionId(e.target.value)}
+                className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
+              >
+                <option value="">None</option>
+                {openPositions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.symbol} {p.side.toUpperCase()} {p.size} @ {p.entryPrice}{' '}
+                    (PnL ${p.pnl})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Note + tags + save button */}
+          <div className="flex items-end gap-2 mt-1">
+            <div className="flex-1 flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">
+                Note / Playbook reasoning
+              </span>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={2}
+                className="w-full bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff] resize-none"
+                placeholder="What are you seeing? Why this trade? What invalidates the idea?"
+              />
+            </div>
+
+            <div className="w-56 flex flex-col gap-1">
+              <span className="text-[9px] text-gray-400 uppercase">
+                Tags (space or comma)
+              </span>
+              <input
+                type="text"
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+                className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-[#2962ff]"
+                placeholder="LondonOpen US30_M5 newsFade"
+              />
+              <button
+                type="submit"
+                disabled={saving}
+                className="mt-1 px-3 py-1.5 rounded bg-[#2962ff] text-white text-[11px] font-semibold hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+              >
+                {saving && (
+                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                )}
+                <span>Save Journal Entry</span>
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="text-[10px] text-red-400 mt-1">
+              {error}
+            </div>
+          )}
+        </div>
+      </form>
+
+      {/* RECENT ENTRIES strip */}
+      <div className="mt-2 flex items-start justify-between gap-4">
+        <div className="flex items-center gap-2 text-[10px] text-gray-400">
+          <span className="uppercase tracking-wide">Recent Entries</span>
+
+          {/* Symbol filter */}
+          <div className="flex items-center gap-1">
+            <span>Symbol</span>
+            <select
+              value={symbolFilter}
+              onChange={(e) => setSymbolFilter(e.target.value)}
+              className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-0.5 text-[10px] text-gray-200 focus:outline-none focus:border-[#2962ff]"
+            >
+              <option value="All">All</option>
+              {uniqueSymbols.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Outcome filter */}
+          <div className="flex items-center gap-1">
+            <span>Outcome</span>
+            <div className="flex bg-[#131722] rounded-full border border-[#2a2e39] overflow-hidden">
+              {['All', 'Open', 'Win', 'Loss', 'BreakEven'].map((v) => {
+                const active = outcomeFilter === v;
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() =>
+                      setOutcomeFilter(
+                        v === 'All' ? 'All' : (v as TradeOutcome)
+                      )
+                    }
+                    className={`px-2 py-0.5 text-[10px] transition-colors ${
+                      active
+                        ? 'bg-white text-[#131722]'
+                        : 'text-gray-300 hover:bg-[#2a2e39]'
+                    }`}
+                  >
+                    {v}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Only losers */}
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={onlyLosers}
+              onChange={(e) => setOnlyLosers(e.target.checked)}
+              className="w-3 h-3 rounded bg-[#131722] border border-[#2a2e39] text-[#f23645]"
+            />
+            <span>Only losers</span>
+          </label>
+        </div>
+
+        {/* Entries list */}
+        <div className="flex-1 max-h-16 overflow-x-auto overflow-y-hidden flex gap-2 justify-end">
+          {filteredEntries.slice(0, 10).map((e) => (
+            <div
+              key={e.id}
+              className="bg-[#131722] border border-[#2a2e39] rounded px-2 py-1 text-[10px] text-gray-200 min-w-[170px]"
+            >
+              <div className="flex justify-between items-center mb-0.5">
+                <span className="font-semibold text-white">
+                  {e.focusSymbol}
+                </span>
+                <span
+                  className={`px-1 py-[1px] rounded-full border ${
+                    e.outcome === 'Win'
+                      ? 'bg-[#089981]/10 text-[#089981] border-[#089981]/40'
+                      : e.outcome === 'Loss'
+                      ? 'bg-[#f23645]/10 text-[#f23645] border-[#f23645]/40'
+                      : e.outcome === 'BreakEven'
+                      ? 'bg-gray-500/10 text-gray-300 border-gray-500/40'
+                      : 'bg-gray-700/40 text-gray-300 border-gray-600'
+                  }`}
+                >
+                  {e.outcome}
                 </span>
               </div>
-              <div className="flex items-center gap-1 text-[10px] text-gray-400 mb-0.5">
-                <span>{e.bias}</span>
-                <span>•</span>
-                <span>Conf {e.confidence}/5</span>
-                {e.tags && e.tags.length > 0 && (
-                  <>
-                    <span>•</span>
-                    <span className="truncate max-w-[140px]">
-                      {e.tags.join(' ')}
-                    </span>
-                  </>
-                )}
+              <div className="flex justify-between items-center text-[9px] text-gray-400 mb-0.5">
+                <span>
+                  {e.bias} · Conf {e.confidence}/5
+                </span>
+                <span>{formatTime(e.timestamp)}</span>
               </div>
-              {e.note && (
-                <p className="text-[10px] text-gray-300 line-clamp-3">
-                  {e.note}
-                </p>
+              {e.tags && e.tags.length > 0 && (
+                <div className="text-[9px] text-gray-400 truncate">
+                  {e.tags.join(' ')}
+                </div>
               )}
             </div>
           ))}
-          {entries.length === 0 && !loadingEntries && (
-            <p className="text-[10px] text-gray-500">
-              No entries yet. Log a few trades, then ask the chat{' '}
-              <span className="font-mono">/coach TagName Symbol</span>.
-            </p>
+          {filteredEntries.length === 0 && !loadingEntries && (
+            <div className="text-[10px] text-gray-500 self-center">
+              No journal entries match your filters. Log a note or relax the filters.
+            </div>
           )}
         </div>
       </div>

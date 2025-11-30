@@ -157,7 +157,6 @@ const WebBrowser: React.FC = () => {
              onClick={handleOpenExternal}
              className="text-[10px] bg-[#2a2e39] hover:bg-[#363a45] text-white px-2 py-1 rounded transition-colors"
            >
-             Open in New Window
            </button>
         </div>
       )}
