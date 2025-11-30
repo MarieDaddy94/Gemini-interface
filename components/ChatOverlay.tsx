@@ -1,108 +1,63 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  AgentConfig, 
-} from '../types';
-import { sendAgentChat, UIMessage, AgentId, VisionImagePayload } from '../services/aiClient';
+import { fetchAgentInsights, AgentId } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 
-// Updated Agent Definitions matching server/ai-config.js
-const AGENTS: AgentConfig[] = [
-  {
-    id: 'quant-bot',
-    label: 'QuantBot',
-    description: 'Execution & Probability',
-    avatar: '🤖',
-    color: 'bg-blue-100 text-blue-800'
-  },
-  {
-    id: 'pattern-seer',
-    label: 'PatternSeer',
-    description: 'Structure & Zones',
-    avatar: '👁️',
-    color: 'bg-purple-100 text-purple-800'
-  },
-  {
-    id: 'macro-mind',
-    label: 'MacroMind',
-    description: 'News & Sentiment',
-    avatar: '🌍',
-    color: 'bg-emerald-100 text-emerald-800'
-  },
-  {
-    id: 'risk-guardian',
-    label: 'RiskGuardian',
-    description: 'Sizing & Drawdown',
-    avatar: '🛡️',
-    color: 'bg-red-100 text-red-800'
-  },
-  {
-    id: 'trade-coach',
-    label: 'TradeCoach',
-    description: 'Psychology & Review',
-    avatar: '🧠',
-    color: 'bg-orange-100 text-orange-800'
-  }
-];
+// UI Metadata for styling specific agents
+const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
+  quant_bot: { avatar: '🤖', color: 'bg-blue-100 text-blue-800' },
+  trend_master: { avatar: '📈', color: 'bg-purple-100 text-purple-800' },
+  pattern_gpt: { avatar: '🧠', color: 'bg-green-100 text-green-800' },
+  // Fallbacks
+  default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
+};
+
+const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt"];
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  author?: string; // "You", "QuantBot", etc.
+  agentId?: string; // for color mapping
+  text: string;
+  isError?: boolean;
+}
 
 interface ChatOverlayProps {
-  chartContext: string; // Legacy context string
+  chartContext: string;
   isBrokerConnected?: boolean;
-  sessionId: string; // The "effective" journal session ID
+  sessionId: string;
   autoFocusSymbol?: string;
   brokerSessionId?: string | null;
 }
 
-// State container for a single agent's chat history
-interface AgentState {
-  messages: UIMessage[];
-  isThinking: boolean;
-}
-
 const ChatOverlay: React.FC<ChatOverlayProps> = ({ 
-  chartContext, 
-  isBrokerConnected, 
-  sessionId,
-  autoFocusSymbol,
-  brokerSessionId
+  chartContext,
+  isBrokerConnected 
 }) => {
   // UI State
   const [isOpen, setIsOpen] = useState(true);
-  const [activeAgentId, setActiveAgentId] = useState<string>('quant-bot');
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
-  
-  // Agents State Map
-  const [agentsState, setAgentsState] = useState<Record<string, AgentState>>(() => {
-    const initial: Record<string, AgentState> = {};
-    AGENTS.forEach(a => {
-      initial[a.id] = {
-        messages: [{
-           role: 'assistant',
-           content: `Hello! I am ${a.label}. ${a.description} Ready to assist.`
-        }],
-        isThinking: false
-      };
-    });
-    return initial;
-  });
+  const [isSending, setIsSending] = useState(false);
 
-  // Vision / Screen Share / File State
+  // Vision / File State
   const [isVisionActive, setIsVisionActive] = useState(false);
-  const [pendingFileImage, setPendingFileImage] = useState<VisionImagePayload | null>(null);
+  const [pendingFileImage, setPendingFileImage] = useState<{ mimeType: string; data: string } | null>(null);
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { addEntryFromToolResult } = useJournal();
+  const { addEntry } = useJournal(); 
 
+  // Auto-scroll
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
-
   useEffect(() => {
     scrollToBottom();
-  }, [agentsState, activeAgentId, isOpen]);
+  }, [messages, isSending, isOpen]);
 
   // Cleanup vision on unmount
   useEffect(() => {
@@ -113,6 +68,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     };
   }, []);
 
+  // Vision Toggles
   const toggleVision = async () => {
     if (isVisionActive) {
       if (streamRef.current) {
@@ -129,18 +85,16 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           video: { displaySurface: 'browser' }, 
           audio: false 
         });
-        
         streamRef.current = stream;
         stream.getVideoTracks()[0].onended = () => {
           setIsVisionActive(false);
           streamRef.current = null;
         };
-
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
         setIsVisionActive(true);
-      } catch (err: any) {
+      } catch (err) {
         console.error("Error starting screen capture:", err);
         setIsVisionActive(false);
       }
@@ -152,7 +106,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     const canvas = document.createElement('canvas');
     const video = videoRef.current;
     if (video.videoWidth === 0 || video.videoHeight === 0) return undefined;
-    const scale = 0.5;
+    const scale = 0.5; 
     canvas.width = video.videoWidth * scale;
     canvas.height = video.videoHeight * scale;
     const ctx = canvas.getContext('2d');
@@ -169,112 +123,130 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result;
       if (typeof result === "string") {
-        // strip "data:...;base64," prefix
+        // strip "data:...;base64," prefix for local logic
         const commaIndex = result.indexOf(",");
         const base64 = commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
-
-        setPendingFileImage({
-          mimeType: file.type,
-          data: base64,
-        });
+        setPendingFileImage({ mimeType: file.type, data: base64 });
       }
     };
     reader.readAsDataURL(file);
-    // Reset input so same file can be selected again
     e.target.value = '';
   };
 
+  // SEND HANDLER
   const handleSendMessage = async () => {
     if (!inputValue.trim() && !pendingFileImage && !isVisionActive) return;
+    if (isSending) return;
 
-    const currentAgent = AGENTS.find(a => a.id === activeAgentId)!;
     const userText = inputValue;
-    const userMsg: UIMessage = {
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
       role: 'user',
-      content: userText
+      author: 'You',
+      text: userText
     };
-
-    // Gather vision data: prefer uploaded file, fallback to screen capture
-    let visionPayloads: VisionImagePayload[] = [];
-    
-    if (pendingFileImage) {
-      visionPayloads.push(pendingFileImage);
-    }
-    
-    if (isVisionActive) {
-      const frame = captureFrame();
-      if (frame) {
-        visionPayloads.push({ mimeType: 'image/jpeg', data: frame });
-      }
-    }
-
-    // Optimistic Update
-    setAgentsState(prev => ({
-      ...prev,
-      [activeAgentId]: {
-        ...prev[activeAgentId],
-        messages: [...prev[activeAgentId].messages, userMsg],
-        isThinking: true
-      }
-    }));
-    
+    setMessages(prev => [...prev, userMsg]);
     setInputValue('');
-    setPendingFileImage(null); // Clear pending file after send
+    setIsSending(true);
 
     try {
-      const history = agentsState[activeAgentId].messages.concat(userMsg);
-      
-      const response = await sendAgentChat(activeAgentId as AgentId, history, {
-        accountId: brokerSessionId || undefined,
-        symbol: (autoFocusSymbol && autoFocusSymbol !== 'Auto') ? autoFocusSymbol : undefined,
-        visionImages: visionPayloads.length > 0 ? visionPayloads : undefined
+      // 1. Prepare Screenshot
+      let screenshot: string | null = null;
+      if (pendingFileImage) {
+        // Reconstruct Data URL for API
+        screenshot = `data:${pendingFileImage.mimeType};base64,${pendingFileImage.data}`;
+      } else if (isVisionActive) {
+        const frame = captureFrame();
+        if (frame) {
+          // captureFrame returns base64 string, frame is already just base64 data usually?
+          // Looking at captureFrame impl above: `return dataUrl.split(',')[1];`
+          // So we need to re-add prefix for the backend router which expects Data URL
+          screenshot = `data:image/jpeg;base64,${frame}`;
+        }
+      }
+      setPendingFileImage(null); 
+
+      // 2. Call Multi-Agent API
+      const insights = await fetchAgentInsights({
+        agentIds: ACTIVE_AGENT_IDS,
+        userMessage: userText,
+        chartContext,
+        screenshot
       });
 
-      setAgentsState(prev => ({
-        ...prev,
-        [activeAgentId]: {
-          ...prev[activeAgentId],
-          messages: [...prev[activeAgentId].messages, {
-            role: 'assistant',
-            content: response.finalText
-          }],
-          isThinking: false
-        }
-      }));
-
-      // Feed any journal tool calls into the journal context
-      if (response.toolResults?.length) {
-        response.toolResults.forEach((tr) => {
-          addEntryFromToolResult(tr);
+      // 3. Update Chat with responses
+      setMessages(prev => {
+        const next = [...prev];
+        insights.forEach(insight => {
+          if (insight.error) {
+            next.push({
+              id: `err-${insight.agentId}-${Date.now()}`,
+              role: 'assistant',
+              author: insight.agentName,
+              agentId: insight.agentId as string,
+              text: `⚠️ ${insight.error}`,
+              isError: true
+            });
+          } else if (insight.text) {
+             next.push({
+              id: `msg-${insight.agentId}-${Date.now()}`,
+              role: 'assistant',
+              author: insight.agentName,
+              agentId: insight.agentId as string,
+              text: insight.text || ''
+            });
+          }
         });
-      }
+        return next;
+      });
+
+      // 4. Handle Journal Drafts
+      insights.forEach(i => {
+        if (i.journalDraft) {
+          // Map AgentJournalDraft to JournalEntry
+          addEntry({
+            id: `ai-draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            timestamp: new Date().toISOString(),
+            source: 'ai',
+            
+            // Core fields
+            playbook: i.journalDraft.title, 
+            note: i.journalDraft.summary,
+            sentiment: i.journalDraft.sentiment,
+            tags: i.journalDraft.tags,
+            agentId: i.journalDraft.agentId,
+            agentName: i.journalDraft.agentName,
+            
+            // Defaults (User will fill in specific trade data)
+            outcome: 'Open',
+            symbol: 'US30', // Default fallback
+            direction: undefined,
+          });
+          console.log(`[ChatOverlay] Added journal draft from ${i.agentName}`);
+        }
+      });
 
     } catch (e: any) {
       console.error("Agent Error", e);
-      setAgentsState(prev => ({
-        ...prev,
-        [activeAgentId]: {
-          ...prev[activeAgentId],
-          messages: [...prev[activeAgentId].messages, {
-            role: 'assistant',
-            content: `⚠️ Error: ${e.message || "Connection failed."}`
-          }],
-          isThinking: false
-        }
-      }));
+      setMessages(prev => [...prev, {
+        id: `sys-err-${Date.now()}`,
+        role: 'assistant',
+        author: 'System',
+        text: `Error connecting to AI team: ${e.message}`,
+        isError: true
+      }]);
+    } finally {
+      setIsSending(false);
     }
   };
 
-  // Render Helpers
-  const activeState = agentsState[activeAgentId];
-  const activeAgentConfig = AGENTS.find(a => a.id === activeAgentId)!;
+  // --- RENDER ---
 
-  // Collapsed State
+  // Collapsed View
   if (!isOpen) {
     return (
       <div className="w-12 h-full bg-[#1e222d] border-l border-[#2a2e39] flex flex-col items-center py-4 gap-4 z-30 shrink-0">
@@ -296,6 +268,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     );
   }
 
+  // Expanded View
   return (
     <div className="w-[400px] h-full bg-white flex flex-col border-l border-[#2a2e39] shadow-xl relative z-30 animate-fade-in-right shrink-0">
       <video ref={videoRef} autoPlay playsInline muted className="hidden" />
@@ -308,7 +281,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           <div>
             <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
             <p className="text-[10px] text-gray-400 font-medium">
-              Autonomous Agents • {isBrokerConnected ? 'Live Broker' : 'Market Watch'}
+              QuantBot · TrendMaster · Pattern_GPT
             </p>
           </div>
         </div>
@@ -343,65 +316,56 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         </div>
       </div>
 
-      {/* Agent Selector Tabs */}
-      <div className="flex items-center gap-1 px-2 py-2 bg-gray-50 border-b border-gray-100 overflow-x-auto scrollbar-hide">
-        {AGENTS.map(agent => {
-          const isActive = agent.id === activeAgentId;
-          return (
-            <button
-              key={agent.id}
-              onClick={() => setActiveAgentId(agent.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all whitespace-nowrap border ${
-                isActive 
-                  ? 'bg-white border-gray-200 text-gray-800 shadow-sm' 
-                  : 'bg-transparent border-transparent text-gray-500 hover:bg-gray-200/50'
-              }`}
-            >
-              <span>{agent.avatar}</span>
-              <span>{agent.label}</span>
-            </button>
-          )
-        })}
-      </div>
-
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
-        {activeState.messages.map((msg, idx) => {
+        {messages.length === 0 && (
+          <div className="text-center mt-10 p-4">
+             <div className="text-3xl mb-3">🤖 📈 🧠</div>
+             <p className="text-gray-500 text-sm font-medium">Ask your AI Team</p>
+             <p className="text-gray-400 text-xs mt-1">
+               QuantBot, TrendMaster, and Pattern_GPT are ready to analyze charts and suggest trades.
+             </p>
+          </div>
+        )}
+
+        {messages.map((msg, idx) => {
           const isUser = msg.role === 'user';
-          // Skip tool messages in UI if any slip through
-          if (msg.role !== 'user' && msg.role !== 'assistant') return null;
+          // Style config for agent
+          const uiMeta = (msg.agentId && AGENT_UI_META[msg.agentId]) 
+            ? AGENT_UI_META[msg.agentId] 
+            : AGENT_UI_META.default;
 
           return (
             <div key={idx} className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-sm flex-shrink-0 ${isUser ? 'bg-[#131722] text-white' : 'bg-white border border-gray-100'}`}>
-                {isUser ? '👤' : activeAgentConfig.avatar}
+                {isUser ? '👤' : uiMeta.avatar}
               </div>
               
               <div className={`flex flex-col max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
-                 {!isUser && (
+                 {!isUser && msg.author && (
                    <span className="text-[10px] font-bold text-gray-500 mb-1 ml-1 uppercase tracking-wider">
-                     {activeAgentConfig.label}
+                     {msg.author}
                    </span>
                  )}
                  <div className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
                    isUser 
                      ? 'bg-[#2962ff] text-white rounded-tr-none' 
-                     : `bg-white text-gray-700 border border-gray-200 rounded-tl-none`
+                     : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
                  }`}>
-                   {msg.content}
+                   {msg.text}
                  </div>
               </div>
             </div>
           );
         })}
         
-        {activeState.isThinking && (
+        {isSending && (
            <div className="flex gap-3">
              <div className="w-8 h-8 rounded-full bg-white border border-gray-100 flex items-center justify-center">
                <span className="animate-spin">⏳</span>
              </div>
              <div className="bg-white p-3 rounded-2xl rounded-tl-none border border-gray-100 shadow-sm flex items-center gap-2">
-                <span className="text-xs text-gray-500 font-medium">Thinking...</span>
+                <span className="text-xs text-gray-500 font-medium">Agents thinking...</span>
                 <span className="flex space-x-1">
                   <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
                   <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
@@ -425,7 +389,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
                 handleSendMessage();
               }
             }}
-            placeholder={`Ask ${activeAgentConfig.label}...`}
+            placeholder={`Ask the team...`}
             className="w-full bg-gray-50 border border-gray-200 rounded-2xl py-3 px-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-[#2962ff]/50 focus:bg-white transition-all text-gray-800 placeholder-gray-400 resize-none h-12 max-h-32 pl-10" 
           />
           {/* Attachment Button */}
@@ -439,7 +403,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
 
           <button 
             onClick={handleSendMessage}
-            disabled={(!inputValue.trim() && !pendingFileImage && !isVisionActive) || activeState.isThinking}
+            disabled={(!inputValue.trim() && !pendingFileImage && !isVisionActive) || isSending}
             className="absolute right-2 top-2 p-1.5 bg-[#2962ff] text-white rounded-xl hover:bg-[#1e53e5] disabled:opacity-50 transition-colors shadow-sm"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
@@ -448,7 +412,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         <div className="mt-2 px-1 flex justify-between items-center">
            <div className="flex items-center gap-2">
              <p className="text-[10px] text-gray-400">
-               {activeAgentConfig.description}
+               {isBrokerConnected ? 'Broker Connected' : 'Simulated Environment'}
              </p>
              {pendingFileImage && (
                <div className="flex items-center gap-1 bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-[10px] border border-blue-100">
