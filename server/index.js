@@ -7,6 +7,8 @@ const path = require('path');
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
+// New Multi-Agent Router
+const { runAgentsTurn } = require("./agents/llmRouter");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -32,6 +34,37 @@ app.use(express.json({ limit: '10mb' })); // Increased limit for vision/base64
 
 // Mount the new Agents router
 app.use(createAgentsRouter(sessions, journalBySession));
+
+// --- NEW Multi-agent AI chat endpoint (GPT-5.1 + Gemini) ---
+app.post("/api/agents/chat", async (req, res) => {
+  try {
+    const { agentIds, userMessage, chartContext, screenshot } = req.body || {};
+
+    if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
+      return res.status(400).json({
+        error: "agentIds[] and userMessage are required",
+      });
+    }
+
+    const results = await runAgentsTurn({
+      agentIds,
+      userMessage,
+      chartContext: chartContext || "",
+      screenshot: screenshot || null,
+    });
+
+    res.json({
+      ok: true,
+      agents: results,
+    });
+  } catch (err) {
+    console.error("Error in /api/agents/chat:", err);
+    res.status(500).json({
+      error: "LLM router error",
+      details: err.message,
+    });
+  }
+});
 
 // --- LEGACY AI ROUTE (Optional, kept for backward compat if needed) ---
 app.post('/api/ai/route', async (req, res) => {
