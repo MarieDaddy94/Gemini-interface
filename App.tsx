@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay from './components/ChatOverlay';
@@ -356,10 +357,7 @@ const App: React.FC = () => {
               <div className="flex-1 min-h-0">
                 <WebBrowser />
               </div>
-              <JournalPanel 
-                sessionId={effectiveJournalSessionId} 
-                brokerData={brokerData} 
-              />
+              <JournalPanel />
             </>
           )}
 

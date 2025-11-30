@@ -1,3 +1,5 @@
+
+
 export enum AnalystPersona {
   QUANT_BOT = 'QuantBot',
   TREND_MASTER = 'TrendMaster AI',
@@ -87,16 +89,63 @@ export interface SessionSummary {
 // --- Journaling Types ---
 
 export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';
-
 export type TradeEntryType = 'Pre-Trade' | 'Post-Trade' | 'SessionReview';
-
 export type TradeOutcome = 'Open' | 'Win' | 'Loss' | 'BreakEven';
+
+export type JournalSource = 'user' | 'ai';
+export type TradeDirection = 'long' | 'short';
 
 export interface AccountSnapshot {
   balance: number;
   equity: number;
   openPnl: number;
   positionsCount: number;
+}
+
+// Strict Trading Journal Entry
+export interface JournalEntry {
+  id: string;
+  timestamp: string;         // ISO datetime
+
+  // Structured Trading Data
+  symbol?: string;           // "US30", "NAS100", "XAUUSD"
+  direction?: TradeDirection;
+  timeframe?: string;        // "1m", "5m", "15m", "1h"
+  session?: string;          // "London", "NY", "Asia"
+
+  entryPrice?: number;
+  stopPrice?: number;
+  targetPrice?: number;
+  exitPrice?: number;
+
+  size?: number;             // lots
+  netPnl?: number;           // in currency
+  currency?: string;         // "USD"
+  rMultiple?: number;        // PnL measured in R
+
+  playbook?: string;         // Name of setup
+  preTradePlan?: string;     // Plan
+  postTradeNotes?: string;   // Review
+  sentiment?: string;        // "A+", "B", "Tilt"
+
+  tags?: string[];
+  relatedTradeId?: string;
+  source: JournalSource;
+  raw?: any;
+
+  // Legacy fields (optional compatibility)
+  focusSymbol?: string; 
+  bias?: TradeBias | string; 
+  confidence?: number; 
+  note?: string; 
+  entryType?: TradeEntryType | string; 
+  outcome?: TradeOutcome | string;
+  accountSnapshot?: AccountSnapshot;
+  linkedPositionId?: string | null;
+  linkedSymbol?: string | null;
+  finalPnl?: number | null;
+  closedAt?: string | null;
+  sessionId?: string;
 }
 
 export interface NewJournalEntryInput {
@@ -112,12 +161,6 @@ export interface NewJournalEntryInput {
   linkedSymbol: string | null;
   finalPnl?: number | null;
   closedAt?: string | null; // ISO string
-}
-
-export interface JournalEntry extends NewJournalEntryInput {
-  id: string;
-  sessionId: string;
-  timestamp: string; // ISO string
 }
 
 export type JournalEntryPatch = Partial<JournalEntry>;

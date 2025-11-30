@@ -1,3 +1,4 @@
+
 // server/tool-runner.js
 
 /**
@@ -60,10 +61,11 @@ function createRuntimeContext(sessions, journals, reqContext) {
       // Map journal entries to a "trade" like structure if they have outcomes
       const trades = entries.slice(0, limit).map(e => ({
         timestamp: e.timestamp,
-        symbol: e.focusSymbol,
-        bias: e.bias,
+        symbol: e.symbol || e.focusSymbol,
+        direction: e.direction || e.bias,
         outcome: e.outcome,
-        note: e.note,
+        pnl: e.netPnl || e.finalPnl,
+        note: e.postTradeNotes || e.note,
         tags: e.tags
       }));
       return trades;
@@ -80,15 +82,33 @@ function createRuntimeContext(sessions, journals, reqContext) {
     appendJournalEntry: async (entry) => {
       // We can push to the in-memory journal for this session
       const list = getJournal(null);
-      // We don't have the full JournalEntry structure generator here easily 
-      // without duplicating logic from index.js, but we can append a simplified one.
+      
       const newEntry = {
         id: `ai-${Date.now()}`,
-        timestamp: entry.createdAt,
-        focusSymbol: symbol || 'AI-Note',
-        bias: entry.sentiment === 'bullish' ? 'Bullish' : entry.sentiment === 'bearish' ? 'Bearish' : 'Neutral',
-        note: entry.note,
-        tags: [entry.tag],
+        timestamp: entry.createdAt || new Date().toISOString(),
+        
+        // Structured Fields
+        symbol: entry.symbol,
+        direction: entry.direction,
+        timeframe: entry.timeframe,
+        session: entry.session,
+        
+        size: entry.size,
+        netPnl: entry.netPnl,
+        rMultiple: entry.rMultiple,
+        
+        playbook: entry.playbook,
+        preTradePlan: entry.preTradePlan,
+        postTradeNotes: entry.postTradeNotes,
+        sentiment: entry.sentiment,
+        
+        // Map Tags
+        tags: Array.isArray(entry.tags) ? entry.tags : (entry.tag ? [entry.tag] : []),
+        
+        // Fallbacks / Legacy
+        focusSymbol: entry.symbol || symbol || 'AI-Note',
+        bias: entry.direction === 'long' ? 'Bullish' : entry.direction === 'short' ? 'Bearish' : 'Neutral',
+        note: entry.note || entry.postTradeNotes || entry.preTradePlan || "AI Entry",
         outcome: 'Open'
       };
       
@@ -98,7 +118,7 @@ function createRuntimeContext(sessions, journals, reqContext) {
           // Also verify if we need to set it back if it was a new array
           if (!journals.has(journalSessionId)) journals.set(journalSessionId, list);
       }
-      console.log(`[AI] appended journal entry: ${entry.note}`);
+      console.log(`[AI] appended structured journal entry for ${newEntry.symbol}`);
     },
     
     savePlaybookVariant: async (args) => {

@@ -1,3 +1,4 @@
+
 // server/ai-providers.js
 const OpenAI = require('openai');
 const { GoogleGenAI } = require('@google/genai');
@@ -200,21 +201,9 @@ function buildGeminiContents(agent, messages, visionImages) {
     const isLast = idx === messages.length - 1;
     const isUser = m.role === "user";
     
-    // Gemini roles: 'user' or 'model'. 'tool' roles are handled via functionResponse parts attached to 'user' or implicit history.
-    // For simplicity in this loop, we map 'user'->'user', 'assistant'->'model'.
-    // Tool outputs must be inserted carefully.
-    // This implementation assumes the incoming `messages` are text chat history.
-    // Handling explicit tool history re-injection for Gemini is complex; 
-    // we often rely on the session state if using `chat.sendMessage` or 
-    // simply reconstruct text history if using stateless `generateContent`.
-    
     // Stateless approach:
     const role = m.role === "assistant" ? "model" : "user";
     if (m.role === 'tool') {
-        // Skip purely historical tool outputs for the basic content build, 
-        // as they need to be paired with functionCalls in a specific structure.
-        // For a robust stateless implementation, we'd need to reconstruct the [FunctionCall, FunctionResponse] pairs.
-        // Simplified fallback: append tool output as user text context.
         contents.push({
             role: 'user',
             parts: [{ text: `[System Tool Output]: ${m.content}` }]
@@ -399,26 +388,40 @@ const brokerAndJournalTools = [
   },
   {
     name: "append_journal_entry",
-    description: "Append a note or reflection to the trading journal.",
+    description: "Append a structured trade log or note to the trading journal. Use this to log setups, executions, or reviews.",
     parameters: {
       type: "object",
       properties: {
+        // Core context
+        timestamp: { type: "string", description: "ISO datetime" },
+        symbol: { type: "string", description: "Symbol traded (e.g. US30)" },
+        direction: { type: "string", enum: ["long", "short"] },
+        timeframe: { type: "string", description: "e.g. 5m, 15m, 1h" },
+        session: { type: "string", description: "e.g. London, NY, Asia" },
+        
+        // Financials
+        size: { type: "number", description: "Lot size" },
+        netPnl: { type: "number" },
+        rMultiple: { type: "number", description: "Realized R" },
+        
+        // Strategy / Notes
+        playbook: { type: "string", description: "Name of strategy/setup" },
+        preTradePlan: { type: "string", description: "Plan before entry" },
+        postTradeNotes: { type: "string", description: "Review after exit" },
+        sentiment: { type: "string", description: "Psychological state" },
+        tags: { type: "array", items: { type: "string" } },
+        
+        // Legacy/Fallback
         note: { type: "string" },
-        sentiment: { type: "string", enum: ["bullish", "bearish", "neutral"] },
-        tag: { type: "string" },
       },
-      required: ["note"],
+      // Require at least a note or plan
     },
     handler: async (args, ctx) => {
       if (!ctx.appendJournalEntry) throw new Error("Missing appendJournalEntry ctx");
-      const payload = {
-        note: args.note,
-        sentiment: args.sentiment ?? "neutral",
-        tag: args.tag ?? "ai",
-        createdAt: new Date().toISOString(),
-      };
+      // Pass args through directly, let runner/context handle structure
+      const payload = { ...args, createdAt: new Date().toISOString() };
       await ctx.appendJournalEntry(payload);
-      return { status: "ok" };
+      return { status: "ok", message: "Journal entry saved." };
     },
   },
   {

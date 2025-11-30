@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
   <head>
@@ -40,6 +41,71 @@
       .scrollbar-hide {
           -ms-overflow-style: none;
           scrollbar-width: none;
+      }
+
+      /* Trading Journal Table Styles */
+      .journal-table thead {
+        background: radial-gradient(circle at top, #151b2c 0, #050711 60%);
+      }
+
+      .journal-table th,
+      .journal-table td {
+        padding: 4px 6px;
+        text-align: left;
+        border-bottom: 1px solid #11141e;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .journal-table th {
+        font-size: 11px;
+        font-weight: 600;
+        opacity: 0.8;
+        color: #9ca3af;
+      }
+      
+      .journal-table td {
+        color: #d1d4dc;
+      }
+
+      .journal-table tbody tr:nth-child(even) {
+        background: rgba(15, 18, 34, 0.7);
+      }
+
+      .journal-table tbody tr:nth-child(odd) {
+        background: rgba(6, 8, 18, 0.8);
+      }
+      
+      .journal-table tbody tr:hover {
+        background: rgba(42, 46, 57, 0.5);
+      }
+
+      /* PnL / R coloring */
+      .pnl-positive { color: #4ade80; }
+      .pnl-negative { color: #f97373; }
+      .r-strong { font-weight: 700; color: #22c55e; }
+      .r-positive { color: #a3e635; }
+      .r-negative { color: #f97373; }
+
+      /* Direction badge */
+      .direction-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+      .direction-long { background: rgba(34, 197, 94, 0.12); color: #4ade80; }
+      .direction-short { background: rgba(239, 68, 68, 0.12); color: #f97373; }
+
+      /* Source */
+      .journal-source {
+        font-size: 10px;
+        text-transform: uppercase;
+        opacity: 0.7;
       }
     </style>
   <script type="importmap">

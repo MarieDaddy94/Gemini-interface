@@ -126,7 +126,8 @@ export async function createJournalEntry(
       id: generateId(),
       sessionId,
       timestamp: nowIso,
-      ...data
+      ...data,
+      source: 'user'
     };
 
     const next = [entry, ...entries];
@@ -255,7 +256,7 @@ function computeTagStatsForEntries(
 
     symbolStats.total += 1;
 
-    if (closedOutcomes.includes(e.outcome)) {
+    if (closedOutcomes.includes(e.outcome as TradeOutcome)) {
       if (e.outcome === 'Win') {
         tagSummary.wins += 1;
         symbolStats.wins += 1;
@@ -378,7 +379,7 @@ export async function computeTagSymbolMatrix(
 
       row.total += 1;
 
-      if (closedOutcomes.includes(e.outcome)) {
+      if (closedOutcomes.includes(e.outcome as TradeOutcome)) {
         if (e.outcome === 'Win') row.wins += 1;
         else if (e.outcome === 'Loss') row.losses += 1;
         else if (e.outcome === 'BreakEven') row.breakEven += 1;
