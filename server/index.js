@@ -6,6 +6,7 @@ const path = require('path');
 
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
+const createAgentsRouter = require('./routes/agents');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -29,7 +30,10 @@ app.use(
 
 app.use(express.json({ limit: '10mb' })); // Increased limit for vision/base64
 
-// --- AI ROUTE ---
+// Mount the new Agents router
+app.use(createAgentsRouter(sessions, journalBySession));
+
+// --- LEGACY AI ROUTE (Optional, kept for backward compat if needed) ---
 app.post('/api/ai/route', async (req, res) => {
   try {
     const result = await handleAiRoute(req.body, sessions, journalBySession);

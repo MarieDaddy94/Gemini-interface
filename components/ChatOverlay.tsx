@@ -1,47 +1,50 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   AgentConfig, 
-  ClientMessage, 
-  AiRole, 
-  MarketContext,
-  AiRouteRequest
 } from '../types';
-import { sendAiMessage } from '../services/aiService';
+import { sendAgentChat, UIMessage, AgentId } from '../services/aiClient';
 
-// Agent Definitions matching backend
+// Updated Agent Definitions matching server/ai-config.js
 const AGENTS: AgentConfig[] = [
   {
-    id: 'trend-analyst',
-    label: 'Trend & Zones',
-    description: 'Structure, key levels, & momentum.',
-    avatar: '📈',
+    id: 'quant-bot',
+    label: 'QuantBot',
+    description: 'Execution & Probability',
+    avatar: '🤖',
     color: 'bg-blue-100 text-blue-800'
   },
   {
-    id: 'risk-manager',
-    label: 'Risk Manager',
-    description: 'Sizing, drawdown, & exposure.',
+    id: 'pattern-seer',
+    label: 'PatternSeer',
+    description: 'Structure & Zones',
+    avatar: '👁️',
+    color: 'bg-purple-100 text-purple-800'
+  },
+  {
+    id: 'macro-mind',
+    label: 'MacroMind',
+    description: 'News & Sentiment',
+    avatar: '🌍',
+    color: 'bg-emerald-100 text-emerald-800'
+  },
+  {
+    id: 'risk-guardian',
+    label: 'RiskGuardian',
+    description: 'Sizing & Drawdown',
     avatar: '🛡️',
     color: 'bg-red-100 text-red-800'
   },
   {
-    id: 'playbook-architect',
-    label: 'Playbook',
-    description: 'Design & optimize trading rules.',
-    avatar: '📐',
-    color: 'bg-purple-100 text-purple-800'
-  },
-  {
-    id: 'journal-analyst',
-    label: 'Journal Coach',
-    description: 'Psychology & performance review.',
+    id: 'trade-coach',
+    label: 'TradeCoach',
+    description: 'Psychology & Review',
     avatar: '🧠',
-    color: 'bg-emerald-100 text-emerald-800'
+    color: 'bg-orange-100 text-orange-800'
   }
 ];
 
 interface ChatOverlayProps {
-  chartContext: string; // Legacy string context, we'll try to parse symbol from it or App
+  chartContext: string; // Legacy context string
   isBrokerConnected?: boolean;
   sessionId: string; // The "effective" journal session ID
   autoFocusSymbol?: string;
@@ -50,7 +53,7 @@ interface ChatOverlayProps {
 
 // State container for a single agent's chat history
 interface AgentState {
-  messages: ClientMessage[];
+  messages: UIMessage[];
   isThinking: boolean;
 }
 
@@ -63,7 +66,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
 }) => {
   // UI State
   const [isOpen, setIsOpen] = useState(true);
-  const [activeAgentId, setActiveAgentId] = useState<string>('trend-analyst');
+  const [activeAgentId, setActiveAgentId] = useState<string>('quant-bot');
   const [inputValue, setInputValue] = useState('');
   
   // Agents State Map
@@ -72,9 +75,8 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     AGENTS.forEach(a => {
       initial[a.id] = {
         messages: [{
-           id: 'init-1',
            role: 'assistant',
-           content: `Hello! I am your ${a.label}. ${a.description} How can I help?`
+           content: `Hello! I am ${a.label}. ${a.description} Ready to assist.`
         }],
         isThinking: false
       };
@@ -160,10 +162,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
 
     const currentAgent = AGENTS.find(a => a.id === activeAgentId)!;
     const userText = inputValue;
-    const userMsg: ClientMessage = {
+    const userMsg: UIMessage = {
       role: 'user',
-      content: userText,
-      id: Date.now().toString()
+      content: userText
     };
 
     let screenshot: string | undefined = undefined;
@@ -183,39 +184,27 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     setInputValue('');
 
     try {
-      // Prepare Request
       const history = agentsState[activeAgentId].messages.concat(userMsg);
       
-      const marketContext: MarketContext = {
+      const response = await sendAgentChat(activeAgentId as AgentId, history, {
+        accountId: brokerSessionId || undefined,
         symbol: (autoFocusSymbol && autoFocusSymbol !== 'Auto') ? autoFocusSymbol : undefined,
-        timeframe: '5m', // Default assumption or derived
-        brokerSessionId: brokerSessionId || undefined,
-        journalSessionId: sessionId
-      };
-
-      const req: AiRouteRequest = {
-        agentId: activeAgentId,
-        messages: history,
-        marketContext,
-        vision: screenshot ? {
-          type: 'chart-screenshot',
-          mimeType: 'image/jpeg',
-          dataBase64: screenshot
-        } : undefined
-      };
-
-      const response = await sendAiMessage(req);
+        visionImages: screenshot ? [{ mimeType: 'image/jpeg', data: screenshot }] : undefined
+      });
 
       setAgentsState(prev => ({
         ...prev,
         [activeAgentId]: {
           ...prev[activeAgentId],
-          messages: [...prev[activeAgentId].messages, response.message],
+          messages: [...prev[activeAgentId].messages, {
+            role: 'assistant',
+            content: response.finalText
+          }],
           isThinking: false
         }
       }));
 
-    } catch (e) {
+    } catch (e: any) {
       console.error("Agent Error", e);
       setAgentsState(prev => ({
         ...prev,
@@ -223,8 +212,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           ...prev[activeAgentId],
           messages: [...prev[activeAgentId].messages, {
             role: 'assistant',
-            content: "⚠️ I lost connection to the server. Please try again.",
-            id: Date.now().toString()
+            content: `⚠️ Error: ${e.message || "Connection failed."}`
           }],
           isThinking: false
         }
@@ -252,7 +240,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         )}
         <div className="flex-1 w-[1px] bg-[#2a2e39]/50"></div>
         <div className="writing-vertical-rl text-xs font-bold text-gray-400 tracking-wider uppercase rotate-180">
-          AI Team Active
+          AI Squad
         </div>
       </div>
     );
@@ -267,9 +255,9 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
           <div>
-            <h2 className="font-bold text-gray-800 text-sm">AI Trading Desk</h2>
+            <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
             <p className="text-[10px] text-gray-400 font-medium">
-              Multi-Agent System • {isBrokerConnected ? 'Live Broker' : 'Market Watch'}
+              Autonomous Agents • {isBrokerConnected ? 'Live Broker' : 'Market Watch'}
             </p>
           </div>
         </div>
@@ -329,8 +317,8 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
         {activeState.messages.map((msg, idx) => {
           const isUser = msg.role === 'user';
-          // Skip tool messages in UI to keep it clean, unless you want to show them
-          if (msg.role === 'tool') return null;
+          // Skip tool messages in UI if any slip through
+          if (msg.role !== 'user' && msg.role !== 'assistant') return null;
 
           return (
             <div key={idx} className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>

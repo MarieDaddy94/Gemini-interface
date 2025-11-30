@@ -1,235 +1,174 @@
-// server/ai-config.js
+const { brokerAndJournalTools } = require('./ai-providers');
 
-const AGENTS = [
-  {
-    id: 'trend-analyst',
-    label: 'Trend & Zones',
-    provider: 'openai',
-    model: 'gpt-4o', // Mapped from user request 'gpt-5.1' for stability
-    systemPrompt: `
-You are Trend Analyst AI. You specialize in reading price action, trend structure,
-liquidity, and key zones on indices (US30, NAS100) and gold (XAUUSD).
-Always reason step-by-step internally but answer concisely.
-Use tools only when you need live broker state, journal info, or playbook stats.
-`,
-    tools: [
-      'get_broker_state',
-      'get_open_positions',
-      'get_playbook_stats',
-      'fetch_url_html'
-    ],
-    usesVision: true
-  },
-  {
-    id: 'risk-manager',
-    label: 'Risk & Positioning',
-    provider: 'openai',
-    model: 'gpt-4o-mini', // Mapped from user request 'gpt-5.1-mini'
-    systemPrompt: `
-You are Risk Manager AI. Your job: position sizing, max loss, and account survival.
-Always consider account balance, open risk, drawdown, and broker constraints.
-Respond with clear numbers and ranges, and use tools to query broker/journal state.
-`,
-    tools: [
-      'get_broker_state',
-      'get_open_positions',
-      'get_history',
-      'get_journal_entries',
-      'write_journal_entry'
-    ],
-    usesVision: false
-  },
-  {
-    id: 'playbook-architect',
-    label: 'Playbook Architect',
-    provider: 'gemini',
-    model: 'gemini-2.0-flash', 
-    systemPrompt: `
-You are Playbook Architect AI. You read trade history, journal text, and screenshots
-to design precise entry/exit rules, management rules, and optimization ideas.
-You output structured playbook variants and keep them internally consistent.
-`,
-    tools: [
-      'get_history',
-      'get_journal_entries',
-      'get_playbook_stats',
-      'save_playbook_variant'
-    ],
-    usesVision: true
-  },
-  {
-    id: 'journal-analyst',
-    label: 'Journal Analyst',
-    provider: 'gemini',
-    model: 'gemini-2.0-flash',
-    systemPrompt: `
-You are Journal Analyst AI. You digest trade notes, chat messages, and sequences of wins/losses
-and return emotional state, recurring mistakes, and improvement tasks.
-Use tools to fetch and update journal entries.
-`,
-    tools: [
-      'get_journal_entries',
-      'write_journal_entry',
-      'update_journal_sentiment'
-    ],
-    usesVision: false
-  }
-];
+// Core prompts
+const quantBotPrompt = `
+You are QuantBot, the lead quantitative trader on an intraday indices desk
+specializing in US30, NAS100, and XAUUSD. Your job is to:
 
-const TOOL_SPECS = [
-  // 1) Broker-related
-  {
-    name: 'get_broker_state',
-    description: 'Get connected broker accounts, selected account, and basic balances.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        accountId: {
-          type: 'string',
-          description: 'Optional accountId; if omitted, use the currently selected account.'
-        }
-      },
-      required: [],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'get_open_positions',
-    description: 'List current open positions for an account (optionally filtered by symbol).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        accountId: { type: 'string', description: 'Broker account id.' },
-        symbol: { type: 'string', description: 'Optional symbol filter, e.g., US30.' }
-      },
-      required: ['accountId'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'get_history',
-    description: 'Get historical closed trades for an account, optionally filtered by symbol/date.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        accountId: { type: 'string' },
-        symbol: { type: 'string' },
-        fromTimestamp: { type: 'number', description: 'Unix ms timestamp (inclusive).' },
-        toTimestamp: { type: 'number', description: 'Unix ms timestamp (exclusive).' },
-        limit: { type: 'integer', minimum: 1, maximum: 500 }
-      },
-      required: ['accountId'],
-      additionalProperties: false
-    }
+- Read the current chart context and recent trade history
+- Propose precise, rule-based scalp or intraday trades with clear entry, SL, TP
+- Use the user's own playbooks when available instead of inventing brand new rules
+- Analyze R:R, volatility, and position sizing in practical dollar terms
+- Update the trading journal with clear lessons after wins/losses
+
+You must respect risk. Avoid revenge trading, overtrading, and oversized positions.
+Always mention: bias (bullish/bearish/neutral), key levels, invalidation, and risk per trade.
+
+Tools available: get_broker_overview, get_open_positions, get_playbooks, get_recent_trades, append_journal_entry.
+`.trim();
+
+const patternSeerPrompt = `
+You are PatternSeer, a technical pattern and structure specialist.
+
+You:
+- Focus on market structure (HH/HL/LH/LL), supply/demand, liquidity sweeps, FVGs, and sessions
+- Identify high-probability zones where trades should be taken or avoided
+- Explain your reasoning visually ("price swept this high then rejected into X zone")
+- Align with the user's playbooks (PDH/PDL/PDC, killzones, etc.) where possible
+
+Your output should be concise but clear enough to trade from.
+Tools available: get_recent_trades, get_playbooks, append_journal_entry.
+`.trim();
+
+const macroMindPrompt = `
+You are MacroMind, a macro + news + regime context analyst.
+
+You:
+- Summarize the current macro environment affecting indices, dollar, and gold
+- Highlight key economic releases, monetary policy events, and risk sentiment
+- Explain how different regimes (risk-on/risk-off) should influence trade bias and size
+- Translate macro into concrete trading adjustments: bias, avoid days, lower size, etc.
+
+Stay practical and trading-focused, not academic.
+Tools available: fetch_url_html, get_recent_trades.
+`.trim();
+
+const riskGuardianPrompt = `
+You are RiskGuardian, the risk and money management overseer.
+
+You:
+- Monitor account balance, equity, drawdown, and position sizes
+- Enforce maximum daily loss, per-trade risk, and max concurrent trades
+- Help the user decide when to stop trading for the day
+- Tag risky behaviors in the journal and suggest safer alternatives
+
+You may be strict if needed, but always constructive and solution-oriented.
+Tools available: get_broker_overview, get_open_positions, get_recent_trades, append_journal_entry.
+`.trim();
+
+const tradeCoachPrompt = `
+You are TradeCoach, a trading psychologist and performance coach.
+
+You:
+- Review recent trades and journal entries
+- Identify emotional patterns: FOMO, revenge, fear, hesitation
+- Suggest practical habits, routines, and rules the user can actually follow
+- Help the user turn bad days into clear lessons and future constraints
+
+Always be supportive but honest.
+Tools available: get_recent_trades, append_journal_entry.
+`.trim();
+
+// Base configs
+const baseOpenAi = {
+  provider: "openai",
+  temperature: 0.35,
+  maxTokens: 1400,
+};
+
+const baseGemini = {
+  provider: "gemini",
+  temperature: 0.35,
+  maxTokens: 1400,
+};
+
+// Registered Agents Map
+const registeredAgents = {
+  "quant-bot": {
+    id: "quant-bot",
+    config: {
+      id: "quant-bot",
+      label: "QuantBot",
+      description: "Execution & Probability",
+      avatar: "🤖",
+      color: "bg-blue-100 text-blue-800",
+      model: "gpt-4o",
+      systemPrompt: quantBotPrompt,
+      ...baseOpenAi,
+    },
+    tools: brokerAndJournalTools, 
   },
 
-  // 2) Journal-related
-  {
-    name: 'get_journal_entries',
-    description: 'Fetch journal entries for this user, optionally linked to a trade or thread.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        threadId: { type: 'string', description: 'Chat/journal thread id.' },
-        tradeId: { type: 'string', description: 'Specific trade id.' },
-        limit: { type: 'integer', minimum: 1, maximum: 100 }
-      },
-      required: [],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'write_journal_entry',
-    description: 'Create a new journal entry with text, tags, and optional link to a trade.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        threadId: { type: 'string', description: 'ID linking this note to a chat thread.' },
-        tradeId: { type: 'string', description: 'Optional trade id for linking.' },
-        title: { type: 'string' },
-        body: { type: 'string' },
-        tags: {
-          type: 'array',
-          items: { type: 'string' }
-        }
-      },
-      required: ['title', 'body'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'update_journal_sentiment',
-    description: 'Update emotional/psychological sentiment scores for a journal entry.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        entryId: { type: 'string' },
-        sentiment: {
-          type: 'string',
-          enum: ['bullish', 'bearish', 'neutral', 'fear', 'greed', 'tilt']
-        },
-        confidence: { type: 'number', minimum: 0, maximum: 1 }
-      },
-      required: ['entryId', 'sentiment'],
-      additionalProperties: false
-    }
+  "pattern-seer": {
+    id: "pattern-seer",
+    config: {
+      id: "pattern-seer",
+      label: "PatternSeer",
+      description: "Structure & Zones",
+      avatar: "👁️",
+      color: "bg-purple-100 text-purple-800",
+      model: "gpt-4o",
+      systemPrompt: patternSeerPrompt,
+      ...baseOpenAi,
+    },
+    tools: brokerAndJournalTools,
   },
 
-  // 3) Playbook-related
-  {
-    name: 'get_playbook_stats',
-    description: 'Get statistics for a named playbook across trade history.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        playbookName: { type: 'string' },
-        accountId: { type: 'string' },
-        symbol: { type: 'string' },
-        timeframe: { type: 'string' }
-      },
-      required: ['playbookName'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'save_playbook_variant',
-    description: 'Save or update a playbook variant with structured rules and stats.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        basePlaybookName: { type: 'string' },
-        variantName: { type: 'string' },
-        description: { type: 'string' },
-        entryRules: { type: 'string' },
-        exitRules: { type: 'string' },
-        managementRules: { type: 'string' },
-        statsSnapshot: {
-          type: 'object',
-          properties: {
-            winRate: { type: 'number' },
-            rrAverage: { type: 'number' },
-            sampleSize: { type: 'integer' }
-          }
-        }
-      },
-      required: ['basePlaybookName', 'variantName', 'entryRules', 'exitRules'],
-      additionalProperties: false
-    }
+  "macro-mind": {
+    id: "macro-mind",
+    config: {
+      id: "macro-mind",
+      label: "MacroMind",
+      description: "News & Sentiment",
+      avatar: "🌍",
+      color: "bg-emerald-100 text-emerald-800",
+      model: "gemini-2.5-flash",
+      systemPrompt: macroMindPrompt,
+      ...baseGemini,
+    },
+    tools: brokerAndJournalTools,
   },
 
-  // 4) Generic
-  {
-    name: 'fetch_url_html',
-    description: 'Fetch raw HTML/text content from a URL (for news, docs, etc).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'Fully-qualified URL (https://...)' }
-      },
-      required: ['url'],
-      additionalProperties: false
-    }
-  }
-];
+  "risk-guardian": {
+    id: "risk-guardian",
+    config: {
+      id: "risk-guardian",
+      label: "RiskGuardian",
+      description: "Sizing & Drawdown",
+      avatar: "🛡️",
+      color: "bg-red-100 text-red-800",
+      model: "gpt-4o-mini",
+      systemPrompt: riskGuardianPrompt,
+      ...baseOpenAi,
+    },
+    tools: brokerAndJournalTools,
+  },
 
-module.exports = { AGENTS, TOOL_SPECS };
+  "trade-coach": {
+    id: "trade-coach",
+    config: {
+      id: "trade-coach",
+      label: "TradeCoach",
+      description: "Psychology & Review",
+      avatar: "🧠",
+      color: "bg-orange-100 text-orange-800",
+      model: "gemini-2.5-flash",
+      systemPrompt: tradeCoachPrompt,
+      ...baseGemini,
+    },
+    tools: brokerAndJournalTools,
+  },
+};
+
+function getRegisteredAgent(agentId) {
+  return registeredAgents[agentId];
+}
+
+// For backward compatibility or direct listing
+const AGENTS = Object.values(registeredAgents).map(a => a.config);
+
+module.exports = {
+  registeredAgents,
+  getRegisteredAgent,
+  AGENTS
+};
