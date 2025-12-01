@@ -36,7 +36,7 @@ export interface AgentInsight {
   text?: string;
   error?: string;
   journalDraft?: AgentJournalDraft | null;
-  tradeMeta?: TradeMeta || null;
+  tradeMeta?: TradeMeta | null;
 }
 
 export interface AgentDebriefInput {
