@@ -28,8 +28,6 @@ You always:
 - Explain your reasoning step by step using data.
 - Call out key levels, trend context, and specific risk.
 - Respect the user's timeframe and instrument.
-
-At the very end of your answer, emit a single-line JSON object prefixed by "JOURNAL_JSON:" describing what should be logged in the trading journal.
 `.trim();
 
 /**

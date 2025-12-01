@@ -1,6 +1,4 @@
 
-
-
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta, ToolCall } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
@@ -569,27 +567,49 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                      </div>
                    )}
                    
-                   {/* Mini Trade Card */}
+                   {/* Mini Trade Card / Ticket */}
                    {msg.tradeMeta && (
-                      <div className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs text-gray-600">
-                        <div className="flex flex-wrap gap-2 mb-1">
-                          {msg.tradeMeta.symbol && (
-                            <span className="font-semibold bg-gray-200 px-1.5 py-0.5 rounded">{msg.tradeMeta.symbol}</span>
-                          )}
-                          {msg.tradeMeta.direction && (
-                            <span className={`font-semibold px-1.5 py-0.5 rounded ${msg.tradeMeta.direction === 'long' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {msg.tradeMeta.direction.toUpperCase()}
-                            </span>
-                          )}
-                          {msg.tradeMeta.timeframe && (
-                            <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{msg.tradeMeta.timeframe}</span>
-                          )}
+                      <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg overflow-hidden w-full max-w-[280px]">
+                        <div className="bg-slate-100 px-3 py-2 border-b border-slate-200 flex justify-between items-center">
+                           <div className="font-bold text-slate-700 flex items-center gap-2">
+                             <span>{msg.tradeMeta.symbol || 'SYMBOL'}</span>
+                             {msg.tradeMeta.direction && (
+                               <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${msg.tradeMeta.direction === 'long' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                 {msg.tradeMeta.direction}
+                               </span>
+                             )}
+                           </div>
+                           <div className="text-[10px] font-mono text-slate-500">{msg.tradeMeta.timeframe || 'TF'}</div>
                         </div>
-                        <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-2">
-                           {msg.tradeMeta.rr && <div><span className="text-gray-400">RR:</span> {msg.tradeMeta.rr}</div>}
-                           {msg.tradeMeta.confidence && <div><span className="text-gray-400">Conf:</span> {msg.tradeMeta.confidence}%</div>}
-                           {msg.tradeMeta.stopLoss && <div><span className="text-gray-400">SL:</span> {msg.tradeMeta.stopLoss}</div>}
-                           {msg.tradeMeta.takeProfit1 && <div><span className="text-gray-400">TP1:</span> {msg.tradeMeta.takeProfit1}</div>}
+                        <div className="p-3 grid grid-cols-2 gap-y-2 gap-x-4 text-xs">
+                            <div className="flex justify-between items-baseline">
+                              <span className="text-slate-500 text-[10px] uppercase tracking-wider">Entry</span>
+                              <span className="font-mono font-medium text-slate-800">Market</span>
+                            </div>
+                            <div className="flex justify-between items-baseline">
+                              <span className="text-slate-500 text-[10px] uppercase tracking-wider">Conf</span>
+                              <span className="font-mono font-medium text-slate-800">{msg.tradeMeta.confidence || '?'}%</span>
+                            </div>
+                            <div className="flex justify-between items-baseline col-span-2 border-t border-slate-200 pt-2 mt-1">
+                               <span className="text-slate-500 text-[10px] uppercase tracking-wider">Stop Loss</span>
+                               <span className="font-mono font-bold text-red-600">{msg.tradeMeta.stopLoss || '—'}</span>
+                            </div>
+                            <div className="flex justify-between items-baseline col-span-2">
+                               <span className="text-slate-500 text-[10px] uppercase tracking-wider">Target 1</span>
+                               <span className="font-mono font-bold text-green-600">{msg.tradeMeta.takeProfit1 || '—'}</span>
+                            </div>
+                             {msg.tradeMeta.takeProfit2 && (
+                              <div className="flex justify-between items-baseline col-span-2">
+                                 <span className="text-slate-500 text-[10px] uppercase tracking-wider">Target 2</span>
+                                 <span className="font-mono font-bold text-green-600">{msg.tradeMeta.takeProfit2}</span>
+                              </div>
+                            )}
+                            {msg.tradeMeta.rr && (
+                               <div className="flex justify-between items-baseline col-span-2 border-t border-slate-200 pt-2 mt-1">
+                                  <span className="text-slate-500 text-[10px] uppercase tracking-wider">Risk:Reward</span>
+                                  <span className="font-mono font-medium text-slate-800">{msg.tradeMeta.rr}R</span>
+                               </div>
+                            )}
                         </div>
                       </div>
                    )}
