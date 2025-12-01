@@ -1,39 +1,31 @@
-
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { runAgentRound } from '../services/multiAgentService';
-import { AgentMessage, AgentTurnContext, AgentId, AgentJournalDraft } from '../types/agents';
+import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
-import { inferTradeMetaFromText } from '../utils/journalInference';
-import { JournalMode } from '../services/agentApi';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
   quant_bot: { avatar: '🤖', color: 'bg-blue-100 text-blue-800' },
   trend_master: { avatar: '📈', color: 'bg-purple-100 text-purple-800' },
   pattern_gpt: { avatar: '🧠', color: 'bg-green-100 text-green-800' },
-  journal_coach: { avatar: '📒', color: 'bg-amber-100 text-amber-800' },
+  journal_coach: { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' },
   // Fallbacks
   default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
 };
 
+const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt"];
+
+export interface ChatOverlayHandle {
+  sendSystemMessageToAgent: (params: { prompt: string; agentId: string }) => Promise<void>;
+}
+
 interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant';
   author?: string; // "You", "QuantBot", etc.
   agentId?: string; // for color mapping
   text: string;
   isError?: boolean;
 }
-
-export type ChatOverlayHandle = {
-  /**
-   * Inject a “system-style” message into the chat pipeline for a specific agent.
-   */
-  sendSystemMessageToAgent: (options: {
-    prompt: string;
-    agentId?: string; 
-  }) => void;
-};
 
 interface ChatOverlayProps {
   chartContext: string;
@@ -43,17 +35,19 @@ interface ChatOverlayProps {
   brokerSessionId?: string | null;
 }
 
-const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({ 
-  chartContext,
-  isBrokerConnected,
-  autoFocusSymbol
-}, ref) => {
+const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref) => {
+  const { 
+    chartContext, 
+    isBrokerConnected, 
+    autoFocusSymbol,
+    brokerSessionId // used for future extensions or specific broker logic
+  } = props;
+
   // UI State
   const [isOpen, setIsOpen] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [journalMode, setJournalMode] = useState<JournalMode>("live");
 
   // Vision / File State
   const [isVisionActive, setIsVisionActive] = useState(false);
@@ -65,6 +59,107 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { addEntry } = useJournal(); 
+
+  // Handle journal drafts from AI response
+  const processJournalDraft = (draft: AgentJournalDraft, agentId: string, agentName: string) => {
+      const effectiveAgentId = (draft.agentId || agentId);
+      addEntry({
+        id: `ai-${effectiveAgentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        timestamp: new Date().toISOString(),
+        source: 'ai',
+        
+        playbook: draft.title, 
+        note: draft.summary,
+        sentiment: draft.sentiment,
+        tags: draft.tags,
+        
+        agentId: effectiveAgentId,
+        agentName: draft.agentName || agentName,
+        
+        outcome: (draft.outcome as any) || 'Open',
+        symbol: draft.symbol || autoFocusSymbol || 'US30',
+        direction: draft.direction,
+        
+        entryPrice: undefined,
+        stopPrice: undefined,
+        targetPrice: undefined,
+        size: undefined,
+      });
+      console.log(`[ChatOverlay] Added journal draft from ${agentName}`);
+  };
+
+  // Expose imperative handle
+  useImperativeHandle(ref, () => ({
+    sendSystemMessageToAgent: async ({ prompt, agentId }) => {
+      // Create a user message to show what's happening
+      // For large system prompts (like playbook reviews), we show a summarized text
+      const displayPrompt = prompt.includes('"entries":') ? "Please review my recent journal entries and identify lessons." : prompt;
+      
+      const userMsg: ChatMessage = {
+        id: `sys-${Date.now()}`,
+        role: 'user',
+        author: 'System',
+        text: displayPrompt
+      };
+      
+      setMessages(prev => [...prev, userMsg]);
+      setIsSending(true);
+
+      try {
+        const insights = await fetchAgentInsights({
+          agentIds: [agentId as AgentId],
+          userMessage: prompt, // Send full prompt to LLM
+          chartContext: chartContext,
+          screenshot: null
+        });
+
+        setMessages(prev => {
+          const next = [...prev];
+          insights.forEach(insight => {
+             if (insight.text) {
+                next.push({
+                   id: `msg-${insight.agentId}-${Date.now()}`,
+                   role: 'assistant',
+                   author: insight.agentName,
+                   agentId: insight.agentId as string,
+                   text: insight.text || ''
+                });
+             }
+             if (insight.error) {
+                next.push({
+                   id: `err-${insight.agentId}-${Date.now()}`,
+                   role: 'assistant',
+                   author: insight.agentName,
+                   agentId: insight.agentId as string,
+                   text: `⚠️ ${insight.error}`,
+                   isError: true
+                });
+             }
+          });
+          return next;
+        });
+
+        // Handle journal drafts if any
+        insights.forEach(i => {
+          if (i.journalDraft) {
+             processJournalDraft(i.journalDraft, i.agentId as string, i.agentName);
+          }
+        });
+
+      } catch (e: any) {
+        console.error("System Agent Error", e);
+        setMessages(prev => [...prev, {
+          id: `sys-err-${Date.now()}`,
+          role: 'assistant',
+          author: 'System',
+          text: `Error processing request: ${e.message}`,
+          isError: true
+        }]);
+      } finally {
+        setIsSending(false);
+      }
+    }
+  }));
 
   // Auto-scroll
   const scrollToBottom = () => {
@@ -83,7 +178,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
     };
   }, []);
 
-  // Vision Toggles
   const toggleVision = async () => {
     if (isVisionActive) {
       if (streamRef.current) {
@@ -142,7 +236,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
     reader.onload = () => {
       const result = reader.result;
       if (typeof result === "string") {
-        // strip "data:...;base64," prefix for local logic
         const commaIndex = result.indexOf(",");
         const base64 = commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
         setPendingFileImage({ mimeType: file.type, data: base64 });
@@ -152,150 +245,68 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
     e.target.value = '';
   };
 
-  // SEND HANDLER
-  const handleSendMessage = async (
-    overrideText?: string,
-    options?: { agentId?: string; isSystem?: boolean }
-  ) => {
-    const textToSend = overrideText || inputValue;
-    if (!textToSend.trim() && !pendingFileImage && !isVisionActive) return;
+  const handleSendMessage = async () => {
+    if (!inputValue.trim() && !pendingFileImage && !isVisionActive) return;
     if (isSending) return;
 
-    const isSystem = !!options?.isSystem;
-    const now = new Date().toISOString();
-    
-    // Add message to local UI
+    const userText = inputValue;
     const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      role: isSystem ? 'system' : 'user',
-      author: isSystem ? 'System' : 'You',
-      text: textToSend
+      id: `user-${Date.now()}`,
+      role: 'user',
+      author: 'You',
+      text: userText
     };
     setMessages(prev => [...prev, userMsg]);
-    
-    // Clear input only if we used it
-    if (!overrideText) {
-      setInputValue('');
-    }
-    
+    setInputValue('');
     setIsSending(true);
 
     try {
-      // 1. Prepare Screenshot
       let screenshot: string | null = null;
-      if (pendingFileImage && !isSystem) {
-        // Reconstruct Data URL for API
+      if (pendingFileImage) {
         screenshot = `data:${pendingFileImage.mimeType};base64,${pendingFileImage.data}`;
-      } else if (isVisionActive && !isSystem) {
+      } else if (isVisionActive) {
         const frame = captureFrame();
         if (frame) {
-          // captureFrame returns base64 string, backend expects Data URL
           screenshot = `data:image/jpeg;base64,${frame}`;
         }
       }
-      if (!isSystem) {
-        setPendingFileImage(null); 
-      }
+      setPendingFileImage(null); 
 
-      // 2. Prepare Context for Engine
-      // Filter last 12 messages and map to AgentMessage format
-      const historyForEngine: AgentMessage[] = messages.slice(-12).map((m) => ({
-        id: m.id,
-        role: m.role === 'user' || m.role === 'system' ? 'user' : 'agent',
-        agentId: m.agentId as any, // Cast to AgentId
-        agentName: m.author,
-        content: m.text,
-        createdAt: new Date().toISOString() // Or keep original timestamp if available in ChatMessage
-      }));
-
-      const context: AgentTurnContext = {
-        symbol: autoFocusSymbol,
-        timeframe: '5m', // Default to 5m if not available, or parse from chartContext
-        mode: journalMode,
-        brokerSnapshot: chartContext // You might want to parse real broker data if available
-      };
-
-      // 3. Let the agents talk
-      const agentMessages = await runAgentRound(
-        textToSend,
-        [...historyForEngine, {
-          id: userMsg.id,
-          role: 'user',
-          content: userMsg.text,
-          createdAt: now
-        }],
-        context,
+      const insights = await fetchAgentInsights({
+        agentIds: ACTIVE_AGENT_IDS,
+        userMessage: userText,
+        chartContext,
         screenshot
-      );
+      });
 
-      // 4. Update Chat with responses
-      const chatBubbles: ChatMessage[] = agentMessages.map((a) => ({
-        id: a.id,
-        role: 'assistant',
-        author: a.agentName || 'Agent',
-        text: a.content,
-        agentId: a.agentId,
-      }));
+      setMessages(prev => {
+        const next = [...prev];
+        insights.forEach(insight => {
+          if (insight.error) {
+            next.push({
+              id: `err-${insight.agentId}-${Date.now()}`,
+              role: 'assistant',
+              author: insight.agentName,
+              agentId: insight.agentId as string,
+              text: `⚠️ ${insight.error}`,
+              isError: true
+            });
+          } else if (insight.text) {
+             next.push({
+              id: `msg-${insight.agentId}-${Date.now()}`,
+              role: 'assistant',
+              author: insight.agentName,
+              agentId: insight.agentId as string,
+              text: insight.text || ''
+            });
+          }
+        });
+        return next;
+      });
 
-      setMessages((prev) => [...prev, ...chatBubbles]);
-
-      // 5. Handle Journal Drafts - Auto Journaling
-      agentMessages.forEach(insight => {
-        if (insight.journalDraft) {
-          const draft = insight.journalDraft;
-          
-          // Build a base text for inference (agent reply > summary > title)
-          const baseText = insight.content || draft.summary || draft.title || "";
-          
-          const inferred = inferTradeMetaFromText({
-            text: baseText,
-            // Map AgentJournalDraft (types/agents) to AgentJournalDraft (services/agentApi compatible for inference utility)
-            draft: draft as any, 
-            activeSymbol: autoFocusSymbol === 'Auto' ? undefined : autoFocusSymbol
-          });
-
-          // Prefer agent's explicit field -> then inference -> then defaults
-          // If draft.symbol is undefined, use inferred or fallback
-          const fallbackSymbol = inferred.symbol || autoFocusSymbol || 'US30';
-          
-          const sentiment = draft.sentiment || inferred.sentiment || "Neutral";
-          
-          // Smart default outcome based on mode
-          const defaultOutcome = journalMode === 'post_trade' ? 'Win' : 'Open';
-          const outcome = inferred.outcome || defaultOutcome;
-
-          const direction = draft.direction || inferred.direction || undefined;
-          
-          const effectiveAgentId = (draft.agentId || insight.agentId) as string;
-          
-          // Map to JournalEntry strictly
-          addEntry({
-            id: `ai-${effectiveAgentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-            timestamp: new Date().toISOString(),
-            source: 'ai',
-            
-            // --- MAPPED FIELDS ---
-            playbook: draft.title, 
-            note: draft.summary,
-            sentiment: sentiment,
-            tags: draft.tags,
-            
-            // --- PILL COLORING ---
-            agentId: effectiveAgentId,
-            agentName: draft.agentName || insight.agentName,
-            
-            // --- INFERRED / STRUCTURED FIELDS ---
-            outcome: outcome,
-            symbol: fallbackSymbol !== 'Auto' ? fallbackSymbol : 'US30',
-            direction: direction,
-            
-            // Required placeholders
-            entryPrice: undefined,
-            stopPrice: undefined,
-            targetPrice: undefined,
-            size: undefined,
-          });
-          console.log(`[ChatOverlay] Added journal draft from ${insight.agentName}`);
+      insights.forEach(i => {
+        if (i.journalDraft) {
+          processJournalDraft(i.journalDraft, i.agentId as string, i.agentName);
         }
       });
 
@@ -313,23 +324,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
     }
   };
 
-  // Expose methods to parent
-  useImperativeHandle(ref, () => ({
-    sendSystemMessageToAgent: ({ prompt, agentId }) => {
-      // Open the chat if it's closed
-      setIsOpen(true);
-      
-      // Delegate to handleSendMessage
-      handleSendMessage(prompt, {
-        agentId,
-        isSystem: true
-      });
-    },
-  }));
-
-  // --- RENDER ---
-
-  // Collapsed View
   if (!isOpen) {
     return (
       <div className="w-12 h-full bg-[#1e222d] border-l border-[#2a2e39] flex flex-col items-center py-4 gap-4 z-30 shrink-0">
@@ -351,35 +345,20 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
     );
   }
 
-  // Expanded View
   return (
     <div className="w-[400px] h-full bg-white flex flex-col border-l border-[#2a2e39] shadow-xl relative z-30 animate-fade-in-right shrink-0">
       <video ref={videoRef} autoPlay playsInline muted className="hidden" />
       <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
-
+      
       {/* Header */}
       <div className="h-14 px-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm shrink-0">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
           <div>
             <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
-            <div className="flex items-center gap-2 mt-0.5">
-               {/* Mode Switch */}
-               <div className="flex bg-gray-100 rounded p-0.5">
-                  <button 
-                    onClick={() => setJournalMode('live')}
-                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded transition-all ${journalMode === 'live' ? 'bg-white shadow text-green-600' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    Live
-                  </button>
-                  <button 
-                    onClick={() => setJournalMode('post_trade')}
-                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded transition-all ${journalMode === 'post_trade' ? 'bg-white shadow text-amber-600' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    Post-Trade
-                  </button>
-               </div>
-            </div>
+            <p className="text-[10px] text-gray-400 font-medium">
+              QuantBot · TrendMaster · Pattern_GPT
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -412,52 +391,42 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
           </button>
         </div>
       </div>
-
-      {/* Messages Area */}
+      
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
         {messages.length === 0 && (
           <div className="text-center mt-10 p-4">
-             <div className="text-3xl mb-3">🤖 📈 📒</div>
+             <div className="text-3xl mb-3">🤖 📈 🧠</div>
              <p className="text-gray-500 text-sm font-medium">Ask your AI Team</p>
              <p className="text-gray-400 text-xs mt-1">
-               QuantBot, TrendMaster, and Journal Coach are ready to help.
+               QuantBot, TrendMaster, and Pattern_GPT are ready to analyze charts and suggest trades.
              </p>
           </div>
         )}
 
         {messages.map((msg, idx) => {
-          // If message role is 'system', display it distinctly or like user but different
           const isUser = msg.role === 'user';
-          const isSystem = msg.role === 'system';
-
           // Style config for agent
           const uiMeta = (msg.agentId && AGENT_UI_META[msg.agentId]) 
             ? AGENT_UI_META[msg.agentId] 
             : AGENT_UI_META.default;
 
           return (
-            <div key={idx} className={`flex gap-3 ${(isUser || isSystem) ? 'flex-row-reverse' : 'flex-row'}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-sm flex-shrink-0 ${isUser ? 'bg-[#131722] text-white' : isSystem ? 'bg-amber-100 text-amber-800' : 'bg-white border border-gray-100'}`}>
-                {isUser ? '👤' : isSystem ? '⚙️' : uiMeta.avatar}
+            <div key={idx} className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-sm flex-shrink-0 ${isUser ? 'bg-[#131722] text-white' : 'bg-white border border-gray-100'}`}>
+                {isUser ? '👤' : uiMeta.avatar}
               </div>
               
-              <div className={`flex flex-col max-w-[85%] ${(isUser || isSystem) ? 'items-end' : 'items-start'}`}>
-                 {(!isUser && !isSystem) && msg.author && (
+              <div className={`flex flex-col max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
+                 {!isUser && msg.author && (
                    <span className="text-[10px] font-bold text-gray-500 mb-1 ml-1 uppercase tracking-wider">
                      {msg.author}
-                   </span>
-                 )}
-                 {isSystem && (
-                   <span className="text-[10px] font-bold text-gray-400 mb-1 mr-1 uppercase tracking-wider">
-                     System Prompt
                    </span>
                  )}
                  <div className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
                    isUser 
                      ? 'bg-[#2962ff] text-white rounded-tr-none' 
-                     : isSystem 
-                       ? 'bg-amber-50 text-amber-900 border border-amber-200 rounded-tr-none'
-                       : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
+                     : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
                  }`}>
                    {msg.text}
                  </div>
@@ -484,7 +453,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
+      {/* Input */}
       <div className="p-4 bg-white border-t border-gray-100 shrink-0">
         <div className="relative">
           <textarea
@@ -509,7 +478,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
           </button>
 
           <button 
-            onClick={() => handleSendMessage()}
+            onClick={handleSendMessage}
             disabled={(!inputValue.trim() && !pendingFileImage && !isVisionActive) || isSending}
             className="absolute right-2 top-2 p-1.5 bg-[#2962ff] text-white rounded-xl hover:bg-[#1e53e5] disabled:opacity-50 transition-colors shadow-sm"
           >

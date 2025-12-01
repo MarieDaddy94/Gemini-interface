@@ -1,9 +1,64 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { AnalystPersona, SessionSummary } from "../types";
+import { AnalystPersona, AgentJournalDraft, AnalystHistoryItem } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Schema for multi-persona analyst responses
+// ---------- Shared helpers ----------
+
+function extractJson(text: string | undefined): string | null {
+  if (!text) return null;
+  let jsonStr = text.trim();
+  if (!jsonStr) return null;
+
+  // Strip ```json fences if the model added them
+  const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
+  const match = jsonStr.match(fenceRegex);
+  if (match && match[2]) {
+    jsonStr = match[2].trim();
+  }
+  return jsonStr;
+}
+
+// ---------- Schema: multi-persona + optional journal draft ----------
+
+const journalDraftSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    title: {
+      type: Type.STRING,
+      description: "Short headline / playbook name, e.g. 'US30 NY Reversal Fade'."
+    },
+    summary: {
+      type: Type.STRING,
+      description: "3–6 sentences explaining the setup or post-trade lesson."
+    },
+    sentiment: {
+      type: Type.STRING,
+      description: "Bullish / Bearish / Neutral directional stance."
+    },
+    tags: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "Short tags like ['LondonOpen','US30','trendPullback'] (no #)."
+    },
+    agentId: {
+      type: Type.STRING,
+      enum: ["agent-quant", "agent-trend", "agent-pattern"],
+      description: "Identifier used by the UI to color the agent pill."
+    },
+    agentName: {
+      type: Type.STRING,
+      enum: [
+        AnalystPersona.QUANT_BOT,
+        AnalystPersona.TREND_MASTER,
+        AnalystPersona.PATTERN_GPT
+      ],
+      description: "Human-readable persona name."
+    }
+  },
+  required: ["title", "summary", "sentiment", "tags", "agentId", "agentName"]
+};
+
 const analysisSchema: Schema = {
   type: Type.ARRAY,
   items: {
@@ -14,73 +69,44 @@ const analysisSchema: Schema = {
         enum: [
           AnalystPersona.QUANT_BOT,
           AnalystPersona.TREND_MASTER,
-          AnalystPersona.PATTERN_GPT,
+          AnalystPersona.PATTERN_GPT
         ],
-        description: "The name of the AI analyst persona speaking.",
+        description: "The name of the AI analyst persona speaking."
       },
       message: {
         type: Type.STRING,
-        description: "The analysis or comment from this persona.",
+        description: "The analysis or comment from this persona."
       },
+      journalDraft: journalDraftSchema // OPTIONAL because it's not in 'required'
     },
-    required: ["analystName", "message"],
-  },
-};
-
-// Schema for session playbook summary
-const sessionSummarySchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    headlineBias: { type: Type.STRING },
-    keyLevels: { type: Type.STRING, nullable: true },
-    scalpPlan: {
-      type: Type.OBJECT,
-      properties: {
-        bias: { type: Type.STRING },
-        entryPlan: { type: Type.STRING },
-        invalidation: { type: Type.STRING },
-        targets: { type: Type.STRING },
-        rr: { type: Type.STRING }
-      },
-      required: ["bias", "entryPlan", "invalidation", "targets", "rr"]
-    },
-    swingPlan: {
-      type: Type.OBJECT,
-      properties: {
-        bias: { type: Type.STRING },
-        entryPlan: { type: Type.STRING },
-        invalidation: { type: Type.STRING },
-        targets: { type: Type.STRING },
-        rr: { type: Type.STRING }
-      },
-      required: ["bias", "entryPlan", "invalidation", "targets", "rr"]
-    },
-    riskNotes: { type: Type.STRING, nullable: true }
-  },
-  required: ["headlineBias", "scalpPlan", "swingPlan"]
-};
-
-function extractJson(text: string | undefined): string | null {
-  if (!text) return null;
-  let jsonStr = text.trim();
-  if (!jsonStr) return null;
-
-  const fenceRegex = /^```(\w*)?\s*\n?(.*?)\n?\s*```$/s;
-  const match = jsonStr.match(fenceRegex);
-  if (match && match[2]) {
-    jsonStr = match[2].trim();
+    required: ["analystName", "message"]
   }
-  return jsonStr;
+};
+
+// ---------- Types exposed to the rest of the app ----------
+
+export interface AnalystInsight {
+  analystName: AnalystPersona;
+  message: string;
+  journalDraft?: AgentJournalDraft | null;
+}
+
+interface GetInsightsOptions {
+  mode?: "default" | "teamDebate";
 }
 
 // ---------------------------------------------------------------------
 // 1) Multi-analyst insight generator (QuantBot, TrendMaster, Pattern_GPT)
+//    with conversation history + optional journalDraft
 // ---------------------------------------------------------------------
+
 export const getAnalystInsights = async (
   userPrompt: string,
   chartContext: string,
-  imageBase64?: string
-) => {
+  imageBase64?: string,
+  history?: AnalystHistoryItem[],
+  options?: GetInsightsOptions
+): Promise<AnalystInsight[]> => {
   try {
     const modelId = "gemini-2.5-flash";
 
@@ -90,34 +116,75 @@ export const getAnalystInsights = async (
       parts.push({
         inlineData: {
           mimeType: "image/jpeg",
-          data: imageBase64,
-        },
+          data: imageBase64
+        }
       });
     }
 
+    let historyText = "";
+    if (history && history.length) {
+      const trimmed = history.slice(-20); // keep last ~20 turns
+      const lines = trimmed.map((h) => {
+        const label = h.isUser ? "Trader" : h.speaker;
+        return `- ${label}: ${h.text}`;
+      });
+      historyText = `
+Previous conversation (most recent last):
+${lines.join("\n")}
+`;
+    }
+
+    const modeText =
+      options?.mode === "teamDebate"
+        ? `MODE: TEAM DEBATE.
+- Treat this as an internal huddle. Each persona may react to previous analyst comments:
+  - Agree or disagree politely.
+  - Refine the plan or point out missing risks.
+- Avoid repeating the same information verbatim.`
+        : `MODE: COORDINATED TEAM.
+- Respond as a coordinated team where each persona adds unique value.
+- Avoid redundancy and keep each response focused on its specialty.`;
+
+    const journalingInstructions = `
+JOURNALING RULES:
+- For any reply that clearly describes a setup or lesson you want to remember,
+  populate "journalDraft" with:
+  - title: short nickname for the setup or lesson.
+  - summary: 3–6 sentences describing the idea, key confluence, and risk.
+  - tags: 2–6 short tokens like ["LondonOpen","US30","trendPullback"] (no #).
+  - sentiment: "Bullish", "Bearish", or "Neutral".
+  - agentId: one of "agent-quant", "agent-trend", "agent-pattern".
+  - agentName: your persona name.
+- If this reply should NOT be logged, either omit journalDraft or set it to null.
+- Do NOT mention journaling, tags, or 'journalDraft' in the user-visible message. Keep that
+  purely in the JSON field.`;
+
     parts.push({
       text: `
-        Context: The user is looking at a trading dashboard with a TradingView chart.
-        Broker / Market Data Feed Summary: ${chartContext}
+You are a coordinated AI trading team answering a human trader.
 
-        User Question: "${userPrompt}"
+Personas:
+1. QuantBot (agent-quant):
+   - Statistics, volatility, risk, win-rate, R:R, sample size.
+2. TrendMaster AI (agent-trend):
+   - Trend, momentum, HTF confluence, trade management.
+3. ChartPattern_GPT (agent-pattern):
+   - Market structure, support/resistance, liquidity, classic TA patterns.
 
-        Task: You are simulating a team of AI financial analysts.
-        1. QuantBot: Focuses on numbers, volatility, and statistical probability.
-        2. TrendMaster AI: Focuses on moving averages, momentum, and macro trends.
-        3. ChartPattern_GPT: Focuses on support/resistance, chart patterns, and classic TA.
+Environment context:
+- Broker/Market data: ${chartContext}
+${historyText}
 
-        ${
-          imageBase64
-            ? "IMPORTANT: A screenshot of the user's screen is attached. Analyze the TRADING CHARTS only (candles, indicators, levels). Ignore the chat overlay."
-            : ""
-        }
+Trader question: "${userPrompt}"
 
-        Based on the user's question and the visual/data context, provide 1 to 2 distinct responses
-        from the most relevant personas.
+${modeText}
+${journalingInstructions}
 
-        Output: JSON ONLY, matching the schema: an array of { analystName, message }.
-      `,
+OUTPUT FORMAT:
+- Respond ONLY as JSON matching the given schema (array of { analystName, message, optional journalDraft }).
+- analystName must be one of: "${AnalystPersona.QUANT_BOT}", "${AnalystPersona.TREND_MASTER}", "${AnalystPersona.PATTERN_GPT}".
+- Keep each persona's message concise and non-overlapping.
+`
     });
 
     const response = await ai.models.generateContent({
@@ -127,29 +194,30 @@ export const getAnalystInsights = async (
         responseMimeType: "application/json",
         responseSchema: analysisSchema,
         systemInstruction:
-          "You are a specialized AI trading team. Always reply in JSON format as an array of analyst messages.",
-      },
+          "You are a specialized AI trading team. Always reply in JSON format as an array of analyst messages, optionally including journalDraft objects."
+      }
     });
 
     const rawText = (response as any).text as string | undefined;
     const jsonStr = extractJson(rawText);
     if (!jsonStr) return [];
 
-    return JSON.parse(jsonStr) as { analystName: string; message: string }[];
+    return JSON.parse(jsonStr) as AnalystInsight[];
   } catch (error) {
     console.error("Gemini Analyst API Error:", error);
     return [
       {
         analystName: AnalystPersona.QUANT_BOT,
         message:
-          "I'm having trouble analyzing the data stream right now. Please try again.",
-      },
+          "I'm having trouble analyzing the data stream right now. Please try again."
+      }
     ];
   }
 };
 
 // ---------------------------------------------------------------------
 // 2) Journal coach: summarize tag/symbol stats and coach the trader
+//    (unchanged, still used by /coach)
 // ---------------------------------------------------------------------
 
 export const getCoachFeedback = async (coachContext: any): Promise<string> => {
@@ -176,7 +244,7 @@ Your job:
 
 1) "Quick Snapshot":
    - Mention the tag and symbol (if provided)
-   - Show win-rate, total trades, average PnL (roughly from totalPnl/closedWithPnl).
+   - Show win-rate, total trades, and rough average PnL from the stats.
    - Call out any obvious skew: overtrading, revenge trading, tiny sample size, etc.
 
 2) "What’s Working":
@@ -191,10 +259,10 @@ Keep it concise and conversational, like a coach talking between sessions.
 Here is the JSON context to analyze:
 
 ${prettyJson}
-          `,
-          },
-        ],
-      },
+          `
+          }
+        ]
+      }
     });
 
     const text = ((response as any).text as string | undefined) || "";
@@ -206,98 +274,28 @@ ${prettyJson}
 };
 
 // ---------------------------------------------------------------------
-// 3) Session Summary: build structured playbook / lane plans
+// 3) Session summary stub (kept for compatibility)
 // ---------------------------------------------------------------------
-
 export const getSessionSummary = async (
   chartContext: string,
-  history: { sender: string; text: string; isUser: boolean }[]
-): Promise<SessionSummary> => {
-  try {
-    const modelId = "gemini-2.5-flash";
-
-    const lastMessages = history.slice(-30);
-    const historyText = lastMessages
-      .map((m) => `${m.isUser ? "Trader" : m.sender}: ${m.text}`)
-      .join("\n");
-
-    const prompt = `
-You are an elite trading desk assistant.
-
-You will receive:
-- A compact description of the current market / broker context.
-- A transcript of the most recent conversation between the trader and an AI team of analysts.
-
-Your job is to output a *structured* session playbook in JSON with this exact shape:
-
-{
-  "headlineBias": "Short sentence summarizing the session bias (e.g. 'US30 mildly bullish into NY open').",
-  "keyLevels": "Optional quick list of key HTF levels or zones, if they are clearly implied.",
-  "scalpPlan": {
-    "bias": "Bullish/Bearish/Neutral for scalps.",
-    "entryPlan": "Concrete rules for aggressive intraday entries.",
-    "invalidation": "Where the idea is clearly wrong / must step aside.",
-    "targets": "Realistic scaling/TP ideas for scalps.",
-    "rr": "How to think about risk:reward for scalps."
-  },
-  "swingPlan": {
-    "bias": "Bullish/Bearish/Neutral for swings.",
-    "entryPlan": "Rules for higher timeframe swing entries, if relevant.",
-    "invalidation": "Invalidation conditions for the swing idea.",
-    "targets": "Potential swing targets.",
-    "rr": "Risk:reward perspective for swing trades."
-  },
-  "riskNotes": "Short note on risk (e.g. news, overtrading, sizing, account pressure)."
-}
-
-Keep it practical and short – like a one-page laminated card a trader could glance at before clicking.
-
-Market / broker context:
-${chartContext}
-
-Recent conversation:
-${historyText}
-`;
-
-    const response = await ai.models.generateContent({
-      model: modelId,
-      contents: { parts: [{ text: prompt }] },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: sessionSummarySchema,
-        systemInstruction:
-          "You are a professional trading session summarizer. Always return valid JSON that matches the provided schema."
-      }
-    });
-
-    const rawText = (response as any).text as string | undefined;
-    const jsonStr = extractJson(rawText);
-    if (!jsonStr) {
-      throw new Error("No JSON in session summary response");
+  history: any[]
+) => {
+  // Currently unused; kept to avoid breaking any imports.
+  return {
+    headlineBias: "System update",
+    scalpPlan: {
+      bias: "Neutral",
+      entryPlan: "",
+      invalidation: "",
+      targets: "",
+      rr: ""
+    },
+    swingPlan: {
+      bias: "Neutral",
+      entryPlan: "",
+      invalidation: "",
+      targets: "",
+      rr: ""
     }
-
-    const parsed = JSON.parse(jsonStr) as SessionSummary;
-    return parsed;
-  } catch (error) {
-    console.error("Gemini Session Summary API Error:", error);
-    return {
-      headlineBias: "Session tagged, but summary generation failed.",
-      keyLevels: "",
-      scalpPlan: {
-        bias: "Neutral",
-        entryPlan: "",
-        invalidation: "",
-        targets: "",
-        rr: ""
-      },
-      swingPlan: {
-        bias: "Neutral",
-        entryPlan: "",
-        invalidation: "",
-        targets: "",
-        rr: ""
-      },
-      riskNotes: "Review risk manually; AI summary unavailable."
-    };
-  }
+  };
 };

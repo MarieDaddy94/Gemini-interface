@@ -272,3 +272,18 @@ export type PlaybookReviewPayload = {
   mode: 'lessons';
   entries: PlaybookLesson[];
 };
+
+export interface AgentJournalDraft {
+  title: string;         // e.g. "US30 NY Reversal Fade"
+  summary: string;       // 3–6 sentence explanation / lesson
+  tags: string[];        // ["LondonOpen", "US30", "trendPullback"]
+  sentiment: string;     // "Bullish" | "Bearish" | "Neutral"
+  agentId: string;       // e.g. "agent-quant" | "agent-trend" | "agent-pattern"
+  agentName: string;     // "QuantBot", "TrendMaster AI", "ChartPattern_GPT"
+}
+
+export interface AnalystHistoryItem {
+  speaker: string;       // "You", "QuantBot", etc.
+  text: string;
+  isUser: boolean;
+}
