@@ -17,7 +17,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Strategist',
     role: 'High-level strategy & narrative',
     provider: 'openai',
-    model: 'gpt-4o',
+    model: 'gpt-5.1',
     speed: 'slow',
     capabilities: ['strategy', 'planning', 'roundtable'],
   },
@@ -26,7 +26,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Strategist (Alt)',
     role: 'Strategy backup',
     provider: 'openai',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.1-mini',
     speed: 'fast',
     capabilities: ['strategy'],
   },
@@ -35,7 +35,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Trend Master',
     role: 'Multi-timeframe trend & structure',
     provider: 'openai',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.1-mini',
     speed: 'fast',
     capabilities: ['trend', 'structure'],
   },
@@ -44,7 +44,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Pattern GPT',
     role: 'Patterns, liquidity, timing windows',
     provider: 'gemini',
-    model: 'gemini-2.5-flash',
+    model: 'gemini-1.5-pro-latest',
     speed: 'medium',
     capabilities: ['patterns', 'vision-context'],
   },
@@ -53,7 +53,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Risk Manager',
     role: 'Risk limits, prop-style rules',
     provider: 'openai',
-    model: 'gpt-4o',
+    model: 'gpt-5.1',
     speed: 'slow',
     capabilities: ['risk', 'constraints'],
   },
@@ -62,7 +62,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Execution Bot',
     role: 'Entry/exit specifics, R:R',
     provider: 'openai',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.1-mini',
     speed: 'fast',
     capabilities: ['execution'],
   },
@@ -71,7 +71,7 @@ const DEFAULT_AGENTS = {
     displayName: 'Journal Coach',
     role: 'Performance analysis & coaching',
     provider: 'openai',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.1-mini',
     speed: 'fast',
     capabilities: ['coaching', 'stats'],
   },
@@ -80,12 +80,13 @@ const DEFAULT_AGENTS = {
     displayName: 'Voice Parser',
     role: 'Parses spoken commands into trade instructions',
     provider: 'openai',
-    model: 'gpt-4o-mini',
+    model: 'gpt-5.1-mini',
     speed: 'fast',
     capabilities: ['parsing'],
   },
 };
 
+// Live config (default + overrides/custom)
 let AGENTS = { ...DEFAULT_AGENTS };
 
 // ---- Load & save config file ----
@@ -99,9 +100,6 @@ function loadConfigFromDisk() {
     if (!raw.trim()) return;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
-      // We expect a map {id: agentConfig}
-      // Merge carefully to preserve code-defined properties if needed, 
-      // but here we trust the config file for the properties it has.
       AGENTS = { ...AGENTS, ...parsed };
       console.log('[Agents] Loaded agentConfig.json');
     }
@@ -129,7 +127,10 @@ function getAgentById(id) {
 }
 
 function getAgents() {
-  return Object.values(AGENTS);
+  return Object.values(AGENTS).map((agent) => ({
+    ...agent,
+    builtin: !!DEFAULT_AGENTS[agent.id],
+  }));
 }
 
 function getAgentsByCapability(cap) {
@@ -158,10 +159,79 @@ function updateAgentConfig(id, patch) {
   return updated;
 }
 
+/**
+ * Create a brand new agent and persist it.
+ *
+ * @param {{
+ *   id: string;
+ *   displayName: string;
+ *   role: string;
+ *   provider?: string;
+ *   model?: string;
+ *   speed?: string;
+ *   capabilities?: string[];
+ * }} config
+ */
+function createAgent(config) {
+  const rawId = (config.id || '').trim();
+  if (!rawId) {
+    const err = new Error('Agent id is required.');
+    err.code = 'BadRequest';
+    throw err;
+  }
+
+  // normalize id: lowercase, replace spaces with dashes
+  const id = rawId.toLowerCase().replace(/\s+/g, '-');
+
+  if (AGENTS[id]) {
+    const err = new Error(`Agent with id "${id}" already exists.`);
+    err.code = 'Conflict';
+    throw err;
+  }
+
+  const agent = {
+    id,
+    displayName: config.displayName || id,
+    role: config.role || 'Custom agent',
+    provider: config.provider || 'openai',
+    model: config.model || 'gpt-5.1-mini',
+    speed: config.speed || 'custom',
+    capabilities: Array.isArray(config.capabilities)
+      ? config.capabilities
+      : [],
+  };
+
+  AGENTS[id] = agent;
+  saveConfigToDisk();
+  return agent;
+}
+
+/**
+ * Delete a custom agent. Built-ins are protected.
+ *
+ * @param {string} id
+ */
+function deleteAgent(id) {
+  const current = AGENTS[id];
+  if (!current) return null;
+
+  if (DEFAULT_AGENTS[id]) {
+    const err = new Error('Cannot delete built-in agent.');
+    err.code = 'Protected';
+    throw err;
+  }
+
+  delete AGENTS[id];
+  saveConfigToDisk();
+  return current;
+}
+
 module.exports = {
   AGENTS,
   getAgentById,
   getAgents,
   getAgentsByCapability,
   updateAgentConfig,
+  createAgent,
+  deleteAgent,
 };

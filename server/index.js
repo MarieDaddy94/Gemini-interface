@@ -22,7 +22,9 @@ const { handleAgentRequest } = require('./agents/orchestrator');
 // Dynamic Agents
 const {
   getAgents,
-  updateAgentConfig
+  updateAgentConfig,
+  createAgent,
+  deleteAgent
 } = require('./agents/agents');
 
 // Phase 4: Autopilot
@@ -183,6 +185,91 @@ app.post('/api/agents/:id', (req, res) => {
     console.error('Error in POST /api/agents/:id:', err);
     res.status(500).json({
       error: 'AgentUpdateError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// ------------------------------
+// Agent builder: create & delete
+// ------------------------------
+
+app.post('/api/agents', (req, res) => {
+  try {
+    const { id, displayName, role, provider, model, capabilities } =
+      req.body || {};
+
+    if (!id || !displayName || !role) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'id, displayName, and role are required.',
+      });
+    }
+
+    let caps = [];
+    if (Array.isArray(capabilities)) {
+      caps = capabilities.map((c) => String(c));
+    }
+
+    const agent = createAgent({
+      id,
+      displayName,
+      role,
+      provider,
+      model,
+      capabilities: caps,
+    });
+
+    res.json(agent);
+  } catch (err) {
+    console.error('Error in POST /api/agents (create):', err);
+    if (err.code === 'Conflict') {
+      return res.status(409).json({
+        error: 'Conflict',
+        message: err.message,
+      });
+    }
+    if (err.code === 'BadRequest') {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: err.message,
+      });
+    }
+    res.status(500).json({
+      error: 'AgentCreateError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+app.delete('/api/agents/:id', (req, res) => {
+  try {
+    const id = req.params.id;
+    let removed;
+    try {
+      removed = deleteAgent(id);
+    } catch (err) {
+      if (err.code === 'Protected') {
+        return res.status(400).json({
+          error: 'Protected',
+          message: err.message,
+        });
+      }
+      throw err;
+    }
+
+    if (!removed) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: `Agent ${id} not found.`,
+      });
+    }
+
+    res.json({ ok: true, removedId: id });
+  } catch (err) {
+    console.error('Error in DELETE /api/agents/:id:', err);
+    res.status(500).json({
+      error: 'AgentDeleteError',
       message: err.message || 'Unknown error',
     });
   }

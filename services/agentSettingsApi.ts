@@ -11,6 +11,7 @@ export interface AgentConfig {
   model: string;
   speed?: string;
   capabilities?: string[];
+  builtin?: boolean; // true for core agents, false/undefined for custom
 }
 
 export interface AgentListResponse {
@@ -47,4 +48,41 @@ export async function updateAgent(
   }
 
   return (await resp.json()) as AgentConfig;
+}
+
+export async function createAgentApi(config: {
+  id: string;
+  displayName: string;
+  role: string;
+  provider: AgentProvider;
+  model: string;
+  capabilities?: string[];
+}): Promise<AgentConfig> {
+  const resp = await fetch('/api/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(
+      `Failed to create agent (${resp.status}): ${resp.statusText} - ${text}`
+    );
+  }
+
+  return (await resp.json()) as AgentConfig;
+}
+
+export async function deleteAgentApi(id: string): Promise<void> {
+  const resp = await fetch(`/api/agents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(
+      `Failed to delete agent (${resp.status}): ${resp.statusText} - ${text}`
+    );
+  }
 }
