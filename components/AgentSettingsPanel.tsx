@@ -27,6 +27,9 @@ const AgentSettingsPanel: React.FC = () => {
   // Expansion state
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // Deletion confirmation state
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
   // Builder form state
   const [newId, setNewId] = useState('');
   const [newName, setNewName] = useState('');
@@ -138,6 +141,7 @@ const AgentSettingsPanel: React.FC = () => {
   const handleDelete = async (id: string) => {
     setError(null);
     setDeletingId(id);
+    setConfirmDeleteId(null); // Clear confirmation state
     try {
       await deleteAgentApi(id);
       setAgents((prev) => prev.filter((a) => a.id !== id));
@@ -297,7 +301,7 @@ const AgentSettingsPanel: React.FC = () => {
         {/* Settings table */}
         <section>
           <div className="border border-gray-800 rounded-md overflow-hidden">
-            <div className="grid grid-cols-[1.2fr,0.9fr,1.2fr,0.5fr] gap-0 bg-[#080812] text-gray-400 text-[10px] font-semibold uppercase tracking-wide px-2 py-1">
+            <div className="grid grid-cols-[1.2fr,0.9fr,1.2fr,0.7fr] gap-0 bg-[#080812] text-gray-400 text-[10px] font-semibold uppercase tracking-wide px-2 py-1">
               <div>Agent</div>
               <div>Provider</div>
               <div>Model</div>
@@ -308,11 +312,12 @@ const AgentSettingsPanel: React.FC = () => {
               const modelOptions = getModelOptions(agent.provider);
               const isSaving = savingId === agent.id;
               const isDeleting = deletingId === agent.id;
+              const isConfirming = confirmDeleteId === agent.id;
 
               return (
                 <div
                   key={agent.id}
-                  className="grid grid-cols-[1.2fr,0.9fr,1.2fr,0.5fr] gap-0 items-center border-t border-gray-800 px-2 py-1 text-[11px]"
+                  className="grid grid-cols-[1.2fr,0.9fr,1.2fr,0.7fr] gap-0 items-center border-t border-gray-800 px-2 py-1 text-[11px]"
                 >
                   <div className="pr-2">
                     <div className="font-semibold text-gray-100">
@@ -364,16 +369,37 @@ const AgentSettingsPanel: React.FC = () => {
                     </select>
                   </div>
 
-                  <div className="flex justify-end">
+                  <div className="flex justify-end items-center gap-1">
                     {!agent.builtin && (
-                      <button
-                        type="button"
-                        className="px-2 py-0.5 rounded-md bg-red-700 hover:bg-red-600 text-[10px] disabled:bg-red-900 disabled:cursor-not-allowed"
-                        onClick={() => handleDelete(agent.id)}
-                        disabled={isDeleting}
-                      >
-                        {isDeleting ? '...' : 'Delete'}
-                      </button>
+                      isConfirming ? (
+                        <>
+                           <button
+                            type="button"
+                            className="px-2 py-0.5 rounded-md bg-red-600 hover:bg-red-500 text-[10px] text-white"
+                            onClick={() => handleDelete(agent.id)}
+                            disabled={isDeleting}
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            className="px-2 py-0.5 rounded-md bg-gray-700 hover:bg-gray-600 text-[10px] text-gray-300"
+                            onClick={() => setConfirmDeleteId(null)}
+                            disabled={isDeleting}
+                          >
+                            No
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="px-2 py-0.5 rounded-md bg-red-900/40 hover:bg-red-700 text-red-300 border border-red-900/50 text-[10px] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          onClick={() => setConfirmDeleteId(agent.id)}
+                          disabled={isDeleting}
+                        >
+                          {isDeleting ? '...' : 'Delete'}
+                        </button>
+                      )
                     )}
                   </div>
                 </div>
