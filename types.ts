@@ -402,6 +402,42 @@ export interface AgentMessage {
   metadata?: Record<string, unknown>;
 }
 
+// --- Risk & Autopilot Types (Phase 4) ---
+
+export interface RiskConfig {
+  maxRiskPerTradePercent: number;   // e.g. 0.5 = 0.5% of equity per trade
+  maxDailyLossPercent: number;      // e.g. 3 = 3% daily DD cap
+  maxWeeklyLossPercent: number;     // e.g. 8 = 8% weekly DD cap
+  maxTradesPerDay: number;          // hard cap on number of trades per day
+}
+
+export interface RiskRuntimeState {
+  tradesTakenToday: number;
+  realizedPnlTodayPercent: number;  // realized PnL (Rough %) for today, e.g. -1.2
+  realizedPnlWeekPercent: number;   // realized PnL (Rough %) for the week
+}
+
+export interface AutopilotConfig {
+  allowFullAutoInLive: boolean;            // whether full auto is allowed on live/funded
+  requireVoiceConfirmForFullAuto: boolean; // require voice confirmation for full auto entries
+}
+
+export interface ProposedTrade {
+  id?: string;
+  instrument: TradingInstrument;
+  direction: TradeDirection;
+  riskPercent: number;   // % of equity this trade risks if it stops out
+  comment?: string;      // free-text notes from the agent/user
+}
+
+export interface RiskCheckResult {
+  allowed: boolean;
+  reasons: string[];              // hard reasons why it’s blocked
+  warnings: string[];             // soft warnings
+  projectedDailyLossPercent: number;
+  projectedWeeklyLossPercent: number;
+}
+
 export interface TradingSessionState {
   // Core session info
   environment: TradingEnvironment;
@@ -418,7 +454,12 @@ export interface TradingSessionState {
   agents: AgentDefinition[];
   messages: AgentMessage[];
 
-  // Flags we’ll use later (risk, connectivity, etc.)
+  // Risk & autopilot
+  riskConfig: RiskConfig;
+  riskRuntime: RiskRuntimeState;
+  autopilotConfig: AutopilotConfig;
+
+  // Flags
   isBrokerConnected: boolean;
   isNewsHighImpactNow: boolean;
   isVisionActive: boolean;

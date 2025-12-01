@@ -14,6 +14,9 @@ import {
   TradingInstrument,
   TimeframeState,
   AccountState,
+  RiskConfig,
+  RiskRuntimeState,
+  AutopilotConfig,
 } from '../types';
 
 // -------------------------------
@@ -84,6 +87,24 @@ const defaultAgents: AgentDefinition[] = [
   },
 ];
 
+const defaultRiskConfig: RiskConfig = {
+  maxRiskPerTradePercent: 0.5, // 0.5% per trade
+  maxDailyLossPercent: 3,      // 3% daily cap
+  maxWeeklyLossPercent: 8,     // 8% weekly cap
+  maxTradesPerDay: 5,
+};
+
+const defaultRiskRuntime: RiskRuntimeState = {
+  tradesTakenToday: 0,
+  realizedPnlTodayPercent: 0,
+  realizedPnlWeekPercent: 0,
+};
+
+const defaultAutopilotConfig: AutopilotConfig = {
+  allowFullAutoInLive: false,
+  requireVoiceConfirmForFullAuto: true,
+};
+
 const defaultSessionState: TradingSessionState = {
   environment: 'sim',
   autopilotMode: 'off',
@@ -92,6 +113,9 @@ const defaultSessionState: TradingSessionState = {
   account: defaultAccount,
   agents: defaultAgents,
   messages: [],
+  riskConfig: defaultRiskConfig,
+  riskRuntime: defaultRiskRuntime,
+  autopilotConfig: defaultAutopilotConfig,
   isBrokerConnected: false,
   isNewsHighImpactNow: false,
   isVisionActive: false,
@@ -114,6 +138,11 @@ interface TradingSessionContextValue {
   setBrokerConnected: (connected: boolean) => void;
   setNewsHighImpactNow: (flag: boolean) => void;
   setVisionActive: (flag: boolean) => void;
+
+  // Risk & autopilot setters
+  setRiskConfig: (cfg: Partial<RiskConfig>) => void;
+  updateRiskRuntime: (runtime: Partial<RiskRuntimeState>) => void;
+  setAutopilotConfig: (cfg: Partial<AutopilotConfig>) => void;
 }
 
 const TradingSessionContext = createContext<TradingSessionContextValue | undefined>(
@@ -225,6 +254,36 @@ export const TradingSessionProvider: React.FC<TradingSessionProviderProps> = ({
     }));
   };
 
+  const setRiskConfig = (cfg: Partial<RiskConfig>) => {
+    setState((prev) => ({
+      ...prev,
+      riskConfig: {
+        ...prev.riskConfig,
+        ...cfg,
+      },
+    }));
+  };
+
+  const updateRiskRuntime = (runtime: Partial<RiskRuntimeState>) => {
+    setState((prev) => ({
+      ...prev,
+      riskRuntime: {
+        ...prev.riskRuntime,
+        ...runtime,
+      },
+    }));
+  };
+
+  const setAutopilotConfig = (cfg: Partial<AutopilotConfig>) => {
+    setState((prev) => ({
+      ...prev,
+      autopilotConfig: {
+        ...prev.autopilotConfig,
+        ...cfg,
+      },
+    }));
+  };
+
   const value: TradingSessionContextValue = useMemo(
     () => ({
       state,
@@ -239,6 +298,9 @@ export const TradingSessionProvider: React.FC<TradingSessionProviderProps> = ({
       setBrokerConnected,
       setNewsHighImpactNow,
       setVisionActive,
+      setRiskConfig,
+      updateRiskRuntime,
+      setAutopilotConfig,
     }),
     [state]
   );

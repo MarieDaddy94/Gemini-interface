@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -19,6 +20,9 @@ const { setupMarketData, getPrice } = require('./marketData');
 // Phase 2: Import new Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
 
+// Phase 4: Import Autopilot Controller
+const { handleAutopilotProposedTrade } = require('./risk/autopilotController');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
@@ -38,6 +42,7 @@ const aiLimiter = rateLimit({
 app.use('/api/agents/', aiLimiter);
 app.use('/api/ai/', aiLimiter);
 app.use('/api/agent-router', aiLimiter); // Limit the new router too
+app.use('/api/risk/', aiLimiter); // Limit risk checks
 
 app.use(
   cors({
@@ -206,6 +211,26 @@ app.post('/api/agent-router', async (req, res) => {
     console.error('Error in /api/agent-router:', err);
     res.status(500).json({
       error: 'Agent router error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// --- PHASE 4: RISK / AUTOPILOT ROUTE ---
+app.post('/api/risk/preview-trade', async (req, res) => {
+  try {
+    const { sessionState, proposedTrade } = req.body || {};
+
+    const result = await handleAutopilotProposedTrade(
+      sessionState,
+      proposedTrade
+    );
+
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /api/risk/preview-trade:', err);
+    res.status(500).json({
+      error: 'Risk preview error',
       message: err.message || 'Unknown error',
     });
   }
