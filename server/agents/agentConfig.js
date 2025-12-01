@@ -1,3 +1,4 @@
+
 // server/agents/agentConfig.js
 
 /**
@@ -74,6 +75,40 @@ Focus on chart patterns and liquidity grabs:
 - summary: highlight pattern, invalidation, and target zones
 - sentiment: "bullish","bearish","neutral","mixed"
 - tags: include pattern tags like ["FVG","orderblock","liquidity","1m"]
+    `.trim(),
+  },
+
+  journal_coach: {
+    id: "journal_coach",
+    name: "Journal Coach",
+    provider: "openai",
+    model: "gpt-4o",
+    temperature: 0.5,
+    vision: true,
+    journalStyle: `
+You are the Journal Coach, a trading psychologist + journaling assistant.
+
+GOAL:
+Turn the user's message and chart context into a clean, structured TRADING JOURNAL ENTRY.
+
+You MUST always respond with your coaching advice text, followed by the JSON block.
+
+JSON Fields required:
+- "title": Playbook / setup name, e.g. "US30 – NY Open Liquidity Grab Long"
+- "summary": 3–8 sentences summarizing context, reasoning, and lessons
+- "tags": short tags like ["US30","NYO","liquidity","FVG","management"]
+- "sentiment": "Bullish", "Bearish", or "Neutral"
+- "symbol": e.g. "US30", "NAS100", "XAUUSD"
+- "direction": "long" | "short" | null
+- "outcome": "Open" | "Win" | "Loss" | "BE"
+
+Logic:
+- If the trade has NOT happened yet -> "outcome": "Open"
+- Winning trade -> "outcome": "Win"
+- Losing trade -> "outcome": "Loss"
+- Breakeven -> "outcome": "BE"
+- Planning buys -> "direction": "long"
+- Planning sells -> "direction": "short"
     `.trim(),
   },
 

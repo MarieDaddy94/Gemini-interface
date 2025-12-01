@@ -1,19 +1,19 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAgentInsights } from '../services/agentApi';
-import type { AgentId, AgentJournalDraft } from '../services/agentApi';
+import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
+import { inferTradeMetaFromText } from '../utils/journalInference';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
   quant_bot: { avatar: '🤖', color: 'bg-blue-100 text-blue-800' },
   trend_master: { avatar: '📈', color: 'bg-purple-100 text-purple-800' },
   pattern_gpt: { avatar: '🧠', color: 'bg-green-100 text-green-800' },
+  journal_coach: { avatar: '📒', color: 'bg-amber-100 text-amber-800' },
   // Fallbacks
   default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
 };
 
-const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt"];
+const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
 
 interface ChatMessage {
   id: string;
@@ -205,37 +205,50 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         return next;
       });
 
-      // 4. Handle Journal Drafts
-      insights.forEach(i => {
-        if (i.journalDraft) {
-          const draft = i.journalDraft;
+      // 4. Handle Journal Drafts with Smart Inference
+      insights.forEach(insight => {
+        if (insight.journalDraft) {
+          const draft: AgentJournalDraft = insight.journalDraft;
           
-          const effectiveAgentId = (draft.agentId || i.agentId) as string;
+          // Build a base text for inference (agent reply > summary > title)
+          const baseText = insight.text || draft.summary || draft.title || "";
           
-          // Map AgentJournalDraft to JournalEntry strictly for JournalPanel
+          const inferred = inferTradeMetaFromText({
+            text: baseText,
+            draft,
+            activeSymbol: autoFocusSymbol === 'Auto' ? undefined : autoFocusSymbol
+          });
+
+          // Prefer agent's explicit field -> then inference -> then defaults
+          const fallbackSymbol = draft.symbol || inferred.symbol || autoFocusSymbol || 'US30';
+          if (fallbackSymbol === 'Auto') { /* handle edge case if autoFocusSymbol is literally "Auto" */ }
+          
+          const sentiment = draft.sentiment || inferred.sentiment || "Neutral";
+          const outcome = draft.outcome || inferred.outcome || "Open";
+          const direction = draft.direction || inferred.direction || undefined;
+          
+          const effectiveAgentId = (draft.agentId || insight.agentId) as string;
+          
+          // Map to JournalEntry strictly
           addEntry({
             id: `ai-${effectiveAgentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             timestamp: new Date().toISOString(),
             source: 'ai',
             
             // --- MAPPED FIELDS ---
-            // Title -> Playbook column
             playbook: draft.title, 
-            // Summary -> Notes column
             note: draft.summary,
-            // Sentiment -> Sentiment
-            sentiment: draft.sentiment,
-            // Tags -> Tags
+            sentiment: sentiment,
             tags: draft.tags,
             
             // --- PILL COLORING ---
             agentId: effectiveAgentId,
-            agentName: draft.agentName || i.agentName,
+            agentName: draft.agentName || insight.agentName,
             
-            // --- DEFAULTS / METADATA ---
-            outcome: (draft.outcome as string) || 'Open',
-            symbol: draft.symbol || autoFocusSymbol || 'US30',
-            direction: draft.direction,
+            // --- INFERRED / STRUCTURED FIELDS ---
+            outcome: outcome,
+            symbol: fallbackSymbol !== 'Auto' ? fallbackSymbol : 'US30',
+            direction: direction,
             
             // Required placeholders
             entryPrice: undefined,
@@ -243,7 +256,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
             targetPrice: undefined,
             size: undefined,
           });
-          console.log(`[ChatOverlay] Added journal draft from ${i.agentName}`);
+          console.log(`[ChatOverlay] Added inferred journal draft from ${insight.agentName}`);
         }
       });
 
@@ -298,7 +311,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           <div>
             <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
             <p className="text-[10px] text-gray-400 font-medium">
-              QuantBot · TrendMaster · Pattern_GPT
+              QuantBot · TrendMaster · Coach
             </p>
           </div>
         </div>
@@ -337,10 +350,10 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
         {messages.length === 0 && (
           <div className="text-center mt-10 p-4">
-             <div className="text-3xl mb-3">🤖 📈 🧠</div>
+             <div className="text-3xl mb-3">🤖 📈 📒</div>
              <p className="text-gray-500 text-sm font-medium">Ask your AI Team</p>
              <p className="text-gray-400 text-xs mt-1">
-               QuantBot, TrendMaster, and Pattern_GPT are ready to analyze charts and suggest trades.
+               QuantBot, TrendMaster, and Journal Coach are ready to help.
              </p>
           </div>
         )}

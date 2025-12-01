@@ -1,5 +1,6 @@
 
-export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt";
+
+export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_coach";
 
 export interface AgentJournalDraft {
   agentId: AgentId | string;
@@ -8,10 +9,10 @@ export interface AgentJournalDraft {
   summary: string;
   sentiment: string;
   tags: string[];
-  // Optional metadata for journal mapping
+  // Metadata for journal mapping
   symbol?: string;
   direction?: "long" | "short";
-  outcome?: string;
+  outcome?: "Open" | "Win" | "Loss" | "BE" | string;
 }
 
 export interface AgentInsight {
