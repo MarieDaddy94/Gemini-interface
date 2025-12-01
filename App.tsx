@@ -1,5 +1,4 @@
 
-
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -460,6 +459,7 @@ const Dashboard: React.FC = () => {
         sessionId={effectiveJournalSessionId}
         autoFocusSymbol={autoFocusSymbol}
         brokerSessionId={brokerSessionId}
+        openPositions={brokerData?.positions}
       />
       <ConnectBrokerModal isOpen={isBrokerModalOpen} onClose={() => setIsBrokerModalOpen(false)} onConnect={handleBrokerConnect} />
       <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />

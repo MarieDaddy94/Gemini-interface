@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } f
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta, ToolCall } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 import { useAgentConfig } from '../context/AgentConfigContext';
+import { BrokerPosition } from '../types';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
@@ -39,6 +40,7 @@ interface ChatOverlayProps {
   brokerSessionId?: string | null;
   chartSymbol?: string;
   chartTimeframe?: string;
+  openPositions?: BrokerPosition[];
 }
 
 // --- Crop Modal Helper ---
@@ -213,7 +215,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     autoFocusSymbol,
     brokerSessionId,
     chartSymbol = 'US30',
-    chartTimeframe = '15m'
+    chartTimeframe = '15m',
+    openPositions = []
   } = props;
 
   // UI State
@@ -221,6 +224,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [showPositions, setShowPositions] = useState(true); // default open if connected
 
   // Vision / File State
   const [isVisionActive, setIsVisionActive] = useState(false);
@@ -690,6 +694,64 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
           </div>
         </div>
         
+        {/* Open Positions Panel (Collapsible) */}
+        {isBrokerConnected && openPositions.length > 0 && (
+          <div className="border-b border-gray-100 bg-slate-50 shrink-0">
+             <button 
+               onClick={() => setShowPositions(!showPositions)}
+               className="w-full flex items-center justify-between px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+             >
+               <div className="flex items-center gap-2">
+                 <span className="flex items-center justify-center w-5 h-5 bg-blue-100 text-blue-600 rounded-full text-[10px] font-bold">
+                   {openPositions.length}
+                 </span>
+                 <span>Active Positions</span>
+                 {openPositions.reduce((acc, p) => acc + p.pnl, 0) >= 0 
+                    ? <span className="text-green-600 font-bold ml-1">+${openPositions.reduce((acc, p) => acc + p.pnl, 0).toFixed(2)}</span>
+                    : <span className="text-red-500 font-bold ml-1">-${Math.abs(openPositions.reduce((acc, p) => acc + p.pnl, 0)).toFixed(2)}</span>
+                 }
+               </div>
+               <svg 
+                 xmlns="http://www.w3.org/2000/svg" 
+                 width="14" 
+                 height="14" 
+                 viewBox="0 0 24 24" 
+                 fill="none" 
+                 stroke="currentColor" 
+                 strokeWidth="2" 
+                 strokeLinecap="round" 
+                 strokeLinejoin="round"
+                 className={`transition-transform duration-200 ${showPositions ? 'rotate-180' : ''}`}
+               >
+                 <polyline points="6 9 12 15 18 9"></polyline>
+               </svg>
+             </button>
+             
+             {showPositions && (
+                <div className="max-h-40 overflow-y-auto border-t border-gray-100">
+                   {openPositions.map((pos) => (
+                      <div key={pos.id} className="px-4 py-2 border-b border-gray-100 last:border-0 hover:bg-white text-xs flex justify-between items-center group">
+                         <div>
+                            <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                               <span className={`text-[10px] px-1 rounded uppercase ${pos.side === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                 {pos.side}
+                               </span>
+                               <span>{pos.symbol}</span>
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-0.5">
+                               Size: {pos.size} • Entry: {pos.entryPrice}
+                            </div>
+                         </div>
+                         <div className={`font-mono font-bold ${pos.pnl >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {pos.pnl >= 0 ? '+' : ''}{pos.pnl.toFixed(2)}
+                         </div>
+                      </div>
+                   ))}
+                </div>
+             )}
+          </div>
+        )}
+
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
           {messages.length === 0 && (
