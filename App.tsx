@@ -426,15 +426,10 @@ const Dashboard: React.FC = () => {
             </div>
           )}
 
-          {/* Autopilot Tab - 3-Column Layout part 1 & 2 (Console & Controls) */}
+          {/* Autopilot Tab - Updated for new Execution Panel */}
           {activeTab === 'autopilot' && (
             <div className="flex-1 min-h-0 h-full">
-               <AutopilotPanel 
-                  chartContext={marketContext} 
-                  brokerSessionId={brokerSessionId} 
-                  symbol={chartSymbol} 
-                  onOpenSettings={() => setIsSettingsModalOpen(true)} 
-               />
+               <AutopilotPanel />
             </div>
           )}
           

@@ -1,611 +1,489 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { fetchAgentInsights, AgentId } from '../services/agentApi';
-import { useAgentConfig } from '../context/AgentConfigContext';
-import AutopilotJournalTab from './AutopilotJournalTab';
+import React, { useMemo, useState } from 'react';
+import {
+  AutopilotMode,
+  AutopilotCommand,
+  AutopilotExecuteResponse,
+  BrokerSnapshot,
+  OpenTradeCommand,
+} from '../types';
+import { useAutopilotExecute, useBrokerSnapshot } from '../hooks/useAutopilot';
+
+type PanelTab = 'compose' | 'status';
 
 interface AutopilotPanelProps {
-  chartContext: string;
-  brokerSessionId: string | null;
-  symbol: string;
-  onOpenSettings?: () => void;
+  // Optional: if you later let an agent propose a command,
+  // you can pass it in here and it will appear as the "Proposed trade".
+  agentProposedCommand?: AutopilotCommand | null;
 }
 
-interface LogEntry {
-  id: string;
-  timestamp: string;
-  agentId: string;
-  message: string;
-  details?: any; // Structured data for expandable view
-  type: 'thought' | 'action' | 'error' | 'system';
-}
+const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand }) => {
+  const [mode, setMode] = useState<AutopilotMode>('confirm');
+  const [activeTab, setActiveTab] = useState<PanelTab>('compose');
 
-const PRESETS: Record<string, string> = {
-  SCALP: "Aggressive Scalping. Look for 1m/5m liquidity sweeps. Quick profits (1:1.5 RR). High frequency execution.",
-  SWING: "Conservative Swing. Only trade with H1/H4 structure. Wide stops, targets > 1:3 RR. Low frequency.",
-  DEFENSIVE: "Capital Preservation. Only A+ setups with clear invalidation. Reduce size by 50%. No counter-trend trades."
-};
-
-const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSessionId, symbol, onOpenSettings }) => {
-  // Core System State
-  const [isRunning, setIsRunning] = useState(false);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [mandate, setMandate] = useState<string>(PRESETS.SCALP);
-  const [inputCommand, setInputCommand] = useState("");
-  const [isListening, setIsListening] = useState(false);
-  
-  // Consuming Agent Configuration
-  const { agentConfigs } = useAgentConfig();
-  
-  // UI State for Logs
-  const [logFilter, setLogFilter] = useState<'ALL' | 'ACTION' | 'THOUGHT' | 'ERROR'>('ALL');
-  const [expandedLogIds, setExpandedLogIds] = useState<Set<string>>(new Set());
-
-  // Configuration State
-  const [activeAgents, setActiveAgents] = useState<Record<AgentId, boolean>>({
-    trend_master: true,
-    pattern_gpt: true,
-    quant_bot: true, 
-    journal_coach: false 
+  const [manualCommand, setManualCommand] = useState<AutopilotCommand | null>(() => {
+    // Default: simple US30 market buy template
+    const defaultOpen: OpenTradeCommand = {
+      type: 'open',
+      tradableInstrumentId: 0,
+      symbol: 'US30',
+      side: 'BUY',
+      qty: 0.1,
+      entryType: 'market',
+      price: undefined,
+      stopPrice: undefined,
+      slPrice: undefined,
+      tpPrice: undefined,
+      routeId: undefined,
+      clientOrderId: undefined,
+    };
+    return defaultOpen;
   });
 
-  // Loop & Ref State
-  const [nextTick, setNextTick] = useState<number>(0);
-  const isRunningRef = useRef(false);
-  const mandateRef = useRef(mandate);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
+  const { snapshot, loading: snapshotLoading, error: snapshotError } = useBrokerSnapshot(10_000);
+  const { execute, state } = useAutopilotExecute();
 
-  // Sync ref for the async loop
-  useEffect(() => {
-    mandateRef.current = mandate;
-  }, [mandate]);
+  const [pendingCommandSource, setPendingCommandSource] = useState<'manual' | 'agent'>('manual');
 
-  // Auto-scroll logs
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  const pendingCommand: AutopilotCommand | null = useMemo(() => {
+    if (pendingCommandSource === 'agent' && agentProposedCommand) {
+      return agentProposedCommand;
     }
-  }, [logs, logFilter, expandedLogIds]);
+    return manualCommand;
+  }, [pendingCommandSource, manualCommand, agentProposedCommand]);
 
-  // Voice Recognition Initialization
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRecognition) {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
-        recognition.lang = 'en-US';
-
-        recognition.onstart = () => setIsListening(true);
-        recognition.onend = () => setIsListening(false);
-        recognition.onerror = (event: any) => {
-          console.error("Speech Recognition Error:", event.error);
-          setIsListening(false);
-        };
-        
-        recognition.onresult = (event: any) => {
-          const transcript = event.results[0][0].transcript.toLowerCase();
-          handleVoiceCommand(transcript);
-        };
-
-        recognitionRef.current = recognition;
-      }
-    }
-  }, []);
-
-  const handleVoiceCommand = (text: string) => {
-    // 1. Check Presets
-    if (text.includes("scalp")) {
-        setPreset('SCALP', PRESETS.SCALP);
-        addLog('Operator', `Voice Command: Switch to SCALP`, 'system');
-        return;
-    }
-    if (text.includes("swing")) {
-        setPreset('SWING', PRESETS.SWING);
-        addLog('Operator', `Voice Command: Switch to SWING`, 'system');
-        return;
-    }
-    if (text.includes("defensive") || text.includes("preservation")) {
-        setPreset('DEFENSIVE', PRESETS.DEFENSIVE);
-        addLog('Operator', `Voice Command: Switch to DEFENSIVE`, 'system');
-        return;
-    }
-
-    // 2. Check System Toggle
-    if (text.includes("start") || text.includes("activate") || text.includes("initiate")) {
-        if (!isRunningRef.current) toggleRunning();
-        addLog('Operator', `Voice Command: START SYSTEM`, 'system');
-        return;
-    }
-    if (text.includes("stop") || text.includes("terminate") || text.includes("shutdown")) {
-        if (isRunningRef.current) toggleRunning();
-        addLog('Operator', `Voice Command: STOP SYSTEM`, 'system');
-        return;
-    }
-
-    // 3. Custom Mandate
-    let cleanText = text;
-    ["update mandate to", "set mandate to", "change to", "tell the ai to"].forEach(prefix => {
-        if (cleanText.startsWith(prefix)) {
-            cleanText = cleanText.replace(prefix, "").trim();
-        }
-    });
-    cleanText = cleanText.charAt(0).toUpperCase() + cleanText.slice(1);
-
-    setInputCommand(cleanText);
-    addLog('System', `Voice input captured: "${cleanText}"`, 'system');
+  const handleModeChange = (newMode: AutopilotMode) => {
+    setMode(newMode);
   };
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-        addLog('System', 'Voice input not supported in this browser.', 'error');
-        return;
-    }
-    if (isListening) {
-        recognitionRef.current.stop();
-    } else {
-        try {
-            recognitionRef.current.start();
-        } catch (e) {
-            console.error(e);
-        }
-    }
-  };
-
-  const addLog = (agentId: string, message: string, type: LogEntry['type'] = 'thought', details?: any) => {
-    setLogs(prev => [...prev, {
-      id: Math.random().toString(36).slice(2),
-      timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' }),
-      agentId,
-      message,
-      type,
-      details
-    }].slice(-300)); // Increase buffer
-  };
-
-  const handleCommandSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputCommand.trim()) return;
-
-    const cmd = inputCommand.trim();
-    setMandate(cmd);
-    addLog('Operator', `UPDATED ORDERS: "${cmd}"`, 'system');
-    setInputCommand("");
-  };
-
-  const toggleAgent = (id: AgentId) => {
-    setActiveAgents(prev => ({ ...prev, [id]: !prev[id] }));
-  };
-
-  const setPreset = (name: string, text: string) => {
-    setMandate(text);
-    addLog('System', `Mode switched to ${name}`, 'system');
-  };
-
-  const toggleLogDetails = (id: string) => {
-    setExpandedLogIds(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  // --- THE AUTOPILOT LOOP ---
-  useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
-    const tickRate = 15000; // 15 seconds per loop cycle
-
-    const runLoop = async () => {
-      if (!isRunningRef.current) return;
-
-      try {
-        const activeIds = Object.entries(activeAgents)
-          .filter(([_, active]) => active)
-          .map(([id]) => id as AgentId);
-
-        if (activeIds.length === 0) {
-           addLog('System', 'No agents active. Pausing loop.', 'error');
-           setIsRunning(false);
-           isRunningRef.current = false;
-           return;
-        }
-
-        addLog('System', `Ping... Analyzing ${symbol} context...`, 'system');
-
-        const currentMandate = mandateRef.current;
-        const prompt = `
-[AUTOPILOT SYSTEM TICK]
-TARGET ASSET: ${symbol}
-
-*** OPERATIONAL MANDATE (STRICT) ***
-"${currentMandate}"
-************************************
-
-INSTRUCTIONS:
-1. TrendMaster: Analyze structure/bias vs the Mandate.
-2. PatternGPT: Find entry zones that align with Mandate.
-3. QuantBot: EXECUTE ONLY IF:
-   - Setup matches the Mandate.
-   - Confidence > 80%.
-   - Use 'execute_order' tool.
-   
-If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific condition]."
-        `.trim();
-
-        // Pass Agent Configuration overrides to the API
-        const insights = await fetchAgentInsights({
-          agentIds: activeIds,
-          userMessage: prompt,
-          chartContext: chartContext,
-          accountId: brokerSessionId,
-          journalMode: 'live',
-          agentOverrides: agentConfigs
-        });
-
-        // Process results with DETAILED logging
-        insights.forEach(insight => {
-           if (insight.error) {
-             addLog(insight.agentName, insight.error, 'error');
-           } else {
-             if (insight.text) {
-               addLog(insight.agentName, insight.text, 'thought');
-             }
-             if (insight.toolCalls && insight.toolCalls.length > 0) {
-               insight.toolCalls.forEach(tc => {
-                 const isExec = tc.toolName === 'execute_order';
-                 const isJournal = tc.toolName === 'append_journal_entry';
-                 
-                 let msg = `Tool Call: ${tc.toolName}`;
-                 if (isExec) msg = `EXECUTING: ${tc.args.side?.toUpperCase()} ${tc.args.size} ${tc.args.symbol}`;
-                 if (isJournal) msg = `Journaling: ${tc.args.title}`;
-
-                 // Capture full details
-                 addLog(
-                    insight.agentName, 
-                    msg, 
-                    'action', 
-                    { args: tc.args, result: tc.result }
-                 );
-               });
-             }
-           }
-        });
-
-      } catch (e: any) {
-        addLog('System', `Loop Critical Failure: ${e.message}`, 'error');
-      }
-
-      // Schedule next tick
-      if (isRunningRef.current) {
-        setNextTick(Date.now() + tickRate);
-        timeoutId = setTimeout(runLoop, tickRate);
-      }
+  const handleManualNumberChange = (field: keyof OpenTradeCommand, value: string) => {
+    if (!manualCommand || manualCommand.type !== 'open') return;
+    const n = value === '' ? NaN : Number(value);
+    const updated: OpenTradeCommand = {
+      ...manualCommand,
+      [field]: Number.isFinite(n) ? n : undefined,
     };
-
-    if (isRunning) {
-      addLog('System', 'Autopilot Sequence Initiated.', 'system');
-      addLog('System', `Mandate: "${mandate}"`, 'system');
-      isRunningRef.current = true;
-      setNextTick(Date.now() + tickRate);
-      runLoop();
-    } else {
-      isRunningRef.current = false;
-      addLog('System', 'Autopilot Disengaged.', 'system');
-    }
-
-    return () => {
-      clearTimeout(timeoutId);
-    };
-  }, [isRunning, chartContext, brokerSessionId, symbol, activeAgents, agentConfigs]);
-
-  const toggleRunning = () => {
-    setIsRunning(prev => !prev);
+    setManualCommand(updated);
   };
 
-  const filteredLogs = logs.filter(l => {
-     if (logFilter === 'ALL') return true;
-     if (logFilter === 'ACTION') return l.type === 'action';
-     if (logFilter === 'THOUGHT') return l.type === 'thought';
-     if (logFilter === 'ERROR') return l.type === 'error';
-     return true;
-  });
+  const handleManualStringChange = (field: keyof OpenTradeCommand, value: string) => {
+    if (!manualCommand || manualCommand.type !== 'open') return;
+    const updated: OpenTradeCommand = {
+      ...manualCommand,
+      [field]: value,
+    };
+    setManualCommand(updated);
+  };
+
+  const handleExecute = async () => {
+    if (!pendingCommand) return;
+
+    await execute(mode, pendingCommand, pendingCommandSource);
+    setActiveTab('status');
+  };
+
+  const handleApproveFromConfirm = async () => {
+    if (!pendingCommand) return;
+    await execute('auto', pendingCommand, `${pendingCommandSource}-approved`);
+    setActiveTab('status');
+  };
+
+  const last: AutopilotExecuteResponse | null = state.lastResponse;
 
   return (
-    <div className="flex flex-col h-full bg-[#050505] text-gray-300 font-mono text-xs overflow-hidden">
-      
-      {/* 1. MISSION STATUS HEADER */}
-      <div className="h-12 border-b border-[#2a2e39] bg-[#131722] flex items-center justify-between px-4 shrink-0">
-         <div className="flex items-center gap-4">
-            <div className={`flex items-center gap-2 px-3 py-1 rounded border transition-colors duration-300 ${isRunning ? 'bg-green-500/10 border-green-500/50 text-green-400' : 'bg-red-500/10 border-red-500/50 text-red-400'}`}>
-                <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className="font-bold tracking-wider">{isRunning ? 'SYSTEM ACTIVE' : 'SYSTEM OFFLINE'}</span>
-            </div>
-            <div className="hidden md:flex items-center gap-2 text-gray-500">
-               <span className="text-[10px] uppercase">Target:</span>
-               <span className="text-gray-300 font-bold">{symbol}</span>
-            </div>
-         </div>
-         
-         <div className="flex items-center gap-2">
-            {!brokerSessionId && (
-               <span className="text-[9px] text-yellow-500 bg-yellow-500/10 px-2 py-0.5 rounded border border-yellow-500/20">
-                 SIMULATION MODE
-               </span>
-            )}
-            <button
-              onClick={() => setLogs([])}
-              className="p-1.5 text-gray-500 hover:text-white transition-colors"
-              title="Clear Terminal"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-            </button>
-         </div>
+    <div className="flex flex-col gap-4 h-full bg-[#050509] text-gray-300 font-sans text-xs border-l border-gray-800">
+      {/* Header */}
+      <div className="flex justify-between items-center gap-4 px-4 py-3 border-b border-gray-800 bg-[#131722] shrink-0">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-100 m-0">Autopilot Control</h2>
+          <p className="text-[10px] text-gray-500 m-0 mt-0.5">
+            Manage execution logic: discuss, confirm, or auto-fire.
+          </p>
+        </div>
+
+        {/* Mode toggle */}
+        <div className="flex items-center gap-1 p-1 rounded-full bg-black/40 border border-gray-700">
+          <button
+            onClick={() => handleModeChange('confirm')}
+            className={`px-3 py-1 rounded-full text-[10px] font-medium transition-colors ${
+              mode === 'confirm' ? 'bg-[#2a2e39] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            Confirm
+          </button>
+          <button
+            onClick={() => handleModeChange('auto')}
+            className={`px-3 py-1 rounded-full text-[10px] font-medium transition-colors ${
+              mode === 'auto' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            Auto
+          </button>
+        </div>
       </div>
 
-      <div className="flex-1 flex min-h-0">
-        
-        {/* 2. LEFT PANE: TERMINAL OUTPUT */}
-        <div className="flex-1 flex flex-col min-w-0 bg-[#0a0c10] relative border-r border-[#2a2e39]">
-           {/* Scanline / CRT Effect Overlay */}
-           <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.03),rgba(0,255,0,0.01),rgba(0,0,255,0.03))] z-0 bg-[length:100%_4px,6px_100%]"></div>
-           
-           {/* Log Filter Toolbar */}
-           <div className="flex items-center gap-1 p-2 border-b border-[#2a2e39] bg-[#0d1117] z-10">
-              {(['ALL', 'ACTION', 'THOUGHT', 'ERROR'] as const).map(f => (
-                <button
-                   key={f}
-                   onClick={() => setLogFilter(f)}
-                   className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase transition-colors ${
-                      logFilter === f 
-                        ? 'bg-[#2962ff] text-white' 
-                        : 'bg-[#1c2128] text-gray-500 hover:text-gray-300'
-                   }`}
-                >
-                   {f}
-                </button>
-              ))}
-              <div className="flex-1"></div>
-              <span className="text-[9px] text-gray-600 font-mono">
-                 {logs.length} events
-              </span>
-           </div>
-
-           {/* LOG FEED */}
-           <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 scrollbar-thin">
-              {filteredLogs.length === 0 && (
-                 <div className="h-full flex flex-col items-center justify-center text-gray-600 opacity-30 space-y-2">
-                    <svg className="w-16 h-16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    <p className="tracking-widest uppercase">Awaiting Data...</p>
-                 </div>
-              )}
-              
-              {filteredLogs.map((log) => (
-                <div key={log.id} className="animate-fade-in group">
-                   <div className="flex gap-3 p-1 -mx-1 rounded hover:bg-[#131722] transition-colors items-start">
-                     <div className="w-16 shrink-0 text-[9px] text-gray-600 font-mono pt-0.5 opacity-70">{log.timestamp}</div>
-                     <div className="flex-1 min-w-0">
-                        {/* Header Line */}
-                        <div className="flex items-center gap-2 mb-0.5">
-                           <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                              log.agentId === 'System' || log.agentId === 'Operator' ? 'text-gray-400' :
-                              log.agentId === 'QuantBot' ? 'text-blue-400' :
-                              log.agentId === 'TrendMaster AI' ? 'text-purple-400' :
-                              log.agentId === 'Broker' ? 'text-yellow-400' :
-                              'text-emerald-400'
-                           }`}>
-                             {log.agentId}
-                           </span>
-                           
-                           {log.type === 'action' && <span className="bg-green-500/20 text-green-400 border border-green-500/40 text-[9px] font-bold px-1 rounded-sm">EXEC</span>}
-                           {log.type === 'error' && <span className="bg-red-500/20 text-red-400 border border-red-500/40 text-[9px] font-bold px-1 rounded-sm">ERR</span>}
-                           {log.type === 'system' && <span className="text-gray-500 border border-gray-700 text-[9px] px-1 rounded-sm">INFO</span>}
-                        </div>
-                        
-                        {/* Message Body */}
-                        <div className={`leading-relaxed break-words text-[11px] font-mono ${
-                          log.type === 'action' ? 'text-green-300 font-bold' : 
-                          log.type === 'error' ? 'text-red-300' :
-                          log.type === 'system' ? 'text-gray-500 italic' :
-                          'text-gray-300'
-                        }`}>
-                          {log.message}
-                        </div>
-
-                        {/* Expandable Details */}
-                        {log.details && (
-                           <div className="mt-1">
-                              <button 
-                                onClick={() => toggleLogDetails(log.id)}
-                                className="flex items-center gap-1 text-[9px] text-gray-500 hover:text-white transition-colors"
-                              >
-                                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${expandedLogIds.has(log.id) ? 'rotate-90' : ''}`}><polyline points="9 18 15 12 9 6"></polyline></svg>
-                                 {expandedLogIds.has(log.id) ? 'Hide Details' : 'View Details'}
-                              </button>
-                              
-                              {expandedLogIds.has(log.id) && (
-                                <div className="mt-1 bg-[#050505] border border-[#2a2e39] rounded p-2 overflow-x-auto">
-                                   <pre className="text-[9px] text-gray-400 font-mono">
-                                      {JSON.stringify(log.details, null, 2)}
-                                   </pre>
-                                </div>
-                              )}
-                           </div>
-                        )}
-                     </div>
-                   </div>
+      {/* Top row: Account snapshot summary */}
+      <div className="px-4">
+        <div className="flex gap-4 p-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] shadow-sm">
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Account</div>
+            {snapshotLoading && <div className="text-gray-500 italic">Loading snapshot...</div>}
+            {snapshotError && <div className="text-red-400">Error: {snapshotError}</div>}
+            {snapshot && (
+              <div className="space-y-0.5">
+                <div className="font-bold text-white text-xs">
+                  {snapshot.broker} #{snapshot.accountId} <span className="text-gray-500 font-normal">({snapshot.currency})</span>
                 </div>
-              ))}
-              <div ref={messagesEndRef} />
-           </div>
+                <div>
+                  Bal: <span className="text-gray-300">{snapshot.balance.toFixed(2)}</span> · Eq:{' '}
+                  <span className="text-white font-semibold">{snapshot.equity.toFixed(2)}</span>
+                </div>
+                <div className="flex gap-2">
+                  <span>
+                    Day: <span className={snapshot.dailyPnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
+                      {snapshot.dailyPnl >= 0 ? '+' : ''}{snapshot.dailyPnl.toFixed(2)}
+                    </span>
+                  </span>
+                  <span>
+                    Open: <span className={snapshot.netUnrealizedPnl >= 0 ? 'text-[#089981]' : 'text-[#f23645]'}>
+                      {snapshot.netUnrealizedPnl >= 0 ? '+' : ''}{snapshot.netUnrealizedPnl.toFixed(2)}
+                    </span>
+                  </span>
+                </div>
+                <div className="text-[10px] text-gray-500">
+                  Margin: {snapshot.marginUsed.toFixed(2)} used / {snapshot.marginAvailable.toFixed(2)} free
+                </div>
+              </div>
+            )}
+          </div>
 
-           {/* Command Input Area */}
-           <div className="p-2 border-t border-[#2a2e39] bg-[#0d1117] z-20">
-              <form onSubmit={handleCommandSubmit} className="flex gap-2 items-center bg-[#1c2128] border border-[#30363d] rounded p-1 pl-3 focus-within:border-[#2962ff] transition-colors relative shadow-inner">
-                  <span className="text-green-500 font-bold animate-pulse">{`>`}</span>
-                  <input 
-                    type="text" 
-                    value={inputCommand}
-                    onChange={(e) => setInputCommand(e.target.value)}
-                    placeholder="Enter command or speak..."
-                    className="flex-1 bg-transparent border-none focus:ring-0 text-gray-200 placeholder-gray-600 h-8 text-xs font-mono"
-                  />
-                  
-                  {/* Voice Button */}
-                  <button 
-                    type="button"
-                    onClick={toggleListening}
-                    className={`p-1.5 rounded transition-colors mr-1 ${
-                        isListening 
-                          ? 'text-red-500 bg-red-500/10 animate-pulse' 
-                          : 'text-gray-500 hover:text-white hover:bg-white/10'
-                    }`}
-                    title={isListening ? "Listening..." : "Voice Command"}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                  </button>
+          <div className="w-px bg-gray-700 mx-2" />
 
-                  <button 
-                    type="submit"
-                    className="bg-[#2962ff] hover:bg-[#1e53e5] text-white px-3 py-1 rounded text-[10px] font-bold uppercase tracking-wide transition-colors"
-                  >
-                    Send
-                  </button>
-              </form>
-              {isListening && (
-                  <div className="absolute bottom-12 left-4 text-[10px] text-green-400 bg-black/90 px-3 py-2 rounded border border-green-500/30 animate-fade-in flex items-center gap-2 shadow-xl backdrop-blur-sm">
-                     <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                     Listening... Try "Switch to Scalp" or "Stop System"
+          {/* open positions count */}
+          <div className="min-w-[100px] flex flex-col justify-center">
+            <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Active Positions</div>
+            {snapshot && snapshot.openPositions.length > 0 ? (
+              <>
+                <div className="text-3xl font-bold text-white leading-none">
+                  {snapshot.openPositions.length}
+                </div>
+                <div className="text-[10px] text-gray-500 mt-1">
+                  Risk: {snapshot.openRisk.toFixed(2)}
+                </div>
+              </>
+            ) : (
+              <div className="text-gray-500 italic text-[11px]">None</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Tab selector */}
+      <div className="flex gap-4 border-b border-gray-800 px-4 mt-2">
+        <button
+          onClick={() => setActiveTab('compose')}
+          className={`pb-2 text-[11px] font-medium transition-colors border-b-2 ${
+            activeTab === 'compose' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          Compose Trade
+        </button>
+        <button
+          onClick={() => setActiveTab('status')}
+          className={`pb-2 text-[11px] font-medium transition-colors border-b-2 ${
+            activeTab === 'status' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          Last Decision
+        </button>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col gap-4 overflow-auto px-4 pb-4">
+        {activeTab === 'compose' && (
+          <div className="flex flex-col md:flex-row gap-4 h-full">
+            {/* Left: manual composer */}
+            <div className="flex-1 p-3 rounded-lg border border-[#2a2e39] bg-[#161a25]">
+              <div className="flex justify-between items-center mb-3">
+                <div>
+                  <div className="font-semibold text-gray-200">Manual Trade Template</div>
+                  <div className="text-[10px] text-gray-500">
+                    Define the order parameters for the Execution Guard.
                   </div>
+                </div>
+                <select
+                  value={pendingCommandSource}
+                  onChange={(e) => setPendingCommandSource(e.target.value as any)}
+                  className="bg-[#101018] border border-gray-700 text-gray-300 text-[10px] rounded px-2 py-1 focus:outline-none focus:border-[#2962ff]"
+                >
+                  <option value="manual">Manual Entry</option>
+                  <option value="agent" disabled={!agentProposedCommand}>
+                    Agent Proposal
+                  </option>
+                </select>
+              </div>
+
+              {manualCommand?.type === 'open' ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Symbol</label>
+                    <input
+                      value={manualCommand.symbol ?? ''}
+                      onChange={(e) =>
+                        handleManualStringChange('symbol', e.target.value.toUpperCase())
+                      }
+                      className="w-full bg-[#101018] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Instrument ID</label>
+                    <input
+                      type="number"
+                      value={manualCommand.tradableInstrumentId || ''}
+                      onChange={(e) =>
+                        handleManualNumberChange('tradableInstrumentId', e.target.value)
+                      }
+                      className="w-full bg-[#101018] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Side</label>
+                    <select
+                      value={manualCommand.side}
+                      onChange={(e) =>
+                        handleManualStringChange('side', e.target.value as any)
+                      }
+                      className="w-full bg-[#101018] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"
+                    >
+                      <option value="BUY">BUY</option>
+                      <option value="SELL">SELL</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Qty (lots)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={manualCommand.qty || ''}
+                      onChange={(e) => handleManualNumberChange('qty', e.target.value)}
+                      className="w-full bg-[#101018] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Entry Type</label>
+                    <select
+                      value={manualCommand.entryType}
+                      onChange={(e) =>
+                        handleManualStringChange('entryType', e.target.value as any)
+                      }
+                      className="w-full bg-[#101018] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"
+                    >
+                      <option value="market">Market</option>
+                      <option value="limit">Limit</option>
+                      <option value="stop">Stop</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Entry Price (Optional)</label>
+                    <input
+                      type="number"
+                      value={manualCommand.price ?? ''}
+                      onChange={(e) => handleManualNumberChange('price', e.target.value)}
+                      className="w-full bg-[#101018] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Stop Loss</label>
+                    <input
+                      type="number"
+                      value={manualCommand.slPrice ?? ''}
+                      onChange={(e) => handleManualNumberChange('slPrice', e.target.value)}
+                      className="w-full bg-[#101018] border border-red-900/50 rounded px-2 py-1.5 text-xs text-red-200 focus:outline-none focus:border-red-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-gray-500 block mb-1">Take Profit</label>
+                    <input
+                      type="number"
+                      value={manualCommand.tpPrice ?? ''}
+                      onChange={(e) => handleManualNumberChange('tpPrice', e.target.value)}
+                      className="w-full bg-[#101018] border border-green-900/50 rounded px-2 py-1.5 text-xs text-green-200 focus:outline-none focus:border-green-500"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="text-gray-500 italic p-4 text-center">Form logic for this command type not implemented.</div>
               )}
-           </div>
-        </div>
 
-        {/* 3. RIGHT PANE: COMMAND DECK (Including Journal) */}
-        <div className="w-[400px] bg-[#131722] flex flex-col shrink-0 border-l border-[#2a2e39] overflow-hidden z-20">
-           
-           {/* Top Half: Controls */}
-           <div className="flex-1 overflow-y-auto min-h-0">
-               {/* Active Mandate Panel */}
-               <div className="p-4 border-b border-[#2a2e39]">
-                  <div className="flex items-center justify-between mb-2">
-                     <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Active Mandate</div>
-                     <div className="text-[9px] text-[#2962ff] cursor-pointer hover:underline" onClick={() => setMandate(PRESETS.SCALP)}>Reset</div>
-                  </div>
-                  <div className="bg-[#0a0c10] border border-[#2a2e39] p-3 rounded text-green-400 font-mono text-[10px] leading-relaxed shadow-inner min-h-[60px]">
-                     {mandate}
-                  </div>
-               </div>
+              <div className="mt-4 flex justify-end gap-2 border-t border-gray-700 pt-3">
+                <button
+                  disabled={!pendingCommand || state.executing}
+                  onClick={handleExecute}
+                  className={`px-4 py-2 rounded text-xs font-bold uppercase tracking-wide transition-colors ${
+                     state.executing 
+                        ? 'bg-gray-700 text-gray-400 cursor-wait'
+                        : mode === 'confirm'
+                           ? 'bg-[#2962ff] hover:bg-[#1e53e5] text-white shadow-lg shadow-blue-500/20'
+                           : 'bg-red-600 hover:bg-red-500 text-white shadow-lg shadow-red-500/20'
+                  }`}
+                >
+                  {state.executing ? 'Processing...' : mode === 'confirm' ? 'Submit Proposal' : 'Execute Autopilot'}
+                </button>
+              </div>
+            </div>
 
-               {/* Presets Grid */}
-               <div className="p-4 border-b border-[#2a2e39]">
-                  <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-3">Strategy Presets</div>
-                  <div className="space-y-2">
-                     <button 
-                       onClick={() => setPreset('SCALP', PRESETS.SCALP)}
-                       className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
-                     >
-                        <div className="text-blue-400 font-bold text-[10px] group-hover:text-blue-300 flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                            Scalp Mode
-                        </div>
-                        <div className="text-[9px] text-gray-500 truncate mt-0.5">Aggressive, 1m/5m sweeps</div>
-                     </button>
-                     <button 
-                       onClick={() => setPreset('SWING', PRESETS.SWING)}
-                       className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
-                     >
-                        <div className="text-purple-400 font-bold text-[10px] group-hover:text-purple-300 flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
-                            Swing Mode
-                        </div>
-                        <div className="text-[9px] text-gray-500 truncate mt-0.5">H1/H4 structure only</div>
-                     </button>
-                     <button 
-                       onClick={() => setPreset('DEFENSIVE', PRESETS.DEFENSIVE)}
-                       className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
-                     >
-                        <div className="text-orange-400 font-bold text-[10px] group-hover:text-orange-300 flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
-                            Defensive
-                        </div>
-                        <div className="text-[9px] text-gray-500 truncate mt-0.5">Half size, A+ only</div>
-                     </button>
-                  </div>
-               </div>
+            {/* Right: proposed command preview */}
+            <div className="w-full md:w-80 p-3 rounded-lg border border-[#2a2e39] bg-[#161a25] flex flex-col">
+              <div className="mb-2">
+                <div className="font-semibold text-gray-200">Pending Payload</div>
+                <div className="text-[10px] text-gray-500">
+                  JSON payload to <code>/api/autopilot/execute</code>
+                </div>
+              </div>
+              
+              <div className="flex-1 bg-black/40 rounded border border-gray-800 p-2 overflow-auto mb-3 custom-scrollbar">
+                {pendingCommand ? (
+                  <pre className="text-[10px] text-green-400 font-mono whitespace-pre-wrap break-all">
+                    {JSON.stringify(pendingCommand, null, 2)}
+                  </pre>
+                ) : (
+                  <div className="text-gray-600 italic text-[11px] text-center mt-10">No active command.</div>
+                )}
+              </div>
 
-               {/* Agent Toggle Grid */}
-               <div className="p-4 border-b border-[#2a2e39]">
-                  <div className="flex items-center justify-between mb-3">
-                     <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Squad Status</div>
-                     {onOpenSettings && (
-                       <button 
-                         onClick={onOpenSettings} 
-                         className="text-[9px] text-[#2962ff] hover:text-white flex items-center gap-1 transition-colors"
-                       >
-                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0-.33 1.82l-.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                         Configure
-                       </button>
-                     )}
-                  </div>
-                  <div className="space-y-2">
-                     {Object.entries(activeAgents).map(([id, active]) => (
-                        <div key={id} className="flex items-center justify-between bg-[#1e222d] p-2 rounded border border-[#2a2e39]">
-                           <div className="flex items-center gap-2">
-                              <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-green-500' : 'bg-gray-600'}`}></div>
-                              <span className={`text-[10px] font-bold uppercase ${active ? 'text-gray-200' : 'text-gray-500'}`}>
-                                 {id.replace('_', ' ')}
-                              </span>
-                           </div>
-                           <button 
-                             onClick={() => toggleAgent(id as AgentId)}
-                             className={`text-[9px] px-2 py-0.5 rounded border transition-colors ${
-                                active 
-                                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 hover:bg-blue-500/20' 
-                                  : 'bg-gray-700/30 text-gray-500 border-gray-600 hover:text-gray-300'
-                             }`}
-                           >
-                             {active ? 'ON' : 'OFF'}
-                           </button>
-                        </div>
-                     ))}
-                  </div>
-                  
-                  <div className="mt-6 bg-red-900/10 border border-red-500/20 p-3 rounded">
-                      <h4 className="text-red-400 font-bold text-[10px] mb-1 flex items-center gap-1">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                        RISK OVERRIDE
-                      </h4>
-                      <p className="text-[9px] text-gray-500 leading-relaxed">
-                        QuantBot execution authority is active. Orders execute automatically if confidence {'>'} 80%.
-                      </p>
-                  </div>
-               </div>
+              {mode === 'confirm' && last && !last.result.executed && last.result.allowedByGuard && (
+                <button
+                  onClick={handleApproveFromConfirm}
+                  className="w-full py-2.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase tracking-wide shadow-lg shadow-emerald-500/20 transition-colors"
+                >
+                  Approve & Execute
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
-               {/* Journal Integration (Flexible Height) */}
-               <div className="flex-1 flex flex-col min-h-[150px]">
-                  <AutopilotJournalTab />
-               </div>
-           </div>
+        {activeTab === 'status' && (
+          <div className="p-4 rounded-lg border border-[#2a2e39] bg-[#161a25] flex-1 overflow-auto">
+            <div className="flex justify-between items-center mb-4 border-b border-gray-800 pb-3">
+              <div>
+                <div className="font-semibold text-gray-200 text-sm">Last Decision</div>
+                <div className="text-[11px] text-gray-500">
+                  Guardrails outcome for the most recent request.
+                </div>
+              </div>
+              {last && (
+                 <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase border ${
+                    last.result.executed 
+                       ? 'bg-green-500/10 border-green-500/30 text-green-400' 
+                       : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                 }`}>
+                    {last.result.executed ? 'Executed' : 'Pending / Blocked'}
+                 </span>
+              )}
+            </div>
 
-           {/* Master Toggle (Fixed at Bottom) */}
-           <div className="p-4 bg-[#0a0c10] border-t border-[#2a2e39] shrink-0">
-              <button
-                onClick={toggleRunning}
-                className={`w-full py-3 rounded font-bold tracking-wider text-xs transition-all shadow-lg flex items-center justify-center gap-2 ${
-                  isRunning 
-                    ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/20' 
-                    : 'bg-green-600 hover:bg-green-500 text-white shadow-green-600/20'
-                }`}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-                {isRunning ? 'TERMINATE LOOP' : 'INITIATE AUTOPILOT'}
-              </button>
-           </div>
+            {!last ? (
+              <div className="flex flex-col items-center justify-center h-40 text-gray-500">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="opacity-50 mb-2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                 <span className="text-[11px]">No recent execution attempts.</span>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-black/20 p-3 rounded border border-gray-800">
+                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-2">Execution Status</div>
+                    <div className="space-y-1 text-xs">
+                       <div className="flex justify-between">
+                          <span className="text-gray-400">Mode:</span>
+                          <span className="text-white font-mono">{last.mode === 'auto' ? 'AUTO' : 'CONFIRM'}</span>
+                       </div>
+                       <div className="flex justify-between">
+                          <span className="text-gray-400">Executed:</span>
+                          <span className={last.result.executed ? 'text-green-400 font-bold' : 'text-yellow-400 font-bold'}>
+                             {last.result.executed ? 'YES' : 'NO'}
+                          </span>
+                       </div>
+                       <div className="flex justify-between">
+                          <span className="text-gray-400">Confirmation Required:</span>
+                          <span className="text-white">{last.result.requiresConfirmation ? 'YES' : 'NO'}</span>
+                       </div>
+                    </div>
+                  </div>
 
-        </div>
+                  <div className="bg-black/20 p-3 rounded border border-gray-800">
+                    <div className="text-[10px] text-gray-500 uppercase font-bold mb-2">Guardrails</div>
+                    <div className="space-y-1 text-xs">
+                       <div className="flex justify-between">
+                          <span className="text-gray-400">Risk Allowed:</span>
+                          <span className={last.result.allowedByGuard ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
+                             {last.result.allowedByGuard ? 'YES' : 'NO'}
+                          </span>
+                       </div>
+                       <div className="flex justify-between">
+                          <span className="text-gray-400">Hard Blocked:</span>
+                          <span className={last.result.hardBlocked ? 'text-red-400 font-bold' : 'text-gray-500'}>
+                             {last.result.hardBlocked ? 'YES' : 'NO'}
+                          </span>
+                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                {last.result.reasons.length > 0 && (
+                  <div className="bg-red-500/5 border border-red-900/30 rounded p-3">
+                    <div className="text-red-400 text-xs font-bold mb-2 flex items-center gap-2">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                       Block Reasons
+                    </div>
+                    <ul className="list-disc list-inside text-[11px] text-red-200 space-y-1">
+                      {last.result.reasons.map((r, idx) => (
+                        <li key={idx}>{r}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {last.result.warnings.length > 0 && (
+                  <div className="bg-yellow-500/5 border border-yellow-900/30 rounded p-3">
+                    <div className="text-yellow-400 text-xs font-bold mb-2 flex items-center gap-2">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                       Warnings
+                    </div>
+                    <ul className="list-disc list-inside text-[11px] text-yellow-200 space-y-1">
+                      {last.result.warnings.map((w, idx) => (
+                        <li key={idx}>{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {last.result.guardMetrics && (
+                  <div className="mt-4">
+                    <details className="group">
+                      <summary className="cursor-pointer text-[10px] text-gray-500 uppercase font-bold hover:text-white flex items-center gap-2">
+                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="transition-transform group-open:rotate-90"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                         Raw Guard Metrics
+                      </summary>
+                      <div className="mt-2 bg-black/40 p-3 rounded border border-gray-800">
+                        <pre className="text-[10px] text-gray-400 font-mono whitespace-pre-wrap">
+                          {JSON.stringify(last.result.guardMetrics, null, 2)}
+                        </pre>
+                      </div>
+                    </details>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -350,7 +350,7 @@ export interface AnalystHistoryItem {
 // Trading Session & Agent Types
 // ===============================
 
-export type AutopilotMode = 'off' | 'advisor' | 'semi' | 'full';
+export type AutopilotMode = 'off' | 'advisor' | 'semi' | 'full' | 'confirm' | 'auto'; // Added confirm/auto for new execution panel
 
 export type TradingEnvironment = 'sim' | 'live';
 
@@ -550,4 +550,94 @@ export interface MarketSnapshot {
 
   trendSummary?: string;
   volatilitySummary?: string;
+}
+
+// -----------------------------------------
+// Autopilot / Execution Types
+// -----------------------------------------
+
+export type TradeCommandType = 'open' | 'close' | 'modify';
+
+export interface OpenTradeCommand {
+  type: 'open';
+  tradableInstrumentId: number;
+  symbol?: string;
+  side: 'BUY' | 'SELL';
+  qty: number;
+  entryType: 'market' | 'limit' | 'stop';
+  price?: number;      // entry price (limit/market approx)
+  stopPrice?: number;  // for stop orders
+  slPrice?: number;
+  tpPrice?: number;
+  routeId?: number | string;
+  clientOrderId?: string;
+}
+
+export interface CloseTradeCommand {
+  type: 'close';
+  positionId: string | number;
+  qty?: number; // 0 or omitted = full close
+}
+
+export interface ModifyTradeCommand {
+  type: 'modify';
+  positionId: string | number;
+  slPrice?: number | null;
+  tpPrice?: number | null;
+}
+
+export type AutopilotCommand =
+  | OpenTradeCommand
+  | CloseTradeCommand
+  | ModifyTradeCommand;
+
+export interface SnapshotPosition {
+  id: string;
+  instrumentId: number | null;
+  symbol: string | null;
+  side: string; // "LONG"/"SHORT"
+  size: number;
+  entryPrice: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  unrealizedPnl: number;
+  raw?: any;
+}
+
+export interface BrokerSnapshot {
+  broker: string;
+  accountId: string;
+  currency: string;
+  balance: number;
+  equity: number;
+  marginUsed: number;
+  marginAvailable: number;
+  marginLevel: number | null;
+  dailyPnl: number;
+  dailyDrawdown: number;
+  netUnrealizedPnl: number;
+  openRisk: number;
+  openPositions: SnapshotPosition[];
+  rawState?: any;
+  updatedAt: string;
+}
+
+export interface AutopilotExecuteResult {
+  mode: AutopilotMode;
+  source: string;
+  executed: boolean;
+  requiresConfirmation: boolean;
+  allowedByGuard: boolean;
+  hardBlocked: boolean;
+  reasons: string[];
+  warnings: string[];
+  guardMetrics: Record<string, any>;
+  brokerSnapshot: BrokerSnapshot | null;
+  brokerResult: any;
+}
+
+export interface AutopilotExecuteResponse {
+  ok: boolean;
+  mode: AutopilotMode;
+  result: AutopilotExecuteResult;
 }
