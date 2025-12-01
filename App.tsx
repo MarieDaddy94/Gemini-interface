@@ -1,4 +1,5 @@
 
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -9,10 +10,12 @@ import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
 import AutopilotPanel from './components/AutopilotPanel';
+import RiskAutopilotPanel from './components/RiskAutopilotPanel';
 import AccessGate from './components/AccessGate';
 import { JournalProvider, useJournal } from './context/JournalContext';
 import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
 import { AgentConfigProvider } from './context/AgentConfigContext';
+import { TradingSessionProvider } from './context/TradingSessionContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
@@ -35,7 +38,7 @@ import {
 } from './symbolMap';
 import { fetchJournalEntries } from './services/journalService';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot';
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'risk';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -74,6 +77,7 @@ const Dashboard: React.FC = () => {
   const tabs: { id: MainTab; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
     { id: 'autopilot', label: 'Autopilot' },
+    { id: 'risk', label: 'Risk Desk' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
@@ -371,7 +375,7 @@ const Dashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-3">
             <button onClick={() => setIsSettingsModalOpen(true)} className="text-gray-400 hover:text-white transition-colors" title="Settings & API Keys">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 0 2.83 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-1"></div>
             {brokerSessionId ? (
@@ -429,6 +433,7 @@ const Dashboard: React.FC = () => {
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
           {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} /></div>}
+          {activeTab === 'risk' && <div className="flex-1 min-h-0 flex"><div className="w-full max-w-md border-r border-[#2a2e39]"><RiskAutopilotPanel /></div><div className="flex-1 bg-[#131722] flex items-center justify-center text-gray-600 text-sm select-none">Risk Simulation Environment</div></div>}
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {activeTab === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
@@ -457,12 +462,14 @@ const App: React.FC = () => {
   return (
     <AccessGate>
       <AgentConfigProvider>
-        <JournalProvider>
-          <TradeEventsProvider>
-            <TradeEventsToJournal />
-            <Dashboard />
-          </TradeEventsProvider>
-        </JournalProvider>
+        <TradingSessionProvider>
+          <JournalProvider>
+            <TradeEventsProvider>
+              <TradeEventsToJournal />
+              <Dashboard />
+            </TradeEventsProvider>
+          </JournalProvider>
+        </TradingSessionProvider>
       </AgentConfigProvider>
     </AccessGate>
   );
