@@ -90,7 +90,8 @@ async function handleAiRoute(reqBody, sessions, journals) {
     toolCalls: result.toolResults.map(tr => ({
         id: 'completed-tool',
         name: tr.toolName,
-        arguments: tr.args
+        arguments: tr.args,
+        result: tr.result // Pass result back to UI
     })),
     metadata: {
       sentiment: 'neutral'

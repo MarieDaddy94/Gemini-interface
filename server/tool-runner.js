@@ -91,6 +91,7 @@ function createRuntimeContext(sessions, journals, reqContext) {
         console.log(`[Autopilot] Executed ${side} ${size} ${symbol} @ ${entryPrice}`);
         return `SUCCESS: Order executed. ID: ${positionId}. Entry: ${entryPrice}`;
       } catch (e) {
+        console.error(`[Autopilot] Execution Error: ${e.message}`);
         return `Error executing order: ${e.message}`;
       }
     },

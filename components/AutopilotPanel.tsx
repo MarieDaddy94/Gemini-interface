@@ -1,6 +1,5 @@
-
 import React, { useState, useEffect, useRef } from 'react';
-import { fetchAgentInsights, AgentInsight, AgentId } from '../services/agentApi';
+import { fetchAgentInsights, AgentId } from '../services/agentApi';
 
 interface AutopilotPanelProps {
   chartContext: string;
@@ -37,7 +36,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
       agentId,
       message,
       type
-    }, ...prev].slice(0, 50)); // Keep last 50 logs
+    }, ...prev].slice(0, 100)); // Keep last 100 logs
   };
 
   useEffect(() => {
@@ -49,17 +48,19 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
       try {
         setLastUpdate(new Date());
         
-        // 1. Send tick to squad
         // Sequence: TrendMaster (Context) -> PatternGPT (Levels) -> QuantBot (Execution)
         const agentIds: AgentId[] = ['trend_master', 'pattern_gpt', 'quant_bot'];
         
         const prompt = `
 AUTOPILOT TICK [${new Date().toLocaleTimeString()}]:
-Analyze the current ${symbol} market.
-1. TrendMaster: Define bias.
-2. PatternGPT: Identify key levels.
-3. QuantBot: EXECUTE TRADE if setups A+ quality (>80% confidence). Use 'execute_order' tool.
-If no trade, explicitly state "HOLD".
+Analyze the current ${symbol} market data.
+
+1. TrendMaster: Define the immediate bias (Bullish/Bearish/Neutral).
+2. PatternGPT: Identify key support/resistance levels.
+3. QuantBot: You have permission to EXECUTE TRADE if setups are A+ quality (>80% confidence).
+   - Use the 'execute_order' tool to place trades.
+   - You MUST provide a 'reason' for the trade.
+   - If no trade, explicitly state "HOLD".
         `.trim();
 
         const insights = await fetchAgentInsights({
@@ -84,8 +85,11 @@ If no trade, explicitly state "HOLD".
              if (insight.toolCalls && insight.toolCalls.length > 0) {
                insight.toolCalls.forEach(tc => {
                  if (tc.toolName === 'execute_order') {
-                    addLog(insight.agentName, `EXECUTING: ${tc.args.side} ${tc.args.size} ${tc.args.symbol}`, 'action');
-                    addLog('System', `Order Result: ${tc.result}`, 'action');
+                    addLog(insight.agentName, `EXECUTING: ${tc.args.side?.toUpperCase()} ${tc.args.size} ${tc.args.symbol}`, 'action');
+                    // Note: result might be displayed if available in toolCalls
+                    if (tc.result) {
+                        addLog('System', `Order Result: ${JSON.stringify(tc.result)}`, 'action');
+                    }
                  }
                });
              }
@@ -94,17 +98,16 @@ If no trade, explicitly state "HOLD".
 
       } catch (e: any) {
         addLog('System', `Loop Error: ${e.message}`, 'error');
-        // If critical error, maybe stop? For now, just log.
       }
 
-      // Schedule next tick (e.g. every 15 seconds)
+      // Schedule next tick (every 15 seconds)
       if (isRunningRef.current) {
         timeoutId = setTimeout(runLoop, 15000);
       }
     };
 
     if (isRunning) {
-      addLog('System', 'Autopilot Engaged. Initializing loop...', 'action');
+      addLog('System', 'Autopilot Engaged. Initializing agent loop...', 'action');
       runLoop();
     } else {
       if (lastUpdate) {
@@ -113,7 +116,7 @@ If no trade, explicitly state "HOLD".
     }
 
     return () => clearTimeout(timeoutId);
-  }, [isRunning, chartContext, brokerSessionId, symbol]); // Dependencies that restart the effect if changed
+  }, [isRunning, chartContext, brokerSessionId, symbol]);
 
   return (
     <div className="flex flex-col h-full bg-[#0a0c10] text-gray-300 font-mono text-xs">
@@ -126,16 +129,24 @@ If no trade, explicitly state "HOLD".
              {symbol}
            </span>
         </div>
-        <button
-          onClick={toggleAutopilot}
-          className={`px-4 py-1.5 rounded font-bold transition-all border ${
-            isRunning 
-              ? 'bg-red-500/10 text-red-500 border-red-500/50 hover:bg-red-500/20' 
-              : 'bg-green-500/10 text-green-500 border-green-500/50 hover:bg-green-500/20'
-          }`}
-        >
-          {isRunning ? 'DISENGAGE' : 'ENGAGE AUTOPILOT'}
-        </button>
+        <div className="flex gap-2">
+            <button
+              onClick={() => setLogs([])}
+              className="px-3 py-1.5 rounded font-medium text-gray-400 hover:text-white border border-transparent hover:border-gray-600 transition-all"
+            >
+              Clear Logs
+            </button>
+            <button
+              onClick={toggleAutopilot}
+              className={`px-4 py-1.5 rounded font-bold transition-all border ${
+                isRunning 
+                  ? 'bg-red-500/10 text-red-500 border-red-500/50 hover:bg-red-500/20' 
+                  : 'bg-green-500/10 text-green-500 border-green-500/50 hover:bg-green-500/20'
+              }`}
+            >
+              {isRunning ? 'DISENGAGE' : 'ENGAGE AUTOPILOT'}
+            </button>
+        </div>
       </div>
 
       {/* Main Content */}
@@ -146,22 +157,22 @@ If no trade, explicitly state "HOLD".
               <span>SYSTEM LOGS</span>
               <span>Last Update: {lastUpdate ? lastUpdate.toLocaleTimeString() : '--:--:--'}</span>
            </div>
-           <div className="flex-1 overflow-y-auto p-4 space-y-3 font-mono">
+           <div className="flex-1 overflow-y-auto p-4 space-y-3 font-mono bg-[#0d1117]">
               {logs.length === 0 && (
-                <div className="text-gray-600 text-center mt-10 italic">
+                <div className="text-gray-600 text-center mt-20 italic">
                   System ready. Engage autopilot to begin agent loop.
                 </div>
               )}
               {logs.map((log) => (
-                <div key={log.id} className="flex gap-3 animate-fade-in">
-                   <div className="w-16 shrink-0 text-[10px] text-gray-500">{log.timestamp}</div>
+                <div key={log.id} className="flex gap-3 animate-fade-in group">
+                   <div className="w-16 shrink-0 text-[10px] text-gray-600 group-hover:text-gray-400 transition-colors">{log.timestamp}</div>
                    <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                          <span className={`text-[10px] font-bold uppercase tracking-wide ${
-                            log.agentId === 'System' ? 'text-gray-400' :
+                            log.agentId === 'System' ? 'text-gray-500' :
                             log.agentId === 'QuantBot' ? 'text-blue-400' :
                             log.agentId === 'TrendMaster AI' ? 'text-purple-400' :
-                            'text-green-400'
+                            'text-emerald-400'
                          }`}>
                            {log.agentId}
                          </span>
@@ -169,9 +180,9 @@ If no trade, explicitly state "HOLD".
                          {log.type === 'error' && <span className="bg-red-900/30 text-red-500 text-[9px] px-1 rounded border border-red-900/50">ERROR</span>}
                       </div>
                       <div className={`leading-relaxed whitespace-pre-wrap ${
-                        log.type === 'action' ? 'text-white bg-white/5 p-2 rounded border-l-2 border-green-500' : 
+                        log.type === 'action' ? 'text-white bg-green-500/5 p-2 rounded border-l-2 border-green-500' : 
                         log.type === 'error' ? 'text-red-300 bg-red-900/10 p-2 rounded border-l-2 border-red-500' :
-                        'text-gray-300'
+                        'text-gray-400'
                       }`}>
                         {log.message}
                       </div>
@@ -188,7 +199,7 @@ If no trade, explicitly state "HOLD".
               <div className="space-y-3">
                  <div className="bg-[#1e222d] p-2 rounded border border-[#2a2e39]">
                     <div className="text-[10px] text-gray-400 uppercase">Connection</div>
-                    <div className={`font-mono text-sm ${brokerSessionId ? 'text-green-400' : 'text-red-400'}`}>
+                    <div className={`font-mono text-sm font-bold ${brokerSessionId ? 'text-green-400' : 'text-red-400'}`}>
                       {brokerSessionId ? 'ONLINE' : 'OFFLINE'}
                     </div>
                  </div>
@@ -204,7 +215,7 @@ If no trade, explicitly state "HOLD".
               <div className="space-y-2">
                  {['TrendMaster', 'PatternGPT', 'QuantBot'].map(agent => (
                    <div key={agent} className="flex items-center gap-2 text-[11px] text-gray-400">
-                      <div className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-green-500' : 'bg-gray-600'}`}></div>
+                      <div className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]' : 'bg-gray-600'}`}></div>
                       <span>{agent}</span>
                       {agent === 'QuantBot' && <span className="ml-auto text-[9px] border border-red-500/30 text-red-400 px-1 rounded">EXEC</span>}
                    </div>
