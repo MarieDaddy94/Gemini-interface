@@ -1,16 +1,15 @@
+
 // server/risk/autopilotController.js
 //
 // High-level autopilot control that wraps the risk engine.
-// Later this will also handle mode-specific logic (advisor, semi, full).
 
 const { evaluateProposedTrade } = require('./riskEngine');
+const { callLLM } = require('../llmRouter');
+const { getAgentById } = require('../agents/agents');
 
 /**
- * Handle a "preview" request for a proposed trade from the frontend
- * or from an Execution agent.
- *
- * @param {any} sessionState
- * @param {{ riskPercent: number, comment?: string }} proposedTrade
+ * Handle a "preview" request for a proposed trade from the frontend.
+ * Just runs the risk engine.
  */
 async function handleAutopilotProposedTrade(sessionState, proposedTrade) {
   const riskResult = evaluateProposedTrade(sessionState, proposedTrade);
@@ -21,6 +20,87 @@ async function handleAutopilotProposedTrade(sessionState, proposedTrade) {
   };
 }
 
+/**
+ * Generate a full execution plan.
+ * 1. Run Risk Engine.
+ * 2. Ask Execution Bot for a recommendation/plan based on the proposal + risk result.
+ */
+async function handleAutopilotExecutionPlan(sessionState, proposedTrade) {
+  // 1. Risk Check
+  const riskResult = evaluateProposedTrade(sessionState, proposedTrade);
+
+  // 2. Execution Bot Consultation
+  const agent = getAgentById('execution-bot');
+  
+  // Augment system prompt to force JSON output
+  const systemPrompt = (agent.systemPrompt || '') + 
+    `\n\nIMPORTANT: You must respond in valid JSON format only.\n` +
+    `Schema: { "recommended": boolean, "planSummary": "string" }`;
+
+  const instrumentLabel = sessionState.instrument?.displayName || 'Unknown Instrument';
+  const direction = proposedTrade.direction?.toUpperCase() || 'UNKNOWN';
+  const riskPct = proposedTrade.riskPercent || 0;
+
+  const userPrompt = `
+EXECUTION PLAN REQUEST:
+- Instrument: ${instrumentLabel}
+- Direction: ${direction}
+- Risk: ${riskPct}% of equity
+- Notes: ${proposedTrade.comment || 'None'}
+
+RISK ENGINE VERDICT:
+- Allowed: ${riskResult.allowed ? 'YES' : 'NO'}
+- Hard Blocks: ${riskResult.reasons.length > 0 ? riskResult.reasons.join('; ') : 'None'}
+- Warnings: ${riskResult.warnings.length > 0 ? riskResult.warnings.join('; ') : 'None'}
+
+TASK:
+1. If the Risk Engine blocked this trade (Allowed: NO), you CANNOT recommend it. Explain why in the summary.
+2. If Allowed, evaluate if this fits a standard execution profile (e.g. is risk reasonable, are we fighting trend?). 
+3. Provide a brief "planSummary" describing the execution (e.g. "Enter at market, SL at X..."). Since you don't have the live chart price, describe it logically (e.g. "SL below recent swing low").
+
+Output JSON: { "recommended": boolean, "planSummary": string }
+`;
+
+  let recommended = false;
+  let planSummary = "Analysis failed.";
+
+  try {
+    const llmOutput = await callLLM({
+      model: agent.model,
+      provider: agent.provider,
+      systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+      temperature: 0.2, // Low temp for logic
+      maxTokens: 400
+    });
+
+    // Attempt to parse JSON
+    try {
+      const cleanJson = llmOutput.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      recommended = !!parsed.recommended;
+      planSummary = parsed.planSummary || llmOutput;
+    } catch (parseErr) {
+      console.warn("Autopilot JSON parse failed, falling back to text", parseErr);
+      planSummary = llmOutput; // Fallback: just show the text
+      recommended = riskResult.allowed; // Default to risk result if LLM fails format
+    }
+
+  } catch (err) {
+    console.error("Autopilot LLM call failed:", err);
+    planSummary = `Error consulting Execution Bot: ${err.message}`;
+  }
+
+  return {
+    allowed: riskResult.allowed,
+    recommended,
+    planSummary,
+    riskReasons: riskResult.reasons,
+    riskWarnings: riskResult.warnings
+  };
+}
+
 module.exports = {
   handleAutopilotProposedTrade,
+  handleAutopilotExecutionPlan
 };

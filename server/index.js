@@ -1,5 +1,6 @@
 
 
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -21,7 +22,10 @@ const { setupMarketData, getPrice } = require('./marketData');
 const { handleAgentRequest } = require('./agents/orchestrator');
 
 // Phase 4: Import Autopilot Controller
-const { handleAutopilotProposedTrade } = require('./risk/autopilotController');
+const { 
+  handleAutopilotProposedTrade,
+  handleAutopilotExecutionPlan 
+} = require('./risk/autopilotController');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -43,6 +47,7 @@ app.use('/api/agents/', aiLimiter);
 app.use('/api/ai/', aiLimiter);
 app.use('/api/agent-router', aiLimiter); // Limit the new router too
 app.use('/api/risk/', aiLimiter); // Limit risk checks
+app.use('/api/autopilot/', aiLimiter); // Limit autopilot planning
 
 app.use(
   cors({
@@ -231,6 +236,29 @@ app.post('/api/risk/preview-trade', async (req, res) => {
     console.error('Error in /api/risk/preview-trade:', err);
     res.status(500).json({
       error: 'Risk preview error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/autopilot/plan-trade', async (req, res) => {
+  try {
+    const { sessionState, proposedTrade } = req.body || {};
+    
+    if (!sessionState || !proposedTrade) {
+      return res.status(400).json({ error: "Missing sessionState or proposedTrade" });
+    }
+
+    const result = await handleAutopilotExecutionPlan(
+      sessionState,
+      proposedTrade
+    );
+
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /api/autopilot/plan-trade:', err);
+    res.status(500).json({
+      error: 'Autopilot planning error',
       message: err.message || 'Unknown error',
     });
   }
