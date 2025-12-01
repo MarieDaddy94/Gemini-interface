@@ -14,6 +14,7 @@ import AutopilotJournalTab from './components/AutopilotJournalTab';
 import RoundTablePanel from './components/RoundTablePanel';
 import ChartVisionPanel from './components/ChartVisionPanel';
 import VoiceCommander from './components/VoiceCommander';
+import TraderCoachPanel from './components/TraderCoachPanel';
 import AccessGate from './components/AccessGate';
 import { JournalProvider, useJournal } from './context/JournalContext';
 import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
@@ -454,6 +455,10 @@ const Dashboard: React.FC = () => {
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
                   <div className="flex-1 min-h-0 flex flex-col">
                      <ChartVisionPanel />
+                  </div>
+                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <TraderCoachPanel />
                   </div>
                </div>
             </div>

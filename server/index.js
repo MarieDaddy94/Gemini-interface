@@ -32,8 +32,14 @@ const {
   closeSimPosition,
 } = require('./autopilot/simExecutor');
 
-// Phase 5: Round-table
+// Phase 5: Round-table & History
 const { runTradingRoundTable } = require('./roundtable/roundTableEngine');
+const {
+  appendAutopilotHistory,
+  getSimilarAutopilotHistory,
+  getStatsForSession,
+} = require('./history/autopilotHistoryStore');
+const { runAutopilotCoach } = require('./history/autopilotCoach');
 
 // Voice & Vision
 const { parseVoiceAutopilotCommand } = require('./autopilot/voiceParser');
@@ -62,6 +68,7 @@ app.use('/api/risk/', aiLimiter);
 app.use('/api/autopilot/', aiLimiter); 
 app.use('/api/roundtable/', aiLimiter); 
 app.use('/api/vision/', aiLimiter); 
+app.use('/api/history/', aiLimiter);
 
 app.use(
   cors({
@@ -246,18 +253,66 @@ app.post('/api/autopilot/voice-parse', async (req, res) => {
 // --- ROUND TABLE ---
 app.post('/api/roundtable/plan', async (req, res) => {
   try {
-    const { sessionState, userQuestion, recentJournal, recentEvents, visualSummary } = req.body || {};
+    const { sessionState, userQuestion, visualSummary } = req.body || {};
+    
+    // Pull last similar entries from history store automatically
+    const similar = sessionState
+      ? getSimilarAutopilotHistory(sessionState, 25)
+      : [];
+
     const result = await runTradingRoundTable({
       sessionState,
       userQuestion,
-      recentJournal: Array.isArray(recentJournal) ? recentJournal : [],
-      recentEvents: Array.isArray(recentEvents) ? recentEvents : [],
+      recentJournal: similar,
+      recentEvents: [], // Could also pull recent events from history if implemented
       visualSummary: typeof visualSummary === 'string' ? visualSummary : null,
     });
     res.json(result);
   } catch (err) {
     console.error('Error in /api/roundtable/plan:', err);
     res.status(500).json({ error: 'RoundTableError', message: err.message || 'Unknown error' });
+  }
+});
+
+// --- HISTORY & COACHING ---
+app.post('/api/history/autopilot/log', (req, res) => {
+  try {
+    const { entry, sessionState } = req.body || {};
+    if (!entry || !sessionState) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'entry and sessionState are required.',
+      });
+    }
+    const rec = appendAutopilotHistory(entry, sessionState);
+    res.json(rec);
+  } catch (err) {
+    console.error('Error in /api/history/autopilot/log:', err);
+    res.status(500).json({
+      error: 'HistoryLogError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/history/autopilot/coach', async (req, res) => {
+  try {
+    const { sessionState } = req.body || {};
+    if (!sessionState) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'sessionState is required.',
+      });
+    }
+
+    const result = await runAutopilotCoach(sessionState);
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /api/history/autopilot/coach:', err);
+    res.status(500).json({
+      error: 'CoachError',
+      message: err.message || 'Unknown error',
+    });
   }
 });
 

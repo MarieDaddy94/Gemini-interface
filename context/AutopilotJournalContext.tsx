@@ -10,6 +10,8 @@ import {
   AutopilotJournalEntry,
   AutopilotExecutionStatus,
 } from '../types';
+import { useTradingSession } from './TradingSessionContext';
+import { logAutopilotHistory } from '../services/historyApi';
 
 interface AutopilotJournalContextValue {
   entries: AutopilotJournalEntry[];
@@ -35,6 +37,7 @@ export const AutopilotJournalProvider: React.FC<
   AutopilotJournalProviderProps
 > = ({ children }) => {
   const [entries, setEntries] = useState<AutopilotJournalEntry[]>([]);
+  const { state } = useTradingSession();
 
   const addEntry = (
     entry: Omit<AutopilotJournalEntry, 'id' | 'createdAt'>
@@ -49,6 +52,12 @@ export const AutopilotJournalProvider: React.FC<
     };
 
     setEntries((prev) => [...prev, full]);
+
+    // Fire-and-forget log to backend history store
+    logAutopilotHistory(full, state).catch((err) => {
+      console.error('Failed to log Autopilot history:', err);
+    });
+
     return id;
   };
 
@@ -59,23 +68,32 @@ export const AutopilotJournalProvider: React.FC<
     closePrice?: number;
     pnl?: number;
   }) => {
-    setEntries((prev) =>
-      prev.map((e) =>
-        e.id === args.id
-          ? {
-              ...e,
-              executionStatus: args.executionStatus,
-              executionPrice:
-                args.executionPrice !== undefined
-                  ? args.executionPrice
-                  : e.executionPrice,
-              closePrice:
-                args.closePrice !== undefined ? args.closePrice : e.closePrice,
-              pnl: args.pnl !== undefined ? args.pnl : e.pnl,
-            }
-          : e
-      )
-    );
+    setEntries((prev) => {
+      const next = prev.map((e) => {
+        if (e.id === args.id) {
+          const updated = {
+            ...e,
+            executionStatus: args.executionStatus,
+            executionPrice:
+              args.executionPrice !== undefined
+                ? args.executionPrice
+                : e.executionPrice,
+            closePrice:
+              args.closePrice !== undefined ? args.closePrice : e.closePrice,
+            pnl: args.pnl !== undefined ? args.pnl : e.pnl,
+          };
+          
+          // Also update backend if execution status changes to closed/executed to capture PnL
+          if (args.executionStatus === 'executed' || args.executionStatus === 'cancelled') {
+             logAutopilotHistory(updated, state).catch(console.error);
+          }
+          
+          return updated;
+        }
+        return e;
+      });
+      return next;
+    });
   };
 
   const clearEntries = () => setEntries([]);
@@ -87,7 +105,7 @@ export const AutopilotJournalProvider: React.FC<
       updateExecution,
       clearEntries,
     }),
-    [entries]
+    [entries, state]
   );
 
   return (
