@@ -1,14 +1,19 @@
 
 // server/roundtable/roundTableEngine.js
 //
-// Multi-agent trading round-table:
+// Multi-agent trading round-table with per-agent memory.
+// Agents:
 // - Strategist (GPT-5.1)
 // - Pattern GPT (Gemini)
 // - Risk Manager (GPT-5.1)
 // - Execution Bot (GPT-5.1-mini)
 //
-// Each agent sees the same context but a different system prompt.
-// Then the Strategist synthesizes a final plan from everyone’s replies.
+// Each agent sees:
+// - Shared trading context
+// - Its own local memory (past notes in similar contexts)
+//
+// After they respond, their replies are written back into their memory,
+// so over time they accumulate a history of how they advise Anthony.
 
 const { callAgentLLM } = require('../llmRouter');
 const {
@@ -17,6 +22,11 @@ const {
 const {
   getSimilarAutopilotHistory,
 } = require('../history/autopilotHistoryStore');
+const {
+  appendAgentMemory,
+  getAgentMemoryForContext,
+  formatAgentMemoryForPrompt,
+} = require('../memory/agentMemoryStore');
 
 /**
  * Build a textual context from session state + recent history + visual summary.
@@ -87,23 +97,36 @@ function buildContextText(sessionState, recentJournal, visualSummary) {
 }
 
 /**
- * @typedef {Object} RoundTableResultAgentMessage
- * @property {string} id
- * @property {string} displayName
- * @property {string} role
- * @property {string} provider
- * @property {string} model
- * @property {string} content
+ * Build the user message content for a specific agent,
+ * including its personal memory.
+ *
+ * @param {string} baseContextText
+ * @param {string} userQuestion
+ * @param {Array<object>} agentMemoryRecords
  */
+function buildAgentUserPrompt(baseContextText, userQuestion, agentMemoryRecords) {
+  const questionBlock = (userQuestion || '').trim()
+    ? `\n\nTRADER QUESTION:\n${userQuestion.trim()}`
+    : '';
 
-/**
- * @typedef {Object} RoundTableResult
- * @property {string} finalSummary
- * @property {string} bias
- * @property {string} executionNotes
- * @property {string} riskNotes
- * @property {RoundTableResultAgentMessage[]} agents
- */
+  const memoryText = formatAgentMemoryForPrompt(agentMemoryRecords);
+
+  return `
+You are part of an AI trading team helping Anthony trade indices like US30/NAS100 and XAUUSD.
+
+Below is your PERSONAL MEMORY for similar contexts. This is only your own past notes
+and decisions; use it to stay consistent, learn what has worked or failed, and
+avoid repeating mistakes.
+
+AGENT MEMORY:
+${memoryText}
+
+-------------------------------
+CURRENT CONTEXT:
+${baseContextText}
+${questionBlock}
+`.trim();
+}
 
 /**
  * Run the multi-agent trading round-table.
@@ -113,7 +136,6 @@ function buildContextText(sessionState, recentJournal, visualSummary) {
  * @param {string} params.userQuestion
  * @param {Array<Object>} params.recentJournal
  * @param {string|null} params.visualSummary
- * @returns {Promise<RoundTableResult>}
  */
 async function runTradingRoundTable({
   sessionState,
@@ -143,21 +165,19 @@ async function runTradingRoundTable({
     visualSummary
   );
 
-  const questionText = (userQuestion || '').trim()
-    ? `\n\nTRADER QUESTION:\n${userQuestion.trim()}`
-    : '';
-
-  const baseUserPrompt = `
-You are part of an AI trading team helping Anthony trade indices like US30/NAS100 and XAUUSD.
-
-Here is the current CONTEXT from the trading environment, recent trades, and chart summary:
-
-${contextText}
-
-${questionText}
-`.trim();
-
-  const userMessage = { role: 'user', content: baseUserPrompt };
+  // ----- get per-agent memory -----
+  const strategistMemory = strategist
+    ? getAgentMemoryForContext(strategist.id, sessionState, 10)
+    : [];
+  const patternMemory = pattern
+    ? getAgentMemoryForContext(pattern.id, sessionState, 10)
+    : [];
+  const riskMemory = riskManager
+    ? getAgentMemoryForContext(riskManager.id, sessionState, 10)
+    : [];
+  const execMemory = executionBot
+    ? getAgentMemoryForContext(executionBot.id, sessionState, 10)
+    : [];
 
   // ----- 1) Strategist -----
   const strategistSystemPrompt = `
@@ -170,12 +190,27 @@ Focus on US30/NAS100/XAUUSD intraday scalping style.
 Always be concrete and keep it < 300 words.
   `.trim();
 
+  const strategistUserContent = buildAgentUserPrompt(
+    contextText,
+    userQuestion,
+    strategistMemory
+  );
+
   const strategistText = await callAgentLLM({
     agentId: strategist.id,
     systemPrompt: strategistSystemPrompt,
-    messages: [userMessage],
+    messages: [{ role: 'user', content: strategistUserContent }],
     temperature: 0.35,
     maxTokens: 800,
+  });
+
+  appendAgentMemory({
+    agentId: strategist.id,
+    displayName: strategist.displayName,
+    role: strategist.role,
+    sessionState,
+    topic: 'roundtable-strategist',
+    content: strategistText,
   });
 
   // ----- 2) Pattern GPT -----
@@ -195,12 +230,27 @@ Using the context and any chart summary, list:
 Be concrete; keep it < 300 words.
     `.trim();
 
+    const patternUserContent = buildAgentUserPrompt(
+      contextText,
+      userQuestion,
+      patternMemory
+    );
+
     patternText = await callAgentLLM({
       agentId: pattern.id,
       systemPrompt: patternSystemPrompt,
-      messages: [userMessage],
+      messages: [{ role: 'user', content: patternUserContent }],
       temperature: 0.35,
       maxTokens: 700,
+    });
+
+    appendAgentMemory({
+      agentId: pattern.id,
+      displayName: pattern.displayName,
+      role: pattern.role,
+      sessionState,
+      topic: 'roundtable-pattern',
+      content: patternText,
     });
   }
 
@@ -217,12 +267,27 @@ Give 3–7 bullet points that Anthony should follow *today*.
 Keep it < 250 words.
     `.trim();
 
+    const riskUserContent = buildAgentUserPrompt(
+      contextText,
+      userQuestion,
+      riskMemory
+    );
+
     riskText = await callAgentLLM({
       agentId: riskManager.id,
       systemPrompt: riskSystemPrompt,
-      messages: [userMessage],
+      messages: [{ role: 'user', content: riskUserContent }],
       temperature: 0.25,
       maxTokens: 600,
+    });
+
+    appendAgentMemory({
+      agentId: riskManager.id,
+      displayName: riskManager.displayName,
+      role: riskManager.role,
+      sessionState,
+      topic: 'roundtable-risk',
+      content: riskText,
     });
   }
 
@@ -245,14 +310,17 @@ Keep it < 250 words.
 CONTEXT (same as others):
 ${contextText}
 
+YOUR PERSONAL MEMORY:
+${formatAgentMemoryForPrompt(execMemory)}
+
 STRATEGIST NOTES:
 ${strategistText}
 
 PATTERN NOTES:
-${patternText}
+${patternText || '(none yet)'}
 
 RISK NOTES:
-${riskText}
+${riskText || '(none yet)'}
 
 TRADER QUESTION (if any):
 ${userQuestion || '(none)'}
@@ -269,6 +337,15 @@ ${userQuestion || '(none)'}
       messages: [execUserMessage],
       temperature: 0.3,
       maxTokens: 700,
+    });
+
+    appendAgentMemory({
+      agentId: executionBot.id,
+      displayName: executionBot.displayName,
+      role: executionBot.role,
+      sessionState,
+      topic: 'roundtable-execution',
+      content: executionText,
     });
   }
 
@@ -321,7 +398,9 @@ ${executionText || '(no execution bot agent configured)'}
     maxTokens: 900,
   });
 
-  /** @type {RoundTableResultAgentMessage[]} */
+  // NOTE: we *could* also log the synthesis as a separate memory entry,
+  // but for now we keep memories per-agent for their individual voices.
+
   const agents = [];
 
   agents.push({
@@ -366,11 +445,9 @@ ${executionText || '(no execution bot agent configured)'}
     });
   }
 
-  // We keep finalSummary as the full synthesized text;
-  // bias / risk / executionNotes can be parsed later if you want.
   return {
     finalSummary: synthesisText.trim(),
-    bias: '', // optional: could parse a "BIAS:" line in future
+    bias: '',
     executionNotes: '',
     riskNotes: '',
     agents,
