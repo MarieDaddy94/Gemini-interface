@@ -6,15 +6,36 @@ import { JournalEntry } from '../context/JournalContext';
 interface TradingChartProps {
   config: ChartConfig;
   entries?: JournalEntry[];
+  activeTimeframe?: string;
+  onTimeframeChange?: (timeframe: string) => void;
+  onSymbolChange?: (symbol: string) => void;
   onDataPointClick?: (point: ChartDataPoint) => void;
 }
 
-const TradingChart: React.FC<TradingChartProps> = ({ config, entries = [], onDataPointClick }) => {
+const TIMEFRAMES = ['15m', '1H', '4H', '1D'];
+
+const TradingChart: React.FC<TradingChartProps> = ({ 
+  config, 
+  entries = [], 
+  activeTimeframe = '1H',
+  onTimeframeChange,
+  onSymbolChange,
+  onDataPointClick 
+}) => {
   const [selectedPoint, setSelectedPoint] = useState<ChartDataPoint | null>(null);
 
-  const isPositive = config.data[config.data.length - 1].value >= config.data[0].value;
+  const hasData = config.data && config.data.length > 0;
+  
+  const isPositive = hasData 
+    ? config.data[config.data.length - 1].value >= config.data[0].value 
+    : true;
+    
   const strokeColor = isPositive ? '#089981' : '#f23645';
   const fillColor = isPositive ? 'url(#colorPositive)' : 'url(#colorNegative)';
+  
+  const percentChange = hasData 
+    ? ((config.data[config.data.length - 1].value - config.data[0].value) / config.data[0].value * 100).toFixed(2)
+    : '0.00';
 
   // Map entries to chart data points by time (fuzzy match for demo purposes)
   const entriesByTime = useMemo(() => {
@@ -47,15 +68,33 @@ const TradingChart: React.FC<TradingChartProps> = ({ config, entries = [], onDat
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2e39] bg-[#131722] z-10">
         <div className="flex items-center gap-2">
-          <span className="font-bold text-sm tracking-wide text-white">{config.symbol}</span>
+          <div 
+            className={`flex items-center gap-1 ${onSymbolChange ? 'cursor-pointer group/symbol' : ''}`}
+            onClick={() => onSymbolChange?.(config.symbol)}
+          >
+            <span className={`font-bold text-sm tracking-wide text-white ${onSymbolChange ? 'group-hover/symbol:text-[#2962ff] transition-colors' : ''}`}>
+              {config.symbol}
+            </span>
+            {onSymbolChange && (
+               <svg className="w-3 h-3 text-gray-500 group-hover/symbol:text-[#2962ff]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+               </svg>
+            )}
+          </div>
           <span className={`text-xs px-1.5 py-0.5 rounded ${isPositive ? 'bg-[#089981]/20 text-[#089981]' : 'bg-[#f23645]/20 text-[#f23645]'}`}>
-            {isPositive ? '+' : ''}{((config.data[config.data.length - 1].value - config.data[0].value) / config.data[0].value * 100).toFixed(2)}%
+            {isPositive ? '+' : ''}{percentChange}%
           </span>
         </div>
         <div className="flex gap-2">
-          <span className="text-[#5d606b] text-xs cursor-pointer hover:text-white">1H</span>
-          <span className="text-[#5d606b] text-xs cursor-pointer hover:text-white">4H</span>
-          <span className="text-white text-xs font-medium cursor-pointer">1D</span>
+          {TIMEFRAMES.map(tf => (
+            <span 
+              key={tf}
+              onClick={() => onTimeframeChange?.(tf)}
+              className={`text-xs cursor-pointer px-1.5 py-0.5 rounded transition-colors ${activeTimeframe === tf ? 'text-[#2962ff] font-bold bg-[#2962ff]/10' : 'text-[#5d606b] hover:text-white'}`}
+            >
+              {tf}
+            </span>
+          ))}
         </div>
       </div>
 
