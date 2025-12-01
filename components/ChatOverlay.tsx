@@ -1,8 +1,10 @@
 
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { fetchAgentInsights, AgentId, AgentJournalDraft, JournalMode } from '../services/agentApi';
+import { runAgentRound } from '../services/multiAgentService';
+import { AgentMessage, AgentTurnContext, AgentId, AgentJournalDraft } from '../types/agents';
 import { useJournal } from '../context/JournalContext';
 import { inferTradeMetaFromText } from '../utils/journalInference';
+import { JournalMode } from '../services/agentApi';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
@@ -13,8 +15,6 @@ const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
   // Fallbacks
   default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
 };
-
-const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
 
 interface ChatMessage {
   id: string;
@@ -162,6 +162,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
     if (isSending) return;
 
     const isSystem = !!options?.isSystem;
+    const now = new Date().toISOString();
     
     // Add message to local UI
     const userMsg: ChatMessage = {
@@ -196,70 +197,72 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
         setPendingFileImage(null); 
       }
 
-      // 2. Call Multi-Agent API
-      // If system targeted a specific agent, just ask that one + maybe others if needed
-      // For now, if agentId is provided, we send [agentId], otherwise ACTIVE_AGENT_IDS
-      const targetIds = options?.agentId 
-        ? [options.agentId as AgentId] 
-        : ACTIVE_AGENT_IDS;
+      // 2. Prepare Context for Engine
+      // Filter last 12 messages and map to AgentMessage format
+      const historyForEngine: AgentMessage[] = messages.slice(-12).map((m) => ({
+        id: m.id,
+        role: m.role === 'user' || m.role === 'system' ? 'user' : 'agent',
+        agentId: m.agentId as any, // Cast to AgentId
+        agentName: m.author,
+        content: m.text,
+        createdAt: new Date().toISOString() // Or keep original timestamp if available in ChatMessage
+      }));
 
-      const insights = await fetchAgentInsights({
-        agentIds: targetIds,
-        userMessage: textToSend,
-        chartContext,
-        screenshot,
-        journalMode // Pass the mode
-      });
+      const context: AgentTurnContext = {
+        symbol: autoFocusSymbol,
+        timeframe: '5m', // Default to 5m if not available, or parse from chartContext
+        mode: journalMode,
+        brokerSnapshot: chartContext // You might want to parse real broker data if available
+      };
 
-      // 3. Update Chat with responses
-      setMessages(prev => {
-        const next = [...prev];
-        insights.forEach(insight => {
-          if (insight.error) {
-            next.push({
-              id: `err-${insight.agentId}-${Date.now()}`,
-              role: 'assistant',
-              author: insight.agentName,
-              agentId: insight.agentId as string,
-              text: `⚠️ ${insight.error}`,
-              isError: true
-            });
-          } else if (insight.text) {
-             next.push({
-              id: `msg-${insight.agentId}-${Date.now()}`,
-              role: 'assistant',
-              author: insight.agentName,
-              agentId: insight.agentId as string,
-              text: insight.text || ''
-            });
-          }
-        });
-        return next;
-      });
+      // 3. Let the agents talk
+      const agentMessages = await runAgentRound(
+        textToSend,
+        [...historyForEngine, {
+          id: userMsg.id,
+          role: 'user',
+          content: userMsg.text,
+          createdAt: now
+        }],
+        context,
+        screenshot
+      );
 
-      // 4. Handle Journal Drafts with Smart Inference
-      insights.forEach(insight => {
+      // 4. Update Chat with responses
+      const chatBubbles: ChatMessage[] = agentMessages.map((a) => ({
+        id: a.id,
+        role: 'assistant',
+        author: a.agentName || 'Agent',
+        text: a.content,
+        agentId: a.agentId,
+      }));
+
+      setMessages((prev) => [...prev, ...chatBubbles]);
+
+      // 5. Handle Journal Drafts - Auto Journaling
+      agentMessages.forEach(insight => {
         if (insight.journalDraft) {
-          const draft: AgentJournalDraft = insight.journalDraft;
+          const draft = insight.journalDraft;
           
           // Build a base text for inference (agent reply > summary > title)
-          const baseText = insight.text || draft.summary || draft.title || "";
+          const baseText = insight.content || draft.summary || draft.title || "";
           
           const inferred = inferTradeMetaFromText({
             text: baseText,
-            draft,
+            // Map AgentJournalDraft (types/agents) to AgentJournalDraft (services/agentApi compatible for inference utility)
+            draft: draft as any, 
             activeSymbol: autoFocusSymbol === 'Auto' ? undefined : autoFocusSymbol
           });
 
           // Prefer agent's explicit field -> then inference -> then defaults
-          const fallbackSymbol = draft.symbol || inferred.symbol || autoFocusSymbol || 'US30';
-          if (fallbackSymbol === 'Auto') { /* handle edge case if autoFocusSymbol is literally "Auto" */ }
+          // If draft.symbol is undefined, use inferred or fallback
+          const fallbackSymbol = inferred.symbol || autoFocusSymbol || 'US30';
           
           const sentiment = draft.sentiment || inferred.sentiment || "Neutral";
           
           // Smart default outcome based on mode
           const defaultOutcome = journalMode === 'post_trade' ? 'Win' : 'Open';
-          const outcome = draft.outcome || inferred.outcome || defaultOutcome;
+          const outcome = inferred.outcome || defaultOutcome;
 
           const direction = draft.direction || inferred.direction || undefined;
           
@@ -292,7 +295,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({
             targetPrice: undefined,
             size: undefined,
           });
-          console.log(`[ChatOverlay] Added inferred journal draft from ${insight.agentName}`);
+          console.log(`[ChatOverlay] Added journal draft from ${insight.agentName}`);
         }
       });
 
