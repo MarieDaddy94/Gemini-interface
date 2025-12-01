@@ -1,5 +1,4 @@
 
-
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -23,12 +22,13 @@ const journalBySession = new Map();
 
 /**
  * For demo: allow your frontend origin.
- * Change origin to match where your React app runs (e.g. http://localhost:5173 or http://localhost:3000).
+ * Change origin to match where your React app runs.
  */
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-    credentials: true
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-openai-key', 'x-gemini-key']
   })
 );
 
@@ -47,6 +47,12 @@ app.post("/api/agents/chat", async (req, res) => {
         error: "agentIds[] and userMessage are required",
       });
     }
+    
+    // Extract BYOK keys
+    const apiKeys = {
+      openai: req.headers['x-openai-key'],
+      gemini: req.headers['x-gemini-key']
+    };
 
     const results = await runAgentsTurn({
       agentIds,
@@ -54,7 +60,8 @@ app.post("/api/agents/chat", async (req, res) => {
       chartContext: chartContext || {},
       journalContext: journalContext || [],
       screenshot: screenshot || null,
-      journalMode: journalMode || "live"
+      journalMode: journalMode || "live",
+      apiKeys
     });
 
     res.json({
@@ -78,10 +85,17 @@ app.post("/api/agents/debrief", async (req, res) => {
       return res.status(400).json({ error: "previousInsights array is required" });
     }
 
+    // Extract BYOK keys
+    const apiKeys = {
+      openai: req.headers['x-openai-key'],
+      gemini: req.headers['x-gemini-key']
+    };
+
     const results = await runAgentsDebrief({
       previousInsights,
       chartContext: chartContext || {},
-      journalContext: journalContext || []
+      journalContext: journalContext || [],
+      apiKeys
     });
 
     res.json({

@@ -1,5 +1,4 @@
 
-
 export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_coach";
 
 export type JournalMode = "live" | "post_trade";
@@ -37,7 +36,7 @@ export interface AgentInsight {
   text?: string;
   error?: string;
   journalDraft?: AgentJournalDraft | null;
-  tradeMeta?: TradeMeta;
+  tradeMeta?: TradeMeta || null;
 }
 
 export interface AgentDebriefInput {
@@ -51,25 +50,35 @@ export interface AgentDebriefInput {
 const API_BASE_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
+function getAuthHeaders() {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  
+  if (typeof window !== 'undefined') {
+    const openai = localStorage.getItem('openai_api_key');
+    const gemini = localStorage.getItem('gemini_api_key');
+    if (openai) headers['x-openai-key'] = openai;
+    if (gemini) headers['x-gemini-key'] = gemini;
+  }
+  
+  return headers;
+}
+
 /**
  * Call your backend multi-agent endpoint.
- *
- * You can use this inside ChatOverlay when the user sends a message,
- * passing the selected agents, chart context, and optional screenshot.
  */
 export async function fetchAgentInsights(params: {
   agentIds: AgentId[];
   userMessage: string;
-  chartContext?: any; // Changed from string to any to support object payload
-  journalContext?: any[]; // New field
+  chartContext?: any;
+  journalContext?: any[];
   screenshot?: string | null;
   journalMode?: JournalMode;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/chat`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       agentIds: params.agentIds,
       userMessage: params.userMessage,
@@ -110,9 +119,7 @@ export async function fetchAgentDebrief(params: {
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/debrief`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       previousInsights: params.previousInsights,
       chartContext: params.chartContext || {},

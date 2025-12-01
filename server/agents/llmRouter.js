@@ -19,7 +19,17 @@ function getGeminiApiKey() {
   return process.env.GEMINI_API_KEY || process.env.API_KEY;
 }
 
-async function getOpenAI() {
+/**
+ * Get OpenAI client.
+ * If apiKey is provided (BYOK), return a fresh instance.
+ * If not, use the singleton instance initialized with env vars.
+ */
+async function getOpenAI(apiKey) {
+  if (apiKey) {
+    const OpenAI = (await import("openai")).default;
+    return new OpenAI({ apiKey });
+  }
+
   const key = getOpenAiApiKey();
   if (!key) return null;
   if (!openaiClient) {
@@ -31,11 +41,20 @@ async function getOpenAI() {
   return openaiClient;
 }
 
-async function getGemini() {
+/**
+ * Get Gemini client.
+ * If apiKey is provided (BYOK), return a fresh instance.
+ * If not, use the singleton instance initialized with env vars.
+ */
+async function getGemini(apiKey) {
+  if (apiKey) {
+    const { GoogleGenAI } = await import("@google/genai");
+    return new GoogleGenAI({ apiKey });
+  }
+
   const key = getGeminiApiKey();
   if (!key) return null;
   if (!geminiClient) {
-    // Correct Import for @google/genai v1+
     const { GoogleGenAI } = await import("@google/genai");
     geminiClient = new GoogleGenAI({
       apiKey: key,
@@ -171,8 +190,8 @@ function buildGeminiContents({ userMessage, screenshot }) {
 /**
  * Run one agent using OpenAI.
  */
-async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode }) {
-  const openai = await getOpenAI();
+async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode, apiKey }) {
+  const openai = await getOpenAI(apiKey);
   if (!openai) {
     return { text: "Error: OpenAI API key is not configured.", journalDraft: null };
   }
@@ -212,8 +231,8 @@ async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalCont
 /**
  * Run one agent using Gemini.
  */
-async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode }) {
-  const ai = await getGemini();
+async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode, apiKey }) {
+  const ai = await getGemini(apiKey);
   if (!ai) {
     return { text: "Error: Gemini API key is not configured.", journalDraft: null };
   }
@@ -257,7 +276,7 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalCont
  * Main entry point: run a turn for multiple agents in SEQUENTIAL order so they can see squadContext.
  */
 async function runAgentsTurn(opts) {
-  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live" } = opts;
+  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live", apiKeys } = opts;
 
   const results = [];
   
@@ -288,7 +307,8 @@ async function runAgentsTurn(opts) {
             journalContext, 
             squadContext, 
             screenshot, 
-            journalMode 
+            journalMode,
+            apiKey: agentCfg.provider === 'openai' ? apiKeys?.openai : apiKeys?.gemini
         };
         
         let llmResult;
@@ -332,7 +352,7 @@ async function runAgentsTurn(opts) {
  * Run a debrief round where agents react to previous insights.
  */
 async function runAgentsDebrief(opts) {
-  const { previousInsights, chartContext, journalContext } = opts;
+  const { previousInsights, chartContext, journalContext, apiKeys } = opts;
   const results = [];
 
   // We want active agents from the previous round or a standard set. 
@@ -378,7 +398,8 @@ Remember: respond in the same JSON format (AgentResponse) as before.
           journalContext,
           squadContext,
           screenshot: null,
-          journalMode: "live" // default for debrief
+          journalMode: "live", // default for debrief
+          apiKey: agentCfg.provider === 'openai' ? apiKeys?.openai : apiKeys?.gemini
         };
 
         let llmResult;
