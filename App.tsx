@@ -417,7 +417,24 @@ const Dashboard: React.FC = () => {
         </header>
 
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
-          {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
+          {/* Show WebBrowser ONLY for Terminal tab */}
+          {activeTab === 'terminal' && (
+            <div className="flex-1 min-h-0">
+              <WebBrowser onUrlChange={handleBrowserUrlChange} />
+            </div>
+          )}
+
+          {/* Autopilot Tab - 3-Column Layout part 1 & 2 (Console & Controls) */}
+          {activeTab === 'autopilot' && (
+            <div className="flex-1 min-h-0 h-full">
+               <AutopilotPanel 
+                  chartContext={marketContext} 
+                  brokerSessionId={brokerSessionId} 
+                  symbol={chartSymbol} 
+                  onOpenSettings={() => setIsSettingsModalOpen(true)} 
+               />
+            </div>
+          )}
           
           {activeTab === 'command' && (
             <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -441,17 +458,6 @@ const Dashboard: React.FC = () => {
                </div>
             </div>
           )}
-
-          {activeTab === 'autopilot' && (
-             <div className="flex-1 min-h-0 flex">
-               <div className="w-96 border-r border-[#2a2e39] flex flex-col">
-                 <AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} />
-               </div>
-               <div className="flex-1 min-h-0">
-                 <AutopilotJournalTab />
-               </div>
-             </div>
-          )}
           
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
@@ -459,6 +465,7 @@ const Dashboard: React.FC = () => {
         </main>
       </div>
 
+      {/* Right Sidebar - Always ChatOverlay for now */}
       <ChatOverlay
         ref={chatOverlayRef}
         chartContext={marketContext}
@@ -470,6 +477,7 @@ const Dashboard: React.FC = () => {
         brokerSessionId={brokerSessionId}
         openPositions={brokerData?.positions}
       />
+      
       <ConnectBrokerModal isOpen={isBrokerModalOpen} onClose={() => setIsBrokerModalOpen(false)} onConnect={handleBrokerConnect} />
       <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
     </div>

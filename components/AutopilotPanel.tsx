@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchAgentInsights, AgentId } from '../services/agentApi';
 import { useAgentConfig } from '../context/AgentConfigContext';
+import AutopilotJournalTab from './AutopilotJournalTab';
 
 interface AutopilotPanelProps {
   chartContext: string;
@@ -21,7 +22,7 @@ interface LogEntry {
 
 const PRESETS: Record<string, string> = {
   SCALP: "Aggressive Scalping. Look for 1m/5m liquidity sweeps. Quick profits (1:1.5 RR). High frequency execution.",
-  SWING: "Conservative Swing. Only trade with H1/H4 trend structure. Wide stops, targets > 1:3 RR. Low frequency.",
+  SWING: "Conservative Swing. Only trade with H1/H4 structure. Wide stops, targets > 1:3 RR. Low frequency.",
   DEFENSIVE: "Capital Preservation. Only A+ setups with clear invalidation. Reduce size by 50%. No counter-trend trades."
 };
 
@@ -482,107 +483,115 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
            </div>
         </div>
 
-        {/* 3. RIGHT PANE: COMMAND DECK */}
-        <div className="w-72 bg-[#131722] flex flex-col shrink-0 overflow-y-auto z-20">
+        {/* 3. RIGHT PANE: COMMAND DECK (Including Journal) */}
+        <div className="w-[400px] bg-[#131722] flex flex-col shrink-0 border-l border-[#2a2e39] overflow-hidden z-20">
            
-           {/* Active Mandate Panel */}
-           <div className="p-4 border-b border-[#2a2e39]">
-              <div className="flex items-center justify-between mb-2">
-                 <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Active Mandate</div>
-                 <div className="text-[9px] text-[#2962ff] cursor-pointer hover:underline" onClick={() => setMandate(PRESETS.SCALP)}>Reset</div>
-              </div>
-              <div className="bg-[#0a0c10] border border-[#2a2e39] p-3 rounded text-green-400 font-mono text-[10px] leading-relaxed shadow-inner min-h-[60px]">
-                 {mandate}
-              </div>
-           </div>
+           {/* Top Half: Controls */}
+           <div className="flex-1 overflow-y-auto min-h-0">
+               {/* Active Mandate Panel */}
+               <div className="p-4 border-b border-[#2a2e39]">
+                  <div className="flex items-center justify-between mb-2">
+                     <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Active Mandate</div>
+                     <div className="text-[9px] text-[#2962ff] cursor-pointer hover:underline" onClick={() => setMandate(PRESETS.SCALP)}>Reset</div>
+                  </div>
+                  <div className="bg-[#0a0c10] border border-[#2a2e39] p-3 rounded text-green-400 font-mono text-[10px] leading-relaxed shadow-inner min-h-[60px]">
+                     {mandate}
+                  </div>
+               </div>
 
-           {/* Presets Grid */}
-           <div className="p-4 border-b border-[#2a2e39]">
-              <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-3">Strategy Presets</div>
-              <div className="space-y-2">
-                 <button 
-                   onClick={() => setPreset('SCALP', PRESETS.SCALP)}
-                   className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
-                 >
-                    <div className="text-blue-400 font-bold text-[10px] group-hover:text-blue-300 flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-                        Scalp Mode
-                    </div>
-                    <div className="text-[9px] text-gray-500 truncate mt-0.5">Aggressive, 1m/5m sweeps</div>
-                 </button>
-                 <button 
-                   onClick={() => setPreset('SWING', PRESETS.SWING)}
-                   className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
-                 >
-                    <div className="text-purple-400 font-bold text-[10px] group-hover:text-purple-300 flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
-                        Swing Mode
-                    </div>
-                    <div className="text-[9px] text-gray-500 truncate mt-0.5">H1/H4 structure only</div>
-                 </button>
-                 <button 
-                   onClick={() => setPreset('DEFENSIVE', PRESETS.DEFENSIVE)}
-                   className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
-                 >
-                    <div className="text-orange-400 font-bold text-[10px] group-hover:text-orange-300 flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
-                        Defensive
-                    </div>
-                    <div className="text-[9px] text-gray-500 truncate mt-0.5">Half size, A+ only</div>
-                 </button>
-              </div>
-           </div>
+               {/* Presets Grid */}
+               <div className="p-4 border-b border-[#2a2e39]">
+                  <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-3">Strategy Presets</div>
+                  <div className="space-y-2">
+                     <button 
+                       onClick={() => setPreset('SCALP', PRESETS.SCALP)}
+                       className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
+                     >
+                        <div className="text-blue-400 font-bold text-[10px] group-hover:text-blue-300 flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                            Scalp Mode
+                        </div>
+                        <div className="text-[9px] text-gray-500 truncate mt-0.5">Aggressive, 1m/5m sweeps</div>
+                     </button>
+                     <button 
+                       onClick={() => setPreset('SWING', PRESETS.SWING)}
+                       className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
+                     >
+                        <div className="text-purple-400 font-bold text-[10px] group-hover:text-purple-300 flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                            Swing Mode
+                        </div>
+                        <div className="text-[9px] text-gray-500 truncate mt-0.5">H1/H4 structure only</div>
+                     </button>
+                     <button 
+                       onClick={() => setPreset('DEFENSIVE', PRESETS.DEFENSIVE)}
+                       className="w-full text-left px-3 py-2 bg-[#1e222d] hover:bg-[#2a2e39] border border-[#2a2e39] hover:border-[#2962ff]/50 rounded transition-all group"
+                     >
+                        <div className="text-orange-400 font-bold text-[10px] group-hover:text-orange-300 flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-orange-500"></span>
+                            Defensive
+                        </div>
+                        <div className="text-[9px] text-gray-500 truncate mt-0.5">Half size, A+ only</div>
+                     </button>
+                  </div>
+               </div>
 
-           {/* Agent Toggle Grid */}
-           <div className="p-4 border-b border-[#2a2e39] flex-1">
-              <div className="flex items-center justify-between mb-3">
-                 <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Squad Status</div>
-                 {onOpenSettings && (
-                   <button 
-                     onClick={onOpenSettings} 
-                     className="text-[9px] text-[#2962ff] hover:text-white flex items-center gap-1 transition-colors"
-                   >
-                     <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                     Configure
-                   </button>
-                 )}
-              </div>
-              <div className="space-y-2">
-                 {Object.entries(activeAgents).map(([id, active]) => (
-                    <div key={id} className="flex items-center justify-between bg-[#1e222d] p-2 rounded border border-[#2a2e39]">
-                       <div className="flex items-center gap-2">
-                          <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-green-500' : 'bg-gray-600'}`}></div>
-                          <span className={`text-[10px] font-bold uppercase ${active ? 'text-gray-200' : 'text-gray-500'}`}>
-                             {id.replace('_', ' ')}
-                          </span>
-                       </div>
+               {/* Agent Toggle Grid */}
+               <div className="p-4 border-b border-[#2a2e39]">
+                  <div className="flex items-center justify-between mb-3">
+                     <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Squad Status</div>
+                     {onOpenSettings && (
                        <button 
-                         onClick={() => toggleAgent(id as AgentId)}
-                         className={`text-[9px] px-2 py-0.5 rounded border transition-colors ${
-                            active 
-                              ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 hover:bg-blue-500/20' 
-                              : 'bg-gray-700/30 text-gray-500 border-gray-600 hover:text-gray-300'
-                         }`}
+                         onClick={onOpenSettings} 
+                         className="text-[9px] text-[#2962ff] hover:text-white flex items-center gap-1 transition-colors"
                        >
-                         {active ? 'ON' : 'OFF'}
+                         <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0-.33 1.82l-.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                         Configure
                        </button>
-                    </div>
-                 ))}
-              </div>
-              
-              <div className="mt-6 bg-red-900/10 border border-red-500/20 p-3 rounded">
-                  <h4 className="text-red-400 font-bold text-[10px] mb-1 flex items-center gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                    RISK OVERRIDE
-                  </h4>
-                  <p className="text-[9px] text-gray-500 leading-relaxed">
-                    QuantBot execution authority is active. Orders execute automatically if confidence {'>'} 80%.
-                  </p>
-              </div>
+                     )}
+                  </div>
+                  <div className="space-y-2">
+                     {Object.entries(activeAgents).map(([id, active]) => (
+                        <div key={id} className="flex items-center justify-between bg-[#1e222d] p-2 rounded border border-[#2a2e39]">
+                           <div className="flex items-center gap-2">
+                              <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-green-500' : 'bg-gray-600'}`}></div>
+                              <span className={`text-[10px] font-bold uppercase ${active ? 'text-gray-200' : 'text-gray-500'}`}>
+                                 {id.replace('_', ' ')}
+                              </span>
+                           </div>
+                           <button 
+                             onClick={() => toggleAgent(id as AgentId)}
+                             className={`text-[9px] px-2 py-0.5 rounded border transition-colors ${
+                                active 
+                                  ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 hover:bg-blue-500/20' 
+                                  : 'bg-gray-700/30 text-gray-500 border-gray-600 hover:text-gray-300'
+                             }`}
+                           >
+                             {active ? 'ON' : 'OFF'}
+                           </button>
+                        </div>
+                     ))}
+                  </div>
+                  
+                  <div className="mt-6 bg-red-900/10 border border-red-500/20 p-3 rounded">
+                      <h4 className="text-red-400 font-bold text-[10px] mb-1 flex items-center gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        RISK OVERRIDE
+                      </h4>
+                      <p className="text-[9px] text-gray-500 leading-relaxed">
+                        QuantBot execution authority is active. Orders execute automatically if confidence {'>'} 80%.
+                      </p>
+                  </div>
+               </div>
+
+               {/* Journal Integration (Flexible Height) */}
+               <div className="flex-1 flex flex-col min-h-[150px]">
+                  <AutopilotJournalTab />
+               </div>
            </div>
 
-           {/* Master Toggle */}
-           <div className="p-4 bg-[#0a0c10] border-t border-[#2a2e39]">
+           {/* Master Toggle (Fixed at Bottom) */}
+           <div className="p-4 bg-[#0a0c10] border-t border-[#2a2e39] shrink-0">
               <button
                 onClick={toggleRunning}
                 className={`w-full py-3 rounded font-bold tracking-wider text-xs transition-all shadow-lg flex items-center justify-center gap-2 ${
