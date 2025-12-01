@@ -1,9 +1,11 @@
 
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta, ToolCall } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 import { useAgentConfig } from '../context/AgentConfigContext';
 import { BrokerPosition } from '../types';
+import { executeTrade } from '../services/tradeLockerService';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
@@ -388,6 +390,80 @@ const CropModal: React.FC<{
       <div className="bg-[#1e222d] py-2 text-center text-xs text-gray-400 border-t border-[#2a2e39]">
          Click and drag to crop the chart area you want the AI to analyze.
       </div>
+    </div>
+  );
+};
+
+
+// --- Trade Execution Component ---
+const TradeExecutionButton: React.FC<{ 
+  meta: TradeMeta; 
+  sessionId: string | null;
+  onExecuted?: () => void 
+}> = ({ meta, sessionId, onExecuted }) => {
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const handleExecute = async () => {
+    if (!sessionId || !meta.symbol) return;
+    setLoading(true);
+    setStatus('idle');
+    try {
+       await executeTrade({
+         sessionId,
+         symbol: meta.symbol,
+         side: meta.direction === 'short' ? 'sell' : 'buy',
+         size: 0.1, // Default lot size for demo
+         stopLoss: meta.stopLoss,
+         takeProfit: meta.takeProfit1
+       });
+       setStatus('success');
+       onExecuted?.();
+    } catch (e) {
+       console.error(e);
+       setStatus('error');
+    } finally {
+       setLoading(false);
+    }
+  };
+
+  if (!sessionId) return null; // Only show if broker connected/simulated
+
+  if (status === 'success') {
+    return (
+      <div className="mt-2 w-full bg-green-500/10 text-green-600 text-[10px] font-bold py-1.5 rounded flex items-center justify-center gap-1 border border-green-500/20">
+        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <span>ORDER FILLED</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-200">
+      <button 
+        onClick={handleExecute}
+        disabled={loading}
+        className={`w-full py-1.5 rounded text-[10px] font-bold text-white transition-all shadow-sm flex items-center justify-center gap-2 ${
+           meta.direction === 'short' 
+             ? 'bg-red-500 hover:bg-red-600 disabled:bg-red-300' 
+             : 'bg-green-500 hover:bg-green-600 disabled:bg-green-300'
+        }`}
+      >
+        {loading ? (
+           <>
+             <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+             <span>EXECUTING...</span>
+           </>
+        ) : (
+           <>
+             <span>EXECUTE {meta.direction?.toUpperCase()}</span>
+             <span className="opacity-70 font-normal ml-1">(0.10)</span>
+           </>
+        )}
+      </button>
+      {status === 'error' && (
+        <div className="text-[9px] text-red-500 text-center mt-1">Failed to place order.</div>
+      )}
     </div>
   );
 };
@@ -1048,6 +1124,11 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                                   <span className="font-mono font-bold text-green-600">{msg.tradeMeta.takeProfit2}</span>
                                 </div>
                               )}
+                              
+                              <TradeExecutionButton 
+                                meta={msg.tradeMeta} 
+                                sessionId={brokerSessionId || null} 
+                              />
                           </div>
                         </div>
                     )}

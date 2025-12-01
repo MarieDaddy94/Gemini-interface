@@ -3,7 +3,8 @@
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
-  TradeLockerAccountSummary
+  TradeLockerAccountSummary,
+  TradeOrderRequest
 } from '../types';
 
 // Backend base URL. If you're using Vite, set VITE_API_BASE_URL in .env
@@ -100,4 +101,25 @@ export const fetchBrokerData = async (
 
   const data = (await res.json()) as BrokerAccountInfo;
   return data;
+};
+
+/**
+ * Executes a trade (or simulated trade) via the backend.
+ */
+export const executeTrade = async (
+  order: TradeOrderRequest
+): Promise<{ ok: boolean; orderId?: string; entryPrice?: number }> => {
+  const res = await fetch(`${API_BASE_URL}/api/tradelocker/order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(order)
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || 'Failed to execute order');
+  }
+
+  return await res.json();
 };

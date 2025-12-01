@@ -1,4 +1,5 @@
 
+
 const { WebSocketServer } = require('ws');
 
 // Configuration for simulated assets
@@ -121,4 +122,13 @@ function setupMarketData(server) {
   }
 }
 
-module.exports = { setupMarketData };
+function getPrice(symbol) {
+  if (!simulator || !simulator.currentPrices) return null;
+  // Handle basic mapping for demo symbols
+  if (simulator.currentPrices[symbol]) return simulator.currentPrices[symbol];
+  // Simple fallback fuzzy match
+  const key = Object.keys(simulator.currentPrices).find(k => symbol.includes(k));
+  return key ? simulator.currentPrices[key] : null;
+}
+
+module.exports = { setupMarketData, getPrice };

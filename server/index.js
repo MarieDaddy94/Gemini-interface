@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 const http = require('http'); // Required for WS
 const cors = require('cors');
@@ -12,7 +13,7 @@ const createAgentsRouter = require('./routes/agents');
 // New Multi-Agent Router
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
 // Import Market Data Service
-const { setupMarketData } = require('./marketData');
+const { setupMarketData, getPrice } = require('./marketData');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -291,7 +292,8 @@ app.post('/api/tradelocker/login', async (req, res) => {
       accounts,
       lastPositionsById: {}, // id -> full position object
       latestState: {},        // balance, equity, margin
-      recentEventsQueue: []   // Store events for polling
+      recentEventsQueue: [],   // Store events for polling
+      simulatedPositions: [] // For "Simulate" functionality or mixed mode
     });
 
     // Initialize empty journal for this session
@@ -351,12 +353,65 @@ app.post('/api/tradelocker/select-account', (req, res) => {
   session.lastPositionsById = {};
   session.latestState = {};
   session.recentEventsQueue = [];
+  session.simulatedPositions = [];
 
   res.json({
     ok: true,
     accountId: session.accountId,
     accNum: session.accNum
   });
+});
+
+/**
+ * POST /api/tradelocker/order
+ * Body: { sessionId, symbol, side, size, stopLoss, takeProfit }
+ * Executes a simulated order (mixed into real session) for "Simulate" functionality
+ * or acts as a proxy for real execution if IDs were mapped (currently simulation mode).
+ */
+app.post('/api/tradelocker/order', async (req, res) => {
+  const { sessionId, symbol, side, size, stopLoss, takeProfit } = req.body || {};
+  const session = getSessionOrThrow(sessionId, res);
+  if (!session) return;
+
+  try {
+    // In a full production app, we would look up Instrument ID and call TradeLocker API
+    // For this demo/simulation scope, we execute a simulated order in-memory.
+    const entryPrice = getPrice(symbol) || 0;
+    
+    // Fallback if market data missing
+    if (entryPrice === 0) {
+      return res.status(400).json({ error: "Market data unavailable for symbol" });
+    }
+
+    const positionId = `sim-${Date.now()}`;
+    const newPosition = {
+      id: positionId,
+      symbol,
+      side,
+      size: Number(size),
+      entryPrice,
+      currentPrice: entryPrice,
+      pnl: 0,
+      openTime: new Date().toISOString(),
+      sl: stopLoss,
+      tp: takeProfit,
+      isSimulated: true
+    };
+
+    if (!session.simulatedPositions) session.simulatedPositions = [];
+    session.simulatedPositions.push(newPosition);
+    
+    // Prime the event trigger by adding it to "lastPositions" immediately
+    // The next poll will see it as an existing position, so we add it here manually to prevent "new position" event?
+    // Actually, we WANT a "New Position" event on next poll. 
+    // So we DON'T add it to lastPositionsById yet. The next polling cycle in /overview will see it in the combined list
+    // and trigger the "ORDER_FILLED" event naturally.
+
+    res.json({ ok: true, orderId: positionId, entryPrice });
+  } catch (err) {
+    console.error('Order execution error', err);
+    res.status(500).json({ error: 'Failed to execute order' });
+  }
 });
 
 /**
@@ -400,7 +455,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       ? positionsJson
       : positionsJson.positions || positionsJson.data || [];
 
-    const positions = rawPositions.map((p) => {
+    const realPositions = rawPositions.map((p) => {
       const sideRaw = (p.side || p.direction || '').toString().toLowerCase();
       const side = sideRaw.includes('sell') || sideRaw.includes('short') ? 'sell' : 'buy';
       const symbol = p.symbol || p.instrument || 'UNKNOWN';
@@ -421,6 +476,35 @@ app.get('/api/tradelocker/overview', async (req, res) => {
         openTime
       };
     });
+
+    // === SIMULATION MERGE ===
+    // Process simulated positions: update PnL based on live market data
+    const simulatedPositions = session.simulatedPositions || [];
+    const updatedSimulated = simulatedPositions.map(pos => {
+       const marketPrice = getPrice(pos.symbol) || pos.currentPrice;
+       const diff = marketPrice - pos.entryPrice;
+       // Simple PnL: diff * size * contract_multiplier (assuming 1 for demo)
+       // Adjust for direction
+       let pnl = diff * pos.size; 
+       if (pos.side === 'sell') pnl = -pnl;
+       
+       // Note: In real app, consider tick value/pip value. For demo, we do raw price diff.
+       // Scaling factor for indices/crypto to make PnL look realistic
+       if (pos.symbol.includes('US30') || pos.symbol.includes('NAS')) pnl *= 1; 
+       else if (pos.symbol.includes('BTC')) pnl *= 1; 
+       else pnl *= 10000; // forex approximation
+       
+       return {
+         ...pos,
+         currentPrice: marketPrice,
+         pnl
+       };
+    });
+
+    // Save updated state back to session (for next PnL calc)
+    session.simulatedPositions = updatedSimulated;
+
+    const positions = [...realPositions, ...updatedSimulated];
 
     // === DEEP READINESS: State Diffing & Event Emission ===
     
@@ -534,9 +618,14 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     }
 
     session.lastPositionsById = currentPositionsById;
+    
+    // Merge equity for simulated trades
+    const simPnL = updatedSimulated.reduce((sum, p) => sum + p.pnl, 0);
+    const adjustedEquity = equity + simPnL;
+
     session.latestState = {
       balance,
-      equity,
+      equity: adjustedEquity,
       marginUsed
     };
 
@@ -544,7 +633,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     const overview = {
       isConnected: true,
       balance,
-      equity,
+      equity: adjustedEquity,
       marginUsed,
       positions,
       recentEvents: events

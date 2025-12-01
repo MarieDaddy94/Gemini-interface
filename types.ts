@@ -115,6 +115,15 @@ export interface BrokerAccountInfo {
   recentEvents?: BrokerEvent[];
 }
 
+export interface TradeOrderRequest {
+  sessionId: string;
+  symbol: string;
+  side: 'buy' | 'sell';
+  size: number;
+  stopLoss?: number;
+  takeProfit?: number;
+}
+
 // --- High-level AI Session Summary ---
 
 export interface LanePlan {
