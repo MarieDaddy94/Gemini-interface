@@ -1,6 +1,7 @@
 
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
+import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 
 // UI Metadata for styling specific agents
@@ -27,6 +28,7 @@ interface ChatMessage {
   agentId?: string; // for color mapping
   text: string;
   isError?: boolean;
+  tradeMeta?: TradeMeta;
 }
 
 interface ChatOverlayProps {
@@ -35,6 +37,8 @@ interface ChatOverlayProps {
   sessionId: string;
   autoFocusSymbol?: string;
   brokerSessionId?: string | null;
+  chartSymbol?: string;
+  chartTimeframe?: string;
 }
 
 const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref) => {
@@ -42,7 +46,9 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     chartContext, 
     isBrokerConnected, 
     autoFocusSymbol,
-    brokerSessionId // used for future extensions or specific broker logic
+    brokerSessionId, // used for future extensions or specific broker logic
+    chartSymbol = 'US30',
+    chartTimeframe = '15m'
   } = props;
 
   // UI State
@@ -79,7 +85,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         agentName: draft.agentName || agentName,
         
         outcome: (draft.outcome as any) || 'Open',
-        symbol: draft.symbol || autoFocusSymbol || 'US30',
+        symbol: draft.symbol || chartSymbol,
         direction: draft.direction,
         
         entryPrice: undefined,
@@ -124,7 +130,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                    role: 'assistant',
                    author: insight.agentName,
                    agentId: insight.agentId as string,
-                   text: insight.text || ''
+                   text: insight.text || '',
+                   tradeMeta: insight.tradeMeta || undefined
                 });
              }
              if (insight.error) {
@@ -247,6 +254,97 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     e.target.value = '';
   };
 
+  const getCommonPayloads = () => {
+    const journalContextPayload = entries.slice(0, 10).map((e) => ({
+      id: e.id,
+      symbol: e.symbol,
+      outcome: e.outcome,
+      playbook: e.playbook,
+      note: e.note,
+      agentId: e.agentId,
+      agentName: e.agentName,
+      timestamp: e.timestamp,
+    }));
+
+    const chartContextPayload = {
+      summary: chartContext,
+      symbol: chartSymbol,
+      timeframe: chartTimeframe
+    };
+
+    return { journalContextPayload, chartContextPayload };
+  };
+
+  const handleAgentRoundtable = async () => {
+    const agentMessages = messages.filter(m => m.role === 'assistant');
+    if (agentMessages.length === 0) return;
+  
+    setIsSending(true);
+  
+    try {
+      // Build previousInsights from chat history
+      const previousInsightsPayload = agentMessages.map(m => ({
+        agentId: m.agentId || 'unknown',
+        agentName: m.author || 'Agent',
+        message: m.text,
+        tradeMeta: m.tradeMeta,
+      }));
+  
+      const { journalContextPayload, chartContextPayload } = getCommonPayloads();
+  
+      const insights = await fetchAgentDebrief({
+        previousInsights: previousInsightsPayload,
+        chartContext: chartContextPayload,
+        journalContext: journalContextPayload,
+      });
+  
+      setMessages(prev => {
+        const next = [...prev];
+        insights.forEach(insight => {
+           if (insight.text) {
+              next.push({
+                 id: `debrief-${insight.agentId}-${Date.now()}`,
+                 role: 'assistant',
+                 author: insight.agentName,
+                 agentId: insight.agentId as string,
+                 text: insight.text || '',
+                 tradeMeta: insight.tradeMeta || undefined
+              });
+           }
+           if (insight.error) {
+              next.push({
+                 id: `err-debrief-${insight.agentId}-${Date.now()}`,
+                 role: 'assistant',
+                 author: insight.agentName,
+                 agentId: insight.agentId as string,
+                 text: `⚠️ ${insight.error}`,
+                 isError: true
+              });
+           }
+        });
+        return next;
+      });
+  
+      insights.forEach(i => {
+        if (i.journalDraft) {
+           processJournalDraft(i.journalDraft, i.agentId as string, i.agentName);
+        }
+      });
+  
+    } catch (e: any) {
+      console.error("Roundtable Error", e);
+      setMessages(prev => [...prev, {
+        id: `sys-err-debrief-${Date.now()}`,
+        role: 'assistant',
+        author: 'System',
+        text: `Error calling Roundtable: ${e.message}`,
+        isError: true
+      }]);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() && !pendingFileImage && !isVisionActive) return;
     if (isSending) return;
@@ -274,27 +372,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
       }
       setPendingFileImage(null); 
 
-      // Prepare Contexts
-      const journalContextPayload = entries.slice(0, 10).map((e) => ({
-        id: e.id,
-        symbol: e.symbol,
-        outcome: e.outcome,
-        playbook: e.playbook,
-        note: e.note,
-        agentId: e.agentId,
-        agentName: e.agentName,
-        timestamp: e.timestamp,
-      }));
-
-      // NOTE: chartContext prop is currently string, API now accepts object
-      // We wrap it if it's a string, or structure it better later
-      // For now, let's treat the existing string as a 'summary' field in a new object 
-      // OR pass it as is if backend handles string vs object flexible (which it does via stringify in prompt)
-      const chartContextPayload = {
-        summary: chartContext,
-        symbol: autoFocusSymbol || 'US30',
-        timeframe: '15m' // Placeholder, would ideally come from props or context
-      };
+      const { journalContextPayload, chartContextPayload } = getCommonPayloads();
 
       const insights = await fetchAgentInsights({
         agentIds: ACTIVE_AGENT_IDS,
@@ -322,7 +400,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
               role: 'assistant',
               author: insight.agentName,
               agentId: insight.agentId as string,
-              text: insight.text || ''
+              text: insight.text || '',
+              tradeMeta: insight.tradeMeta || undefined
             });
           }
         });
@@ -454,6 +533,31 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                      : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
                  }`}>
                    {msg.text}
+                   
+                   {/* Mini Trade Card */}
+                   {msg.tradeMeta && (
+                      <div className="mt-3 bg-gray-50 border border-gray-200 rounded-lg p-2 text-xs text-gray-600">
+                        <div className="flex flex-wrap gap-2 mb-1">
+                          {msg.tradeMeta.symbol && (
+                            <span className="font-semibold bg-gray-200 px-1.5 py-0.5 rounded">{msg.tradeMeta.symbol}</span>
+                          )}
+                          {msg.tradeMeta.direction && (
+                            <span className={`font-semibold px-1.5 py-0.5 rounded ${msg.tradeMeta.direction === 'long' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {msg.tradeMeta.direction.toUpperCase()}
+                            </span>
+                          )}
+                          {msg.tradeMeta.timeframe && (
+                            <span className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{msg.tradeMeta.timeframe}</span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-2 gap-y-1 mt-2">
+                           {msg.tradeMeta.rr && <div><span className="text-gray-400">RR:</span> {msg.tradeMeta.rr}</div>}
+                           {msg.tradeMeta.confidence && <div><span className="text-gray-400">Conf:</span> {msg.tradeMeta.confidence}%</div>}
+                           {msg.tradeMeta.stopLoss && <div><span className="text-gray-400">SL:</span> {msg.tradeMeta.stopLoss}</div>}
+                           {msg.tradeMeta.takeProfit1 && <div><span className="text-gray-400">TP1:</span> {msg.tradeMeta.takeProfit1}</div>}
+                        </div>
+                      </div>
+                   )}
                  </div>
               </div>
             </div>
@@ -512,6 +616,14 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         </div>
         <div className="mt-2 px-1 flex justify-between items-center">
            <div className="flex items-center gap-2">
+             <button
+               type="button"
+               onClick={handleAgentRoundtable}
+               disabled={isSending}
+               className="text-[10px] px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors disabled:opacity-50"
+             >
+               Agent Round 2
+             </button>
              <p className="text-[10px] text-gray-400">
                {isBrokerConnected ? 'Broker Connected' : 'Simulated Environment'}
              </p>

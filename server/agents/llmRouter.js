@@ -1,4 +1,5 @@
 
+
 // server/agents/llmRouter.js
 
 const {
@@ -327,6 +328,95 @@ async function runAgentsTurn(opts) {
   return results;
 }
 
+/**
+ * Run a debrief round where agents react to previous insights.
+ */
+async function runAgentsDebrief(opts) {
+  const { previousInsights, chartContext, journalContext } = opts;
+  const results = [];
+
+  // We want active agents from the previous round or a standard set. 
+  // Let's iterate over the agents that participated previously to let them respond.
+  // Or better, let all configured agents have a chance to chime in. 
+  // For now, let's stick to the main active agents defined in agentConfig or implied by previousInsights.
+  
+  const activeAgentIds = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
+
+  const baseMessage = `
+The user has not added any new message.
+
+This is a SECOND-ROUND internal discussion between agents.
+
+You are participating in a roundtable debrief. Read the previous agents' notes in "squadContext" and:
+
+1. ONLY respond if you have something NEW, clarifying, or contradictory to add.
+2. You may:
+   - Tighten or adjust trade levels in tradeMeta.
+   - Call out major disagreement with another agent.
+   - Summarize consensus if things are aligned.
+3. Be concise but useful.
+
+Remember: respond in the same JSON format (AgentResponse) as before.
+  `.trim();
+
+  // Squad Context is the previous round
+  const squadContext = previousInsights.map(r => ({
+      agentId: r.agentId,
+      agentName: r.agentName,
+      message: r.message,
+      tradeMeta: r.tradeMeta
+  }));
+
+  for (const id of activeAgentIds) {
+      const agentCfg = agentsById[id];
+      if (!agentCfg) continue;
+
+      try {
+        const payload = {
+          userMessage: baseMessage,
+          chartContext,
+          journalContext,
+          squadContext,
+          screenshot: null,
+          journalMode: "live" // default for debrief
+        };
+
+        let llmResult;
+        if (agentCfg.provider === "openai") {
+          llmResult = await runOpenAIAgent(agentCfg, payload);
+        } else if (agentCfg.provider === "gemini") {
+          llmResult = await runGeminiAgent(agentCfg, payload);
+        } else {
+           llmResult = { text: "Error: Unsupported provider", journalDraft: null };
+        }
+
+        if (llmResult.journalDraft) {
+            llmResult.journalDraft.agentId = agentCfg.id;
+            llmResult.journalDraft.agentName = agentCfg.name;
+        }
+
+        results.push({
+          agentId: agentCfg.id,
+          agentName: agentCfg.name,
+          text: llmResult.text,
+          journalDraft: llmResult.journalDraft,
+          tradeMeta: llmResult.tradeMeta
+        });
+
+      } catch (err) {
+        console.error(`[llmRouter] Debrief error in agent ${id}:`, err);
+        results.push({
+          agentId: agentCfg.id,
+          agentName: agentCfg.name,
+          error: err.message
+        });
+      }
+  }
+
+  return results;
+}
+
 module.exports = {
   runAgentsTurn,
+  runAgentsDebrief
 };

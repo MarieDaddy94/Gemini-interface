@@ -38,6 +38,13 @@ export interface AgentInsight {
   tradeMeta?: TradeMeta;
 }
 
+export interface AgentDebriefInput {
+  agentId: string;
+  agentName: string;
+  message: string;
+  tradeMeta?: TradeMeta;
+}
+
 // Safely resolve API URL for Vite/ESM environments
 const API_BASE_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
@@ -82,6 +89,46 @@ export async function fetchAgentInsights(params: {
   const agents = Array.isArray(json.agents) ? json.agents : [];
 
   return agents.map((a: any) => ({
+    agentId: a.agentId,
+    agentName: a.agentName,
+    text: a.text,
+    error: a.error,
+    journalDraft: a.journalDraft || null,
+    tradeMeta: a.tradeMeta || null,
+  }));
+}
+
+/**
+ * Trigger a second-round "Roundtable" where agents react to previous insights.
+ */
+export async function fetchAgentDebrief(params: {
+  previousInsights: AgentDebriefInput[];
+  chartContext?: any;
+  journalContext?: any[];
+}): Promise<AgentInsight[]> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/debrief`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      previousInsights: params.previousInsights,
+      chartContext: params.chartContext || {},
+      journalContext: params.journalContext || [],
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Agent Debrief error (${response.status}): ${text || response.statusText}`
+    );
+  }
+
+  const json = await response.json();
+  const insights = Array.isArray(json.insights) ? json.insights : [];
+
+  return insights.map((a: any) => ({
     agentId: a.agentId,
     agentName: a.agentName,
     text: a.text,

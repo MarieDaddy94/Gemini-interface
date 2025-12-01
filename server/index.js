@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -9,7 +10,7 @@ const path = require('path');
 const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
 // New Multi-Agent Router
-const { runAgentsTurn } = require("./agents/llmRouter");
+const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -65,6 +66,34 @@ app.post("/api/agents/chat", async (req, res) => {
     res.status(500).json({
       error: "LLM router error",
       details: err.message,
+    });
+  }
+});
+
+app.post("/api/agents/debrief", async (req, res) => {
+  try {
+    const { previousInsights, chartContext, journalContext } = req.body || {};
+
+    if (!previousInsights || !Array.isArray(previousInsights)) {
+      return res.status(400).json({ error: "previousInsights array is required" });
+    }
+
+    const results = await runAgentsDebrief({
+      previousInsights,
+      chartContext: chartContext || {},
+      journalContext: journalContext || []
+    });
+
+    res.json({
+      ok: true,
+      insights: results
+    });
+
+  } catch (err) {
+    console.error("Error in /api/agents/debrief:", err);
+    res.status(500).json({
+      error: "LLM debrief error",
+      details: err.message
     });
   }
 });

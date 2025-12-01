@@ -1,12 +1,24 @@
+
 import React, { useState, useRef } from 'react';
 import TradingViewWidget from './TradingViewWidget';
 
-const WebBrowser: React.FC = () => {
+interface WebBrowserProps {
+  onUrlChange?: (url: string) => void;
+}
+
+const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
   // Default to internal identifier for the widget to keep the initial load fast and clean
   const [url, setUrl] = useState('https://www.tradingview.com/chart/');
   const [activeSrc, setActiveSrc] = useState<string | null>(null); // If null, render the Widget component
   const [isLoading, setIsLoading] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const handleNavigate = (nextUrl: string) => {
+    setUrl(nextUrl);
+    if (onUrlChange) {
+      onUrlChange(nextUrl);
+    }
+  };
 
   const handleGo = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -28,12 +40,14 @@ const WebBrowser: React.FC = () => {
     } else {
         setActiveSrc(target);
     }
-    setUrl(target);
+    // Update local state AND notify parent
+    handleNavigate(target);
   };
   
   const handleHome = () => {
     setActiveSrc(null);
-    setUrl('https://www.tradingview.com/chart/');
+    const homeUrl = 'https://www.tradingview.com/chart/';
+    handleNavigate(homeUrl);
     setIsLoading(false);
   };
 

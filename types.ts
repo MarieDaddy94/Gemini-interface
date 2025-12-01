@@ -7,6 +7,18 @@ export enum AnalystPersona {
   USER = 'User'
 }
 
+export interface TradeMeta {
+  symbol?: string;
+  timeframe?: string;
+  direction?: 'long' | 'short';
+  rr?: number;
+  entryComment?: string;
+  stopLoss?: number;
+  takeProfit1?: number;
+  takeProfit2?: number;
+  confidence?: number; // 0–100
+}
+
 export interface ChatMessage {
   id: string;
   sender: AnalystPersona | string;
@@ -14,6 +26,11 @@ export interface ChatMessage {
   timestamp: Date;
   isUser: boolean;
   attachment?: string; // Base64 string of the image
+  
+  // Agent-only fields:
+  agentId?: string;
+  agentName?: string;
+  tradeMeta?: TradeMeta;
 }
 
 export interface ChartDataPoint {

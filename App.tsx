@@ -1,4 +1,5 @@
 
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -27,6 +28,45 @@ import {
 } from './symbolMap';
 
 type MainTab = 'terminal' | 'journal' | 'analysis' | 'screeners';
+
+function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
+  try {
+    const url = new URL(rawUrl);
+
+    // 1) TradingView-style query param: ?symbol=US30&interval=15
+    const symbolParam = url.searchParams.get('symbol') || undefined;
+    const intervalParam = url.searchParams.get('interval') || undefined;
+
+    // 2) Fallback: path like /symbols/US30/ or /symbol/US30/
+    let pathSymbol: string | undefined;
+    const parts = url.pathname.split('/').filter(Boolean);
+    const symIdx = parts.findIndex(p =>
+      p.toLowerCase() === 'symbols' || p.toLowerCase() === 'symbol'
+    );
+    if (symIdx >= 0 && parts[symIdx + 1]) {
+      pathSymbol = parts[symIdx + 1];
+    }
+
+    const symbol = symbolParam ?? pathSymbol;
+    let timeframe: string | undefined;
+
+    // If interval is numeric like 1,5,15,60 -> convert to 1m,5m,15m,1h
+    if (intervalParam) {
+      const n = Number(intervalParam);
+      if (!Number.isNaN(n)) {
+        if (n < 60) timeframe = `${n}m`;
+        else if (n === 60) timeframe = '1h';
+        else timeframe = `${n}m`;
+      } else {
+        timeframe = intervalParam;
+      }
+    }
+
+    return { symbol, timeframe };
+  } catch {
+    return {};
+  }
+}
 
 const App: React.FC = () => {
   // Persistent journal session id (per browser)
@@ -63,6 +103,10 @@ const App: React.FC = () => {
   const [activeAccount, setActiveAccount] =
     useState<TradeLockerAccountSummary | null>(null);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+
+  // Active Chart Context
+  const [chartSymbol, setChartSymbol] = useState<string>('US30');
+  const [chartTimeframe, setChartTimeframe] = useState<string>('15m');
 
   const [autoFocusSymbol, setAutoFocusSymbol] =
     useState<FocusSymbol>('Auto');
@@ -160,6 +204,12 @@ const App: React.FC = () => {
       prompt,
       agentId: 'journal_coach', // Matches the ID in AGENT_UI_META and ACTIVE_AGENT_IDS
     });
+  };
+
+  const handleBrowserUrlChange = (url: string) => {
+    const { symbol, timeframe } = extractChartContextFromUrl(url);
+    if (symbol) setChartSymbol(symbol);
+    if (timeframe) setChartTimeframe(timeframe);
   };
 
   // Merge Mock Market Data with Real Broker Data for the AI Context
@@ -383,7 +433,7 @@ const App: React.FC = () => {
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {activeTab === 'terminal' && (
             <div className="flex-1 min-h-0">
-              <WebBrowser />
+              <WebBrowser onUrlChange={handleBrowserUrlChange} />
             </div>
           )}
 
@@ -411,6 +461,8 @@ const App: React.FC = () => {
       <ChatOverlay
         ref={chatOverlayRef}
         chartContext={marketContext}
+        chartSymbol={chartSymbol}
+        chartTimeframe={chartTimeframe}
         isBrokerConnected={!!brokerSessionId}
         sessionId={effectiveJournalSessionId}
         autoFocusSymbol={autoFocusSymbol}
