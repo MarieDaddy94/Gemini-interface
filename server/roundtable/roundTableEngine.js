@@ -15,6 +15,7 @@
 // - finalSummary (moderated gameplan)
 // - agents[] (per-agent messages)
 // - autopilotCommand (normalized JSON for the Autopilot layer, or null)
+// - riskCommandComment (Risk Manager’s commentary on that command, if any)
 
 const { callAgentLLM } = require('../llmRouter');
 const { getAgentById } = require('../agents/agents');
@@ -180,6 +181,45 @@ function extractAutopilotCommandFromText(text) {
 }
 
 /**
+ * Render a one-line summary of an AutopilotCommand for prompts / UI.
+ */
+function summarizeAutopilotCommand(cmd) {
+  if (!cmd) return '(no command)';
+
+  if (cmd.type === 'open') {
+    const symbol = cmd.symbol || 'unknown';
+    const side = cmd.side || '?';
+    const qty = cmd.qty ?? '?';
+    const entryType = cmd.entryType || 'market';
+    const pricePart =
+      cmd.price != null ? ` @ ${cmd.price}` : ' @ market price';
+    const sl =
+      cmd.slPrice != null ? ` | SL ${cmd.slPrice}` : ' | SL: none';
+    const tp =
+      cmd.tpPrice != null ? ` | TP ${cmd.tpPrice}` : ' | TP: none';
+    return `OPEN ${side} ${symbol} qty=${qty} (${entryType}${pricePart}${sl}${tp})`;
+  }
+
+  if (cmd.type === 'close') {
+    const pid = cmd.positionId;
+    const qty =
+      cmd.qty != null ? ` qty=${cmd.qty}` : ' qty=FULL';
+    return `CLOSE position ${pid}${qty}`;
+  }
+
+  if (cmd.type === 'modify') {
+    const pid = cmd.positionId;
+    const sl =
+      cmd.slPrice != null ? ` SL=${cmd.slPrice}` : ' SL=unchanged';
+    const tp =
+      cmd.tpPrice != null ? ` TP=${cmd.tpPrice}` : ' TP=unchanged';
+    return `MODIFY position ${pid}${sl}${tp}`;
+  }
+
+  return `(unknown command type: ${cmd.type})`;
+}
+
+/**
  * Run the multi-agent trading round-table.
  *
  * @param {Object} params
@@ -316,7 +356,7 @@ Be concrete; keep it < 300 words.
     });
   }
 
-  // ----- 3) Risk Manager -----
+  // ----- 3) Risk Manager (context-level) -----
   let riskText = '';
   if (riskManager) {
     const riskSystemPrompt = `
@@ -357,7 +397,7 @@ Keep it < 250 words.
     });
   }
 
-  // ----- 4) Execution Bot (now also emits a JSON AutopilotCommand) -----
+  // ----- 4) Execution Bot (talks AND emits a JSON AutopilotCommand) -----
   let executionText = '';
   let autopilotCommand = null;
 
@@ -377,11 +417,16 @@ Think in terms of points, clean levels, and clear "if/then" rules.
 
 Your response has TWO parts:
 
-1) A normal natural-language explanation (max ~200 words) describing:
+1) A natural-language explanation (max ~200 words) describing:
    - which instrument and direction you prefer,
    - where to enter,
    - where to place SL / TP,
    - how to manage the position if price moves for/against him.
+
+   At the END of this explanation (before the JSON block), include a short
+   bullet list that explicitly states the numeric values you will put in
+   the JSON command below: symbol, side, qty, entryType, entry price,
+   SL, and TP.
 
 2) At the END of your reply, you MUST output a single JSON object between
    <AUTOPILOT_JSON> and </AUTOPILOT_JSON> that encodes a suggested AutopilotCommand
@@ -473,14 +518,83 @@ ${userQuestion || '(none)'}
     autopilotCommand = extractAutopilotCommandFromText(executionText);
   }
 
-  // ----- 5) Final synthesis by Strategist -----
+  // Optional: short textual summary of the autopilot command for prompts/UI.
+  const autopilotCommandSummary = summarizeAutopilotCommand(
+    autopilotCommand,
+  );
+
+  // ----- 5) Risk Manager second pass: comment on the exact command -----
+  let riskCommandComment = '';
+  if (riskManager && autopilotCommand) {
+    const riskOnCommandSystemPrompt = `
+You are the Risk Manager commenting on a PROPOSED TRADE COMMAND that will be
+passed to an Autopilot engine connected to a live trading account.
+
+Your job now is NOT to restate general risk rules, but to evaluate this specific
+command in light of the CURRENT ACCOUNT SNAPSHOT and recent history:
+
+- Is this command appropriate for today's account health and daily drawdown?
+- Is the size (qty) reasonable?
+- Is the SL placement protective enough?
+- Is the TP realistic relative to SL and the current context?
+
+You must respond with:
+- A one-line verdict: "ALLOW", "ALLOW WITH CAUTION", or "BLOCK".
+- 3–6 bullet points explaining why, explicitly referencing the command fields
+  (symbol, side, qty, slPrice, tpPrice) and account metrics (equity, dailyPnL, open positions).
+- If you think it should be blocked, suggest specific changes (smaller size, tighter SL, etc.).
+
+Keep it under 200 words. Be blunt and clear.
+    `.trim();
+
+    const commandText = JSON.stringify(autopilotCommand, null, 2);
+
+    const riskOnCommandUserContent = `
+CURRENT ACCOUNT SNAPSHOT:
+${formatBrokerSnapshotForPrompt(brokerSnapshot)}
+
+PROPOSED AUTOPILOT COMMAND (JSON):
+${commandText}
+
+SHORT SUMMARY OF THIS COMMAND:
+${autopilotCommandSummary}
+
+RECENT CONTEXT / ROUND-TABLE NOTES:
+${contextText}
+`.trim();
+
+    riskCommandComment = await callAgentLLM({
+      agentId: riskManager.id,
+      systemPrompt: riskOnCommandSystemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: riskOnCommandUserContent,
+        },
+      ],
+      temperature: 0.25,
+      maxTokens: 600,
+    });
+
+    appendAgentMemory({
+      agentId: riskManager.id,
+      displayName: riskManager.displayName,
+      role: riskManager.role,
+      sessionState,
+      topic: 'roundtable-risk-on-command',
+      content: riskCommandComment,
+    });
+  }
+
+  // ----- 6) Final synthesis by Strategist -----
   const synthesisSystemPrompt = `
 You are the Strategist acting as Moderator of an AI trading round-table.
 You have heard from:
 - Strategist (you)
 - Pattern GPT
-- Risk Manager
+- Risk Manager (context-level)
 - Execution Bot
+- Risk Manager (command-level) if present
 
 Your job is to produce a final compact gameplan for Anthony, with this structure:
 
@@ -507,11 +621,14 @@ ${strategistText}
 PATTERN GPT SAID:
 ${patternText || '(no pattern agent configured)'}
 
-RISK MANAGER SAID:
+RISK MANAGER (context) SAID:
 ${riskText || '(no risk manager agent configured)'}
 
 EXECUTION BOT SAID:
 ${executionText || '(no execution bot agent configured)'}
+
+RISK MANAGER (on command) SAID:
+${riskCommandComment || '(no command-level comment)'}
   `.trim();
 
   const synthesisText = await callAgentLLM({
@@ -566,6 +683,17 @@ ${executionText || '(no execution bot agent configured)'}
     });
   }
 
+  if (riskManager && riskCommandComment) {
+    agents.push({
+      id: `${riskManager.id}-on-command`,
+      displayName: `${riskManager.displayName} (on command)`,
+      role: riskManager.role,
+      provider: riskManager.provider,
+      model: riskManager.model,
+      content: riskCommandComment,
+    });
+  }
+
   return {
     finalSummary: synthesisText.trim(),
     bias: '',
@@ -573,6 +701,8 @@ ${executionText || '(no execution bot agent configured)'}
     riskNotes: '',
     agents,
     autopilotCommand, // <--- NEW: this is what AutopilotPanel will eventually use
+    autopilotCommandSummary,
+    riskCommandComment,
   };
 }
 

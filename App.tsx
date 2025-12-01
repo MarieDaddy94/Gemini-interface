@@ -82,6 +82,10 @@ function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timefram
 // Inner App Component that uses Contexts
 const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<MainTab>('terminal');
+  
+  // NEW: State for highlighting Autopilot tab
+  const [autopilotHasNew, setAutopilotHasNew] = useState(false);
+
   const tabs: { id: MainTab; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
     { id: 'command', label: 'Command Center' },
@@ -295,6 +299,13 @@ const Dashboard: React.FC = () => {
     if (timeframe) setChartTimeframe(timeframe);
   };
 
+  const handleTabChange = (tabId: MainTab) => {
+    setActiveTab(tabId);
+    if (tabId === 'autopilot') {
+      setAutopilotHasNew(false);
+    }
+  };
+
   const marketContext = useMemo(() => {
     const liveDataStr = Object.values(marketData)
       .map(tick => 
@@ -357,10 +368,16 @@ const Dashboard: React.FC = () => {
               {tabs.map((tab) => (
                 <button
                   key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${activeTab === tab.id ? 'bg-[#2962ff]/10 text-[#2962ff] border border-[#2962ff]/30' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'}`}
+                  onClick={() => handleTabChange(tab.id)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${activeTab === tab.id ? 'bg-[#2962ff]/10 text-[#2962ff] border border-[#2962ff]/30' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'} relative`}
                 >
                   {tab.label}
+                  {tab.id === 'autopilot' && autopilotHasNew && activeTab !== 'autopilot' && (
+                    <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -450,7 +467,10 @@ const Dashboard: React.FC = () => {
                </div>
                <div className="flex-1 overflow-hidden flex flex-col">
                   <div className="flex-1 min-h-0 flex flex-col">
-                     <RoundTablePanel onCommandProposed={setAgentAutopilotCommand} />
+                     <RoundTablePanel onCommandProposed={(cmd) => {
+                       setAgentAutopilotCommand(cmd);
+                       if (cmd) setAutopilotHasNew(true);
+                     }} />
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
                   <div className="flex-1 min-h-0 flex flex-col">
