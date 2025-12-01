@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TradeLockerCredentials } from '../types';
 
 interface ConnectBrokerModalProps {
@@ -19,6 +19,14 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Clear state when opened/closed
+  useEffect(() => {
+    if (!isOpen) {
+      setError('');
+      setLoading(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -28,14 +36,16 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
 
     try {
       await onConnect({
-        server,
-        email,
+        server: server.trim(),
+        email: email.trim(),
         password,
         isDemo
       });
+      // Clear password on success for security
+      setPassword('');
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Connection failed');
+      setError(err.message || 'Connection failed. Please check credentials.');
     } finally {
       setLoading(false);
     }
@@ -113,12 +123,11 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
               value={server}
               onChange={(e) => setServer(e.target.value)}
               className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
-              placeholder="e.g. EightCap-Demo"
+              placeholder={isDemo ? "e.g. EightCap-Demo" : "e.g. EightCap-Live"}
+              required
             />
             <p className="text-[10px] text-gray-500 mt-1">
-              This is the <span className="font-semibold">server</span> field
-              from your TradeLocker login (for example &quot;EightCap-Demo&quot;
-              or your prop firm&apos;s server name). It is not a URL.
+              Check your welcome email for the exact server name. It is <strong>not</strong> a URL.
             </p>
           </div>
 
@@ -132,6 +141,7 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
               onChange={(e) => setEmail(e.target.value)}
               className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
               placeholder="trader@example.com"
+              required
             />
           </div>
 
@@ -145,11 +155,12 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
               onChange={(e) => setPassword(e.target.value)}
               className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
               placeholder="••••••••"
+              required
             />
           </div>
 
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-red-500 text-xs flex items-center gap-2">
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-red-500 text-xs flex items-center gap-2 animate-fade-in">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="14"
@@ -173,7 +184,7 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-[#2962ff] hover:bg-[#1e53e5] text-white font-medium py-2.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full bg-[#2962ff] hover:bg-[#1e53e5] text-white font-medium py-2.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-blue-500/20"
             >
               {loading && (
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
@@ -181,8 +192,7 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
               {loading ? 'Connecting...' : 'Connect Account'}
             </button>
             <p className="text-center text-[10px] text-gray-500 mt-3">
-              Your credentials are sent to your backend, which talks directly to
-              the official TradeLocker API.
+              Your credentials are securely sent to the proxy server, which communicates directly with the TradeLocker API.
             </p>
           </div>
         </form>

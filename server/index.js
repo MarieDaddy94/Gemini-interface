@@ -274,7 +274,8 @@ app.post('/api/tradelocker/login', async (req, res) => {
       email,
       server,
       accounts,
-      lastPositionsById: {} // id -> { id, symbol, pnl }
+      lastPositionsById: {}, // id -> full position object
+      latestState: {}        // balance, equity, margin
     });
 
     // Initialize empty journal for this session
@@ -332,6 +333,7 @@ app.post('/api/tradelocker/select-account', (req, res) => {
   session.accountId = String(target.id);
   session.accNum = Number(target.accNum);
   session.lastPositionsById = {};
+  session.latestState = {};
 
   res.json({
     ok: true,
@@ -455,17 +457,16 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       };
     });
 
-    // === Auto-outcome detection for linked journal entries ===
+    // === Update Session Cache for AI Tools ===
+    
     const prevPositionsById = session.lastPositionsById || {};
     const currentPositionsById = {};
     for (const pos of positions) {
-      currentPositionsById[pos.id] = {
-        id: pos.id,
-        symbol: pos.symbol,
-        pnl: pos.pnl
-      };
+      // Store full position object so AI can read it
+      currentPositionsById[pos.id] = pos;
     }
 
+    // Check for closed positions (ids that disappeared)
     const closedIds = Object.keys(prevPositionsById).filter(
       (id) => !currentPositionsById[id]
     );
@@ -507,6 +508,11 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     }
 
     session.lastPositionsById = currentPositionsById;
+    session.latestState = {
+      balance: Number(balance),
+      equity: Number(equity),
+      marginUsed: Number(marginUsed)
+    };
 
     const overview = {
       isConnected: true,

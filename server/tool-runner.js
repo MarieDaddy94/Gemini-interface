@@ -33,12 +33,16 @@ function createRuntimeContext(sessions, journals, reqContext) {
       const session = getSession(accountId);
       if (!session) return "No broker session connected.";
       
-      // In a real app, query backend for fresh balance
-      // We'll return the session's memory state
+      // Use cached state from polling, fallback to initial account info
+      const state = session.latestState || {};
+      const acc = session.accounts?.[0] || {};
+      
       return {
         accountId: session.accountId,
-        accountName: session.accounts?.[0]?.name,
-        balance: 10000, // Mock or fetch real
+        accountName: acc.name,
+        balance: state.balance ?? acc.balance, 
+        equity: state.equity,
+        marginUsed: state.marginUsed,
         isDemo: session.isDemo,
         server: session.server
       };
