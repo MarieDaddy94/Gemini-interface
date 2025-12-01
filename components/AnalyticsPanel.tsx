@@ -10,7 +10,8 @@ import {
   ResponsiveContainer, 
   Cell, 
   PieChart, 
-  Pie 
+  Pie,
+  ReferenceLine
 } from 'recharts';
 
 const AnalyticsPanel: React.FC = () => {
@@ -36,6 +37,8 @@ const AnalyticsPanel: React.FC = () => {
       string,
       { wins: number; losses: number; be: number; closed: number; pnl: number }
     > = {};
+
+    const agentStats: Record<string, { count: number; pnl: number }> = {};
 
     for (const e of entries) {
       // Outcomes
@@ -76,6 +79,11 @@ const AnalyticsPanel: React.FC = () => {
       if (e.agentName || e.agentId) {
         const key = e.agentName || e.agentId || 'Unknown';
         byAgent[key] = (byAgent[key] || 0) + 1;
+
+        // Rich stats
+        if (!agentStats[key]) agentStats[key] = { count: 0, pnl: 0 };
+        agentStats[key].count++;
+        if (typeof e.pnl === 'number') agentStats[key].pnl += e.pnl;
       }
 
       // Source (ai/manual/imported)
@@ -124,6 +132,7 @@ const AnalyticsPanel: React.FC = () => {
       byOutcome,
       bySymbol,
       byAgent,
+      agentStats,
       bySource,
       // numeric metrics
       totalPnl,
@@ -159,6 +168,15 @@ const AnalyticsPanel: React.FC = () => {
     ].filter(d => d.value > 0);
   }, [stats]);
 
+  const agentPerformanceData = useMemo(() => {
+    return Object.entries(stats.agentStats)
+      .map(([name, data]) => ({
+        name,
+        pnl: data.pnl,
+        count: data.count
+      }))
+      .sort((a, b) => b.pnl - a.pnl);
+  }, [stats]);
 
   const sortRecord = (rec: Record<string, number>) =>
     Object.entries(rec).sort((a, b) => b[1] - a[1]);
@@ -384,28 +402,46 @@ const AnalyticsPanel: React.FC = () => {
             )}
           </div>
 
-          {/* Agent contribution */}
-          <div className="rounded-lg border border-white/10 p-3">
+          {/* Agent contribution - Expanded to chart */}
+          <div className="rounded-lg border border-white/10 p-3 flex flex-col bg-[#161a25]">
             <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-              Agent Contribution
+              Agent Performance (PnL)
             </div>
-
-            {Object.keys(stats.byAgent).length === 0 ? (
-              <div className="text-[11px] opacity-60">
-                Once the AI team starts logging journal entries, you&apos;ll see
-                which agent is carrying the most weight.
-              </div>
-            ) : (
-              sortRecord(stats.byAgent).map(([agent, count]) => (
-                <div
-                  key={agent}
-                  className="flex justify-between text-[11px] mb-1 py-1 border-b border-white/5 last:border-0"
-                >
-                  <span className="capitalize">{agent}</span>
-                  <span className="opacity-70 font-mono">{count}</span>
-                </div>
-              ))
-            )}
+            
+            <div className="flex-1 min-h-[150px]">
+               {agentPerformanceData.length > 0 ? (
+                 <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={agentPerformanceData} layout="vertical" margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+                      <XAxis type="number" hide />
+                      <YAxis 
+                        dataKey="name" 
+                        type="category" 
+                        width={80} 
+                        tick={{fontSize: 10, fill: '#9ca3af'}} 
+                        axisLine={false} 
+                        tickLine={false} 
+                        interval={0}
+                      />
+                      <RechartsTooltip 
+                          contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#d1d4dc', fontSize: '11px', borderRadius: '4px' }}
+                          cursor={{fill: 'rgba(255,255,255,0.05)'}}
+                          formatter={(val: number) => [`${val > 0 ? '+' : ''}${val.toFixed(2)}`, 'PnL']}
+                      />
+                      <ReferenceLine x={0} stroke="#2a2e39" />
+                      <Bar dataKey="pnl" radius={[0, 4, 4, 0]} barSize={16}>
+                        {agentPerformanceData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? '#3b82f6' : '#f23645'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                 </ResponsiveContainer>
+               ) : (
+                 <div className="h-full flex flex-col items-center justify-center text-[11px] opacity-60 text-center">
+                    <p>No agent data yet.</p>
+                    <p className="text-[9px] mt-1">AI entries will appear here.</p>
+                 </div>
+               )}
+            </div>
           </div>
         </div>
 
