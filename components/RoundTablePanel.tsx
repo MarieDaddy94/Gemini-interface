@@ -1,66 +1,36 @@
 
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
+import { useRoundTableAutopilotPlan } from '../hooks/useRoundTableAutopilotPlan';
+import { AutopilotCommand } from '../types';
 
-interface RoundTableAgentMessage {
-  id: string;
-  displayName: string;
-  role: string;
-  provider: string;
-  model: string;
-  content: string;
+interface RoundTablePanelProps {
+  onCommandProposed?: (cmd: AutopilotCommand | null) => void;
 }
 
-interface RoundTableResult {
-  finalSummary: string;
-  bias: string;
-  executionNotes: string;
-  riskNotes: string;
-  agents: RoundTableAgentMessage[];
-}
-
-const RoundTablePanel: React.FC = () => {
+const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) => {
   const { state: sessionState } = useTradingSession();
+  const { run, loading, error, lastResponse } = useRoundTableAutopilotPlan();
 
   const [question, setQuestion] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<RoundTableResult | null>(null);
 
   const handleRunRoundTable = async () => {
-    setError(null);
-    setIsLoading(true);
-    setResult(null);
-
     try {
-      const body = {
+      const response = await run({
         sessionState,
         userQuestion: question,
         visualSummary: null, // later we can inject Gemini vision summary here
-      };
-
-      const resp = await fetch('/api/roundtable/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
       });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(
-          `Round-table error (${resp.status}): ${resp.statusText} - ${text}`
-        );
+      
+      if (onCommandProposed) {
+        onCommandProposed(response.autopilotCommand);
       }
-
-      const json = (await resp.json()) as RoundTableResult;
-      setResult(json);
-    } catch (err: any) {
-      console.error('RoundTablePanel error:', err);
-      setError(err?.message || 'Failed to run round-table.');
-    } finally {
-      setIsLoading(false);
+    } catch (err) {
+      // Error is handled by hook state
     }
   };
+
+  const result = lastResponse?.roundTable;
 
   return (
     <div className="roundtable-panel flex flex-col bg-[#050509] text-gray-100 border-l border-gray-800">
@@ -97,9 +67,9 @@ const RoundTablePanel: React.FC = () => {
               type="button"
               className="px-3 py-1 rounded-md bg-indigo-600 hover:bg-indigo-500 text-[11px] disabled:bg-indigo-900 disabled:cursor-not-allowed"
               onClick={handleRunRoundTable}
-              disabled={isLoading}
+              disabled={loading}
             >
-              {isLoading ? 'Running...' : 'Run Round-Table'}
+              {loading ? 'Running...' : 'Run Round-Table'}
             </button>
           </div>
         </div>
@@ -161,7 +131,7 @@ const RoundTablePanel: React.FC = () => {
           </div>
         )}
 
-        {!result && !error && !isLoading && (
+        {!result && !error && !loading && (
           <div className="text-[10px] text-gray-500 mt-2">
             Tip: Try running a round-table before and after big sessions (London
             / NY) to see how the team’s bias shifts as structure evolves.

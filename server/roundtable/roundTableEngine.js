@@ -1,24 +1,23 @@
 
 // server/roundtable/roundTableEngine.js
 //
-// Multi-agent trading round-table with per-agent memory AND broker/account state.
+// Multi-agent trading round-table with per-agent memory, broker/account state,
+// and Execution Bot that also proposes a structured AutopilotCommand for
+// the Autopilot engine.
+//
 // Agents:
 // - Strategist (GPT-5.1)
 // - Pattern GPT (Gemini)
 // - Risk Manager (GPT-5.1)
 // - Execution Bot (GPT-5.1-mini)
 //
-// Each agent sees:
-// - Shared trading context
-// - Broker/account snapshot (balance, equity, open positions, daily DD)
-// - Its own local memory (past notes in similar contexts)
-//
-// After they respond, their replies are written back into their memory.
+// Output includes:
+// - finalSummary (moderated gameplan)
+// - agents[] (per-agent messages)
+// - autopilotCommand (normalized JSON for the Autopilot layer, or null)
 
 const { callAgentLLM } = require('../llmRouter');
-const {
-  getAgentById,
-} = require('../agents/agents');
+const { getAgentById } = require('../agents/agents');
 const {
   getSimilarAutopilotHistory,
 } = require('../history/autopilotHistoryStore');
@@ -40,7 +39,12 @@ const {
  * @param {string|null} visualSummary
  * @param {object|null} brokerSnapshot
  */
-function buildContextText(sessionState, recentJournal, visualSummary, brokerSnapshot) {
+function buildContextText(
+  sessionState,
+  recentJournal,
+  visualSummary,
+  brokerSnapshot,
+) {
   const instrument = sessionState?.instrument || {};
   const tf = sessionState?.timeframe || {};
   const env = sessionState?.environment || 'sim';
@@ -56,7 +60,7 @@ function buildContextText(sessionState, recentJournal, visualSummary, brokerSnap
     `Timeframe: ${tf.currentTimeframe || 'n/a'}`,
     `Environment: ${env}`,
     `Autopilot mode: ${mode}`,
-    ''
+    '',
   );
 
   if (sessionState?.sessionTag) {
@@ -70,19 +74,15 @@ function buildContextText(sessionState, recentJournal, visualSummary, brokerSnap
   const brokerText = formatBrokerSnapshotForPrompt(brokerSnapshot);
   parts.push('', 'ACCOUNT SNAPSHOT:', brokerText);
 
-  // Last few journal / autopilot entries
+  // Last few journal / autopilot entries (similar history)
   if (Array.isArray(recentJournal) && recentJournal.length) {
     parts.push('', 'Recent trades / journal notes (most recent first):');
     recentJournal.slice(0, 8).forEach((j, idx) => {
       const dir = (j.direction || '').toUpperCase();
       const risk =
-        typeof j.riskPercent === 'number'
-          ? `${j.riskPercent}%`
-          : 'n/a';
+        typeof j.riskPercent === 'number' ? `${j.riskPercent}%` : 'n/a';
       const pnl =
-        typeof j.pnl === 'number'
-          ? j.pnl.toFixed(2)
-          : 'n/a';
+        typeof j.pnl === 'number' ? j.pnl.toFixed(2) : 'n/a';
       const verdict = j.allowed
         ? j.recommended
           ? 'Allowed/Recommended'
@@ -93,7 +93,7 @@ function buildContextText(sessionState, recentJournal, visualSummary, brokerSnap
         `${idx + 1}. ${j.instrumentSymbol || instrumentLabel} ${dir} ` +
           `(risk=${risk}, pnl=${pnl}, verdict=${verdict}, mode=${
             j.autopilotMode || mode
-          }) - ${j.planSummary || ''}`
+          }) - ${j.planSummary || ''}`,
       );
     });
   }
@@ -113,7 +113,11 @@ function buildContextText(sessionState, recentJournal, visualSummary, brokerSnap
  * @param {string} userQuestion
  * @param {Array<object>} agentMemoryRecords
  */
-function buildAgentUserPrompt(baseContextText, userQuestion, agentMemoryRecords) {
+function buildAgentUserPrompt(
+  baseContextText,
+  userQuestion,
+  agentMemoryRecords,
+) {
   const questionBlock = (userQuestion || '').trim()
     ? `\n\nTRADER QUESTION:\n${userQuestion.trim()}`
     : '';
@@ -135,6 +139,44 @@ CURRENT CONTEXT (including broker/account state):
 ${baseContextText}
 ${questionBlock}
 `.trim();
+}
+
+/**
+ * Try to extract a JSON AutopilotCommand from Execution Bot output.
+ *
+ * Execution Bot should include a block like:
+ *
+ * <AUTOPILOT_JSON>
+ * { "type": "open", ... }
+ * </AUTOPILOT_JSON>
+ */
+function extractAutopilotCommandFromText(text) {
+  if (!text) return null;
+
+  const match = text.match(
+    /<AUTOPILOT_JSON>\s*([\s\S]*?)\s*<\/AUTOPILOT_JSON>/i,
+  );
+  if (!match || !match[1]) return null;
+
+  const raw = match[1];
+  try {
+    const parsed = JSON.parse(raw);
+
+    // Very light sanity check
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.type) return null;
+
+    // Allow "none" to mean "no trade"
+    if (parsed.type === 'none') return null;
+
+    return parsed;
+  } catch (err) {
+    console.error(
+      '[roundTableEngine] Failed to parse AUTOPILOT_JSON:',
+      err,
+    );
+    return null;
+  }
 }
 
 /**
@@ -160,7 +202,7 @@ async function runTradingRoundTable({
 
   if (!strategist) {
     throw new Error(
-      'Strategist agent not configured. Check agents.js.'
+      'Strategist agent not configured. Check agents.js.',
     );
   }
 
@@ -175,7 +217,7 @@ async function runTradingRoundTable({
     sessionState,
     similarHistory,
     visualSummary,
-    brokerSnapshot
+    brokerSnapshot,
   );
 
   // ----- get per-agent memory -----
@@ -209,7 +251,7 @@ Always be concrete and keep it < 300 words.
   const strategistUserContent = buildAgentUserPrompt(
     contextText,
     userQuestion,
-    strategistMemory
+    strategistMemory,
   );
 
   const strategistText = await callAgentLLM({
@@ -253,7 +295,7 @@ Be concrete; keep it < 300 words.
     const patternUserContent = buildAgentUserPrompt(
       contextText,
       userQuestion,
-      patternMemory
+      patternMemory,
     );
 
     patternText = await callAgentLLM({
@@ -294,7 +336,7 @@ Keep it < 250 words.
     const riskUserContent = buildAgentUserPrompt(
       contextText,
       userQuestion,
-      riskMemory
+      riskMemory,
     );
 
     riskText = await callAgentLLM({
@@ -315,8 +357,10 @@ Keep it < 250 words.
     });
   }
 
-  // ----- 4) Execution Bot -----
+  // ----- 4) Execution Bot (now also emits a JSON AutopilotCommand) -----
   let executionText = '';
+  let autopilotCommand = null;
+
   if (executionBot) {
     const executionSystemPrompt = `
 You are the Execution Bot. Your job is to turn the Strategist+Pattern+Risk ideas into:
@@ -328,9 +372,60 @@ You are the Execution Bot. Your job is to turn the Strategist+Pattern+Risk ideas
 You MUST consider current open positions and daily drawdown to avoid stacking
 too much risk on the same instrument.
 
-Assume Anthony is trading indices with high pip value (US30/NAS100).
-Think in terms of points and clear "if/then" rules.
-Keep it < 250 words.
+Assume Anthony is trading indices with high pip value (US30/NAS100) and XAUUSD.
+Think in terms of points, clean levels, and clear "if/then" rules.
+
+Your response has TWO parts:
+
+1) A normal natural-language explanation (max ~200 words) describing:
+   - which instrument and direction you prefer,
+   - where to enter,
+   - where to place SL / TP,
+   - how to manage the position if price moves for/against him.
+
+2) At the END of your reply, you MUST output a single JSON object between
+   <AUTOPILOT_JSON> and </AUTOPILOT_JSON> that encodes a suggested AutopilotCommand
+   in this TypeScript shape:
+
+   type AutopilotCommand =
+     | {
+         type: "open";
+         tradableInstrumentId: number;
+         symbol?: string;
+         side: "BUY" | "SELL";
+         qty: number;
+         entryType: "market" | "limit" | "stop";
+         price?: number;      // entry price or current price if market
+         stopPrice?: number;  // for stop orders
+         slPrice?: number;
+         tpPrice?: number;
+         routeId?: number | string;
+         clientOrderId?: string;
+       }
+     | {
+         type: "close";
+         positionId: string | number;
+         qty?: number;        // 0 or omitted = close full
+       }
+     | {
+         type: "modify";
+         positionId: string | number;
+         slPrice?: number | null;
+         tpPrice?: number | null;
+       }
+     | {
+         type: "none";
+         reason: string;      // use this if you think no trade should be taken
+       };
+
+   - Use the instrument and tradableInstrumentId from the context if available
+     (e.g. sessionState.instrument.symbol / .tradableInstrumentId). If unknown,
+     set tradableInstrumentId to 0 and symbol to a reasonable guess.
+   - Use qty as a normal prop-firm-friendly size (you can assume 1.0 = 1 lot on US30).
+   - Always include a protective slPrice for type="open".
+   - If you think Anthony should *not* trade here, output { "type": "none", "reason": "..." }.
+
+   Do NOT wrap the JSON in backticks. Only wrap it in <AUTOPILOT_JSON> ... </AUTOPILOT_JSON> tags.
     `.trim();
 
     const combinedForExecution = `
@@ -340,13 +435,13 @@ ${contextText}
 YOUR PERSONAL MEMORY:
 ${formatAgentMemoryForPrompt(execMemory)}
 
-STRATEGIST NOTES:
+STRATEGIST SAID:
 ${strategistText}
 
-PATTERN NOTES:
+PATTERN GPT SAID:
 ${patternText || '(none yet)'}
 
-RISK NOTES:
+RISK MANAGER SAID:
 ${riskText || '(none yet)'}
 
 TRADER QUESTION (if any):
@@ -363,7 +458,7 @@ ${userQuestion || '(none)'}
       systemPrompt: executionSystemPrompt,
       messages: [execUserMessage],
       temperature: 0.3,
-      maxTokens: 700,
+      maxTokens: 900,
     });
 
     appendAgentMemory({
@@ -374,6 +469,8 @@ ${userQuestion || '(none)'}
       topic: 'roundtable-execution',
       content: executionText,
     });
+
+    autopilotCommand = extractAutopilotCommandFromText(executionText);
   }
 
   // ----- 5) Final synthesis by Strategist -----
@@ -475,6 +572,7 @@ ${executionText || '(no execution bot agent configured)'}
     executionNotes: '',
     riskNotes: '',
     agents,
+    autopilotCommand, // <--- NEW: this is what AutopilotPanel will eventually use
   };
 }
 

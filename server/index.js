@@ -551,6 +551,54 @@ app.post('/api/autopilot/plan-trade', async (req, res) => {
   }
 });
 
+// ------------------------------
+// Autopilot plan from round-table
+// ------------------------------
+app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
+  try {
+    const {
+      sessionState,
+      userQuestion,
+      recentJournal,
+      visualSummary,
+    } = req.body || {};
+
+    if (!sessionState) {
+      return res.status(400).json({
+        ok: false,
+        error: 'MissingSessionState',
+        message: 'sessionState is required in the request body.',
+      });
+    }
+
+    const result = await runTradingRoundTable({
+      sessionState,
+      userQuestion: userQuestion || '',
+      recentJournal: Array.isArray(recentJournal) ? recentJournal : [],
+      visualSummary: visualSummary ?? null,
+    });
+
+    res.json({
+      ok: true,
+      roundTable: {
+        finalSummary: result.finalSummary,
+        agents: result.agents,
+        bias: result.bias,
+        executionNotes: result.executionNotes,
+        riskNotes: result.riskNotes,
+      },
+      autopilotCommand: result.autopilotCommand || null,
+    });
+  } catch (err) {
+    console.error('[API] /api/autopilot/plan-from-roundtable error:', err);
+    res.status(500).json({
+      ok: false,
+      error: 'RoundTableAutopilotPlanError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
 app.post('/api/autopilot/voice-parse', async (req, res) => {
   try {
     const { transcript, sessionState } = req.body || {};

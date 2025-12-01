@@ -31,7 +31,8 @@ import {
   PlaybookReviewPayload,
   BrokerEvent,
   ChartConfig,
-  MarketTick
+  MarketTick,
+  AutopilotCommand
 } from './types';
 import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
 import {
@@ -121,6 +122,9 @@ const Dashboard: React.FC = () => {
   const [chartSymbol, setChartSymbol] = useState<string>('US30');
   const [chartTimeframe, setChartTimeframe] = useState<string>('15m');
   const [autoFocusSymbol, setAutoFocusSymbol] = useState<FocusSymbol>('Auto');
+
+  // Autopilot Command State (Shared between RoundTable and Autopilot Panel)
+  const [agentAutopilotCommand, setAgentAutopilotCommand] = useState<AutopilotCommand | null>(null);
 
   const effectiveJournalSessionId = brokerSessionId || journalSessionId;
   const chatOverlayRef = useRef<ChatOverlayHandle | null>(null);
@@ -429,7 +433,7 @@ const Dashboard: React.FC = () => {
           {/* Autopilot Tab - Updated for new Execution Panel */}
           {activeTab === 'autopilot' && (
             <div className="flex-1 min-h-0 h-full">
-               <AutopilotPanel />
+               <AutopilotPanel agentProposedCommand={agentAutopilotCommand} />
             </div>
           )}
           
@@ -446,7 +450,7 @@ const Dashboard: React.FC = () => {
                </div>
                <div className="flex-1 overflow-hidden flex flex-col">
                   <div className="flex-1 min-h-0 flex flex-col">
-                     <RoundTablePanel />
+                     <RoundTablePanel onCommandProposed={setAgentAutopilotCommand} />
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
                   <div className="flex-1 min-h-0 flex flex-col">
