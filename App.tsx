@@ -26,6 +26,8 @@ import {
   FocusSymbol
 } from './symbolMap';
 
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'screeners';
+
 const App: React.FC = () => {
   // Persistent journal session id (per browser)
   const [journalSessionId] = useState<string>(() => {
@@ -43,7 +45,14 @@ const App: React.FC = () => {
   });
 
   // Top-level tab state
-  const [activeTab, setActiveTab] = useState<'Terminal' | 'Analysis' | 'Screeners'>('Terminal');
+  const [activeTab, setActiveTab] = useState<MainTab>('terminal');
+
+  const tabs: { id: MainTab; label: string }[] = [
+    { id: 'terminal', label: 'Terminal' },
+    { id: 'journal', label: 'Journal' },
+    { id: 'analysis', label: 'Analysis' },
+    { id: 'screeners', label: 'Screeners' },
+  ];
 
   // Broker State
   const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
@@ -218,26 +227,26 @@ const App: React.FC = () => {
               </span>
             </div>
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-2"></div>
-            <div className="flex gap-4 text-sm font-medium text-[#d1d4dc]">
-              {(['Terminal', 'Analysis', 'Screeners'] as const).map((tab) => {
-                const isActive = activeTab === tab;
-                return (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setActiveTab(tab)}
-                    className={
-                      isActive
-                        ? 'text-white border-b-2 border-[#2962ff] pb-3.5 mt-3.5 cursor-pointer'
-                        : 'hover:text-white cursor-pointer py-3.5'
-                    }
-                  >
-                    {tab}
-                  </button>
-                );
-              })}
+            
+            {/* TABS */}
+            <div className="flex items-center gap-2 text-sm">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`
+                    px-3 py-1 rounded-full text-xs font-medium transition-all
+                    ${activeTab === tab.id
+                      ? 'bg-[#2962ff]/10 text-[#2962ff] border border-[#2962ff]/30'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'}
+                  `}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
           </div>
+
           <div className="flex items-center gap-3">
             {/* Broker Status + Account Picker */}
             {brokerSessionId ? (
@@ -371,23 +380,26 @@ const App: React.FC = () => {
         </header>
 
         {/* Main content */}
-        <main className="flex-1 relative bg-[#131722] flex flex-col">
-          {activeTab === 'Terminal' && (
-            <>
-              <div className="flex-1 min-h-0">
-                <WebBrowser />
-              </div>
-              <JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} />
-            </>
+        <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
+          {activeTab === 'terminal' && (
+            <div className="flex-1 min-h-0">
+              <WebBrowser />
+            </div>
           )}
 
-          {activeTab === 'Analysis' && (
+          {activeTab === 'journal' && (
+             <div className="flex-1 min-h-0 flex flex-col">
+                <JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} />
+             </div>
+          )}
+
+          {activeTab === 'analysis' && (
             <div className="flex-1 min-h-0 p-4 overflow-y-auto">
               <PlaybookArchive />
             </div>
           )}
 
-          {activeTab === 'Screeners' && (
+          {activeTab === 'screeners' && (
             <div className="flex-1 min-h-0 flex items-center justify-center text-sm text-gray-400">
               Screeners view coming soon.
             </div>
