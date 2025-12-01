@@ -12,7 +12,8 @@ const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
   default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
 };
 
-const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt"];
+// Added journal_coach to active agents so it participates in analysis and drafts entries
+const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
 
 export interface ChatOverlayHandle {
   sendSystemMessageToAgent: (params: { prompt: string; agentId: string }) => Promise<void>;
@@ -357,7 +358,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
           <div>
             <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
             <p className="text-[10px] text-gray-400 font-medium">
-              QuantBot · TrendMaster · Pattern_GPT
+              QuantBot · TrendMaster · Pattern_GPT · Coach
             </p>
           </div>
         </div>
@@ -396,10 +397,10 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
       <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
         {messages.length === 0 && (
           <div className="text-center mt-10 p-4">
-             <div className="text-3xl mb-3">🤖 📈 🧠</div>
+             <div className="text-3xl mb-3">🤖 📈 🧠 🎓</div>
              <p className="text-gray-500 text-sm font-medium">Ask your AI Team</p>
              <p className="text-gray-400 text-xs mt-1">
-               QuantBot, TrendMaster, and Pattern_GPT are ready to analyze charts and suggest trades.
+               QuantBot, TrendMaster, Pattern_GPT, and Coach are ready to analyze charts and suggest trades.
              </p>
           </div>
         )}

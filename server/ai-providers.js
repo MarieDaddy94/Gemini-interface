@@ -3,9 +3,6 @@
 const OpenAI = require('openai');
 const { GoogleGenAI } = require('@google/genai');
 
-const OPENAI_API_BASE = "https://api.openai.com/v1";
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-
 // --- ENV HELPERS ---
 function getOpenAiApiKey() {
   return process.env.OPENAI_API_KEY || process.env.API_KEY || 'dummy-key';
@@ -192,18 +189,17 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
 function buildGeminiContents(agent, messages, visionImages) {
   const contents = [];
 
-  const systemInstruction =
-    agent.systemPrompt && agent.systemPrompt.trim().length > 0
-      ? agent.systemPrompt
-      : undefined;
-
   messages.forEach((m, idx) => {
     const isLast = idx === messages.length - 1;
     const isUser = m.role === "user";
     
-    // Stateless approach:
+    // Convert generic 'assistant' role to Gemini 'model' role
     const role = m.role === "assistant" ? "model" : "user";
+    
     if (m.role === 'tool') {
+        // Gemini handles tool outputs differently in history, but for simplicity
+        // in stateless generateContent, we'll append as user context or ignore if strictly using chat sessions.
+        // Here we just append as user text to keep context.
         contents.push({
             role: 'user',
             parts: [{ text: `[System Tool Output]: ${m.content}` }]
@@ -232,7 +228,7 @@ function buildGeminiContents(agent, messages, visionImages) {
     }
   });
 
-  return { systemInstruction, contents };
+  return contents;
 }
 
 function mapToolsToGemini(tools) {
@@ -251,39 +247,50 @@ function mapToolsToGemini(tools) {
 async function callGeminiWithTools(agent, messages, tools = [], visionImages, ctx) {
   const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
   const modelId = agent.model || "gemini-2.5-flash";
-  const model = ai.getGenerativeModel({ model: modelId });
 
   const toolSpecs = mapToolsToGemini(tools);
   const toolResults = [];
 
-  const { systemInstruction, contents } = buildGeminiContents(agent, messages, visionImages);
+  const contents = buildGeminiContents(agent, messages, visionImages);
 
-  // Mutable history for turn-taking
+  // We are using stateless generateContent loop for tools
+  // We need to maintain a history that grows
   let currentHistory = [...contents]; 
+  
+  const systemInstruction = agent.systemPrompt && agent.systemPrompt.trim().length > 0
+      ? agent.systemPrompt
+      : undefined;
 
-  // If using chat session
-  const chat = model.startChat({
-    history: currentHistory.slice(0, -1), // all but last
-    systemInstruction: systemInstruction,
-    tools: toolSpecs
-  });
-  
-  // Send the very last message to kick off
-  let lastContent = currentHistory[currentHistory.length - 1];
-  
   let iterations = 0;
   const maxIterations = 5;
 
-  // Initial send
-  let result = await chat.sendMessage(lastContent.parts);
-
   while (iterations < maxIterations) {
     iterations++;
+
+    // Call model
+    const result = await ai.models.generateContent({
+        model: modelId,
+        contents: currentHistory,
+        config: {
+            systemInstruction,
+            tools: toolSpecs,
+            temperature: agent.temperature ?? 0.4
+        }
+    });
+
     const response = result.response;
     const calls = response.functionCalls();
 
     if (calls && calls.length > 0) {
-        // Execute tools
+        // 1. Add model's function call message to history
+        // The API returns candidates with content parts. We must replicate that structure.
+        // Ideally we use the content object directly from response.candidates[0].content
+        const modelContent = response.candidates?.[0]?.content;
+        if (modelContent) {
+             currentHistory.push(modelContent);
+        }
+
+        // 2. Execute tools and collect responses
         const functionResponses = [];
         for (const call of calls) {
             const toolDef = tools.find(t => t.name === call.name);
@@ -297,17 +304,29 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
                     output = `Error: ${e.message}`;
                 }
             }
+            // Store for return value
             toolResults.push({ toolName: call.name, args: call.args, result: output });
+            
+            // Build response part
             functionResponses.push({
                 name: call.name,
-                response: { result: output }
+                response: { result: output } // Correct format for v1.30
             });
         }
-        // Send tool results back to model
-        result = await chat.sendMessage(functionResponses);
+
+        // 3. Add function responses to history as a single 'function' role message (or 'user'/'function' depending on API version)
+        // In @google/genai v1+, we send a separate message with role 'tool' (or similar).
+        // Actually, for generateContent, we send a message with parts containing functionResponse.
+        currentHistory.push({
+            role: 'tool', // 'function' or 'tool' depending on backend version, usually 'tool' for functionResponse
+            parts: functionResponses.map(fr => ({
+                functionResponse: fr
+            }))
+        });
+
     } else {
         // No more tools, we have the answer
-        const text = response.text();
+        const text = response.text || "";
         return {
             provider: "gemini",
             model: modelId,
@@ -333,6 +352,11 @@ async function runAgentWithTools(request, ctx) {
 
   if (agent.provider === "gemini") {
     return callGeminiWithTools(agent, messages, tools, visionImages, ctx);
+  }
+
+  // Default fallback if provider unspecified but model looks like Gemini
+  if (agent.model && agent.model.includes('gemini')) {
+      return callGeminiWithTools(agent, messages, tools, visionImages, ctx);
   }
 
   throw new Error(`Unsupported provider: ${agent.provider}`);
@@ -370,7 +394,7 @@ const brokerAndJournalTools = [
     handler: async (args, ctx) => {
       if (!ctx.getOpenPositions) throw new Error("Missing getOpenPositions ctx");
       return ctx.getOpenPositions(args.accountId, args.symbol);
-    }
+    },
   },
   {
     name: "get_recent_trades",

@@ -33,8 +33,8 @@ const agentsById = {
   quant_bot: {
     id: "quant_bot",
     name: "QuantBot",
-    provider: "openai",          // GPT-5.1 for heavy reasoning
-    model: process.env.OPENAI_QUANT_MODEL || "gpt-4o", // Fallback to 4o if 5.1 not available to key
+    provider: "openai",
+    model: process.env.OPENAI_QUANT_MODEL || "gpt-4o", // Using gpt-4o as 5.1 fallback
     temperature: 0.4,
     vision: true,
     journalStyle: `
@@ -49,7 +49,7 @@ Short, quantified summary focused on statistics and risk:
   trend_master: {
     id: "trend_master",
     name: "TrendMaster AI",
-    provider: "gemini",          // Gemini is great for multi-modal / chart images
+    provider: "gemini",
     model: process.env.GEMINI_TREND_MODEL || "gemini-2.5-flash", 
     temperature: 0.6,
     vision: true,
@@ -111,8 +111,6 @@ Logic:
 - Planning sells -> "direction": "short"
     `.trim(),
   },
-
-  // You can add more personas here later (e.g. MacroMind, RiskManager, NewsBot, etc.)
 };
 
 /**

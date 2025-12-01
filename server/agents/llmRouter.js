@@ -1,3 +1,4 @@
+
 // server/agents/llmRouter.js
 
 const {
@@ -33,6 +34,7 @@ async function getGemini() {
   const key = getGeminiApiKey();
   if (!key) return null;
   if (!geminiClient) {
+    // Correct Import for @google/genai v1+
     const { GoogleGenAI } = await import("@google/genai");
     geminiClient = new GoogleGenAI({
       apiKey: key,
@@ -227,8 +229,9 @@ function buildOpenAIUserMessage({ userMessage, chartContext, screenshot }) {
 /**
  * For Gemini: build multi-modal content parts (text + optional inlineData image).
  */
-function buildGeminiParts({ userMessage, chartContext, screenshot }) {
-  const parts = [{ text: buildUserText({ userMessage, chartContext }) }];
+function buildGeminiContents({ userMessage, chartContext, screenshot }) {
+  const text = buildUserText({ userMessage, chartContext });
+  const parts = [{ text }];
 
   if (screenshot && screenshot.startsWith("data:")) {
     // Strip "data:image/png;base64," prefix for inlineData
@@ -243,7 +246,7 @@ function buildGeminiParts({ userMessage, chartContext, screenshot }) {
     }
   }
 
-  return parts;
+  return parts; // For generateContent { contents: [{ parts }] } or just pass as content if simplified
 }
 
 /**
@@ -286,27 +289,33 @@ async function runOpenAIAgent(agentCfg, { userMessage, chartContext, screenshot,
  * Run one agent using Gemini.
  */
 async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot, journalMode }) {
-  const gemini = await getGemini();
-  if (!gemini) {
+  const ai = await getGemini();
+  if (!ai) {
     return { text: "Error: Gemini API key is not configured.", journalDraft: null };
   }
 
   try {
-    const model = gemini.getGenerativeModel({
-      model: agentCfg.model,
-      systemInstruction: buildSystemPrompt(agentCfg, journalMode),
+    const parts = buildGeminiContents({ userMessage, chartContext, screenshot });
+    const systemPrompt = buildSystemPrompt(agentCfg, journalMode);
+
+    // Using stateless generateContent with explicit config for system instructions
+    const result = await ai.models.generateContent({
+      model: agentCfg.model || 'gemini-2.5-flash',
+      contents: {
+        role: 'user',
+        parts: parts
+      },
+      config: {
+        systemInstruction: systemPrompt,
+        temperature: agentCfg.temperature ?? 0.6,
+      }
     });
 
-    const parts = buildGeminiParts({ userMessage, chartContext, screenshot });
-
-    const result = await model.generateContent({
-      contents: [{ role: "user", parts }],
-    });
-
-    const text = result.response?.text?.() || "";
+    const text = result.text || "";
     const { cleanText, journalDraft } = extractJournalFromText(text, agentCfg);
     return { text: cleanText, journalDraft };
   } catch (err) {
+    console.error("Gemini Error:", err);
     return { text: `Error calling Gemini: ${err.message}`, journalDraft: null };
   }
 }
