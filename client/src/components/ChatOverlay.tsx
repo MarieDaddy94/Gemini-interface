@@ -1,7 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAgentInsights } from '../services/agentApi';
-import type { AgentId, AgentJournalDraft } from '../services/agentApi';
+import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 
 // UI Metadata for styling specific agents
@@ -205,11 +204,12 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         return next;
       });
 
-      // 4. Handle Journal Drafts
+      // 4. Handle Journal Drafts - Strict Wiring
       insights.forEach(i => {
         if (i.journalDraft) {
           const draft = i.journalDraft;
           
+          // Fix: Ensure proper string handling for agentId to avoid ambiguous syntax
           const effectiveAgentId = (draft.agentId || i.agentId) as string;
           
           // Map AgentJournalDraft to JournalEntry strictly for JournalPanel
@@ -233,11 +233,11 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
             agentName: draft.agentName || i.agentName,
             
             // --- DEFAULTS / METADATA ---
-            outcome: (draft.outcome as string) || 'Open',
+            outcome: (draft.outcome as any) || 'Open',
             symbol: draft.symbol || autoFocusSymbol || 'US30',
             direction: draft.direction,
             
-            // Required placeholders
+            // Required placeholders (explicit undefined is safe)
             entryPrice: undefined,
             stopPrice: undefined,
             targetPrice: undefined,
