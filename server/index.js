@@ -1,49 +1,42 @@
+
 const express = require('express');
-const http = require('http'); // Required for WS
+const http = require('http'); 
 const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 
-// Import Persistence
+// Import Persistence (Now SQLite wrapper)
 const db = require('./persistence');
 
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
-// New Multi-Agent Router
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
-// Import Market Data Service
 const { setupMarketData, getPrice } = require('./marketData');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
 
-// Create HTTP server explicitly to attach WS
 const server = http.createServer(app);
 
 // --- SECURITY: Rate Limiting ---
-// Limit AI requests to prevent cost runaways
 const aiLimiter = rateLimit({
-	windowMs: 15 * 60 * 1000, // 15 minutes
-	limit: 100, // Limit each IP to 100 AI requests per window
+	windowMs: 15 * 60 * 1000, 
+	limit: 100, 
 	standardHeaders: 'draft-7',
 	legacyHeaders: false,
     message: { error: "Too many AI requests, please try again later." }
 });
 
-// Apply limiter to API routes only
 app.use('/api/agents/', aiLimiter);
 app.use('/api/ai/', aiLimiter);
 
-/**
- * CORS Configuration
- */
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || true, // Allow all in dev/demo
+    origin: process.env.CORS_ORIGIN || true, 
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'x-openai-key', 'x-gemini-key']
   })
@@ -51,8 +44,8 @@ app.use(
 
 app.use(express.json({ limit: '10mb' }));
 
-// Mount the new Agents router - pass the DB maps
-app.use(createAgentsRouter(db.getSessionsMap(), db.getJournalsMap()));
+// Mount Agents router - PASS DB INSTANCE
+app.use(createAgentsRouter(db));
 
 // --- NEW Multi-agent AI chat endpoint ---
 app.post("/api/agents/chat", async (req, res) => {
@@ -65,7 +58,6 @@ app.post("/api/agents/chat", async (req, res) => {
       });
     }
     
-    // Extract BYOK keys
     const apiKeys = {
       openai: req.headers['x-openai-key'],
       gemini: req.headers['x-gemini-key']
@@ -80,9 +72,7 @@ app.post("/api/agents/chat", async (req, res) => {
       journalMode: journalMode || "live",
       apiKeys,
       agentOverrides,
-      // Pass State Maps from DB
-      sessions: db.getSessionsMap(),
-      journals: db.getJournalsMap(),
+      db, // Pass DB instance
       accountId 
     });
 
@@ -118,8 +108,7 @@ app.post("/api/agents/debrief", async (req, res) => {
       journalContext: journalContext || [],
       apiKeys,
       agentOverrides,
-      sessions: db.getSessionsMap(),
-      journals: db.getJournalsMap(),
+      db, // Pass DB instance
       accountId
     });
 
@@ -140,7 +129,7 @@ app.post("/api/agents/debrief", async (req, res) => {
 // --- LEGACY AI ROUTE ---
 app.post('/api/ai/route', async (req, res) => {
   try {
-    const result = await handleAiRoute(req.body, db.getSessionsMap(), db.getJournalsMap());
+    const result = await handleAiRoute(req.body, db);
     res.json(result);
   } catch (err) {
     console.error('AI Route Error:', err);
@@ -199,9 +188,6 @@ function getBaseUrl(isDemo) {
     : 'https://live.tradelocker.com/backend-api';
 }
 
-/**
- * POST /api/tradelocker/login
- */
 app.post('/api/tradelocker/login', async (req, res) => {
   const { email, password, server, isDemo } = req.body || {};
 
@@ -221,7 +207,6 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     if (!authRes.ok) {
       const errorText = await authRes.text();
-      console.error('TradeLocker auth error:', errorText);
       return res
         .status(authRes.status)
         .send(errorText || 'Failed to authenticate with TradeLocker');
@@ -238,9 +223,7 @@ app.post('/api/tradelocker/login', async (req, res) => {
     // 2) List accounts
     const accountsRes = await fetch(`${baseUrl}/auth/jwt/all-accounts`, {
       method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+      headers: { Authorization: `Bearer ${accessToken}` }
     });
 
     if (!accountsRes.ok) {
@@ -251,9 +234,7 @@ app.post('/api/tradelocker/login', async (req, res) => {
     }
 
     const accountsJson = await accountsRes.json();
-    const accountsRaw = Array.isArray(accountsJson)
-      ? accountsJson
-      : accountsJson.accounts || [];
+    const accountsRaw = Array.isArray(accountsJson) ? accountsJson : accountsJson.accounts || [];
 
     if (!accountsRaw.length) {
       return res.status(400).send('No TradeLocker accounts found for this user');
@@ -264,19 +245,10 @@ app.post('/api/tradelocker/login', async (req, res) => {
       const accNum = Number(a.accNum ?? a.acc_num ?? idx + 1);
       const balance = a.balance ?? a.Balance ?? a.accountBalance ?? 0;
       const currency = a.currency ?? a.ccy ?? a.accountCurrency ?? 'USD';
-      const name =
-        a.name ?? a.accountName ?? a.broker ?? `Account ${accNum}`;
-      const isDemo =
-        a.isDemo ?? a.demo ?? a.accountType === 'DEMO';
+      const name = a.name ?? a.accountName ?? a.broker ?? `Account ${accNum}`;
+      const isDemo = a.isDemo ?? a.demo ?? a.accountType === 'DEMO';
 
-      return {
-        id,
-        accNum,
-        name,
-        currency,
-        balance: Number(balance),
-        isDemo: !!isDemo
-      };
+      return { id, accNum, name, currency, balance: Number(balance), isDemo: !!isDemo };
     });
 
     const primary = accounts[0];
@@ -302,12 +274,13 @@ app.post('/api/tradelocker/login', async (req, res) => {
       simulatedPositions: [] 
     };
 
-    // SAVE SESSION VIA DB
-    db.setSession(sessionId, sessionData);
+    // SAVE SESSION VIA DB (Async)
+    await db.setSession(sessionId, sessionData);
     
     // Initialize empty journal if not exists
-    if (db.getJournal(sessionId).length === 0) {
-       db.setJournal(sessionId, []);
+    const currentJournal = await db.getJournal(sessionId);
+    if (currentJournal.length === 0) {
+       await db.setJournal(sessionId, []);
     }
 
     res.json({
@@ -322,12 +295,12 @@ app.post('/api/tradelocker/login', async (req, res) => {
   }
 });
 
-function getSessionOrThrow(sessionId, res) {
+async function getSessionOrThrow(sessionId, res) {
   if (!sessionId) {
     res.status(400).send('Missing sessionId');
     return null;
   }
-  const session = db.getSession(sessionId);
+  const session = await db.getSession(sessionId);
   if (!session) {
     res.status(401).send('Unknown or expired sessionId');
     return null;
@@ -335,12 +308,9 @@ function getSessionOrThrow(sessionId, res) {
   return session;
 }
 
-/**
- * POST /api/tradelocker/select-account
- */
-app.post('/api/tradelocker/select-account', (req, res) => {
+app.post('/api/tradelocker/select-account', async (req, res) => {
   const { sessionId, accountId, accNum } = req.body || {};
-  const session = getSessionOrThrow(sessionId, res);
+  const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
   if (!accountId && accNum == null) {
@@ -365,8 +335,7 @@ app.post('/api/tradelocker/select-account', (req, res) => {
   session.recentEventsQueue = [];
   session.simulatedPositions = [];
 
-  // Update DB
-  db.setSession(sessionId, session);
+  await db.setSession(sessionId, session);
 
   res.json({
     ok: true,
@@ -375,12 +344,9 @@ app.post('/api/tradelocker/select-account', (req, res) => {
   });
 });
 
-/**
- * POST /api/tradelocker/order
- */
 app.post('/api/tradelocker/order', async (req, res) => {
   const { sessionId, symbol, side, size, stopLoss, takeProfit } = req.body || {};
-  const session = getSessionOrThrow(sessionId, res);
+  const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
   try {
@@ -408,8 +374,7 @@ app.post('/api/tradelocker/order', async (req, res) => {
     if (!session.simulatedPositions) session.simulatedPositions = [];
     session.simulatedPositions.push(newPosition);
     
-    // SAVE DB
-    db.setSession(sessionId, session);
+    await db.setSession(sessionId, session);
 
     res.json({ ok: true, orderId: positionId, entryPrice });
   } catch (err) {
@@ -418,12 +383,9 @@ app.post('/api/tradelocker/order', async (req, res) => {
   }
 });
 
-/**
- * GET /api/tradelocker/overview?sessionId=...
- */
 app.get('/api/tradelocker/overview', async (req, res) => {
   const sessionId = req.query.sessionId;
-  const session = getSessionOrThrow(sessionId, res);
+  const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
   const { baseUrl, accessToken, accountId, accNum } = session;
@@ -534,7 +496,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     );
 
     if (closedIds.length) {
-      const journalList = db.getJournal(sessionId);
+      const journalList = await db.getJournal(sessionId);
       let journalChanged = false;
 
       for (const closedId of closedIds) {
@@ -604,7 +566,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       }
 
       if (journalChanged) {
-        db.setJournal(sessionId, journalList);
+        await db.setJournal(sessionId, journalList);
       }
     }
 
@@ -619,8 +581,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       marginUsed
     };
     
-    // Save DB
-    db.setSession(sessionId, session);
+    await db.setSession(sessionId, session);
 
     const overview = {
       isConnected: true,
@@ -638,24 +599,18 @@ app.get('/api/tradelocker/overview', async (req, res) => {
   }
 });
 
-/**
- * GET /api/journal/entries
- */
-app.get('/api/journal/entries', (req, res) => {
+app.get('/api/journal/entries', async (req, res) => {
   const sessionId = req.query.sessionId;
-  const session = getSessionOrThrow(sessionId, res);
+  const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
-  const entries = db.getJournal(sessionId);
+  const entries = await db.getJournal(sessionId);
   res.json(entries);
 });
 
-/**
- * POST /api/journal/entry
- */
-app.post('/api/journal/entry', (req, res) => {
+app.post('/api/journal/entry', async (req, res) => {
   const { sessionId, entry } = req.body || {};
-  const session = getSessionOrThrow(sessionId, res);
+  const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
   if (!entry || !entry.note) {
@@ -666,16 +621,14 @@ app.post('/api/journal/entry', (req, res) => {
   const timestamp = new Date().toISOString();
 
   const entryType =
-    entry.entryType === 'Post-Trade' ||
-    entry.entryType === 'SessionReview'
+    entry.entryType === 'Post-Trade' || entry.entryType === 'SessionReview'
       ? entry.entryType
       : 'Pre-Trade';
 
   const validOutcomes = ['Open', 'Win', 'Loss', 'BreakEven'];
   const requestedOutcome = entry.outcome;
   let outcome =
-    typeof requestedOutcome === 'string' &&
-    validOutcomes.includes(requestedOutcome)
+    typeof requestedOutcome === 'string' && validOutcomes.includes(requestedOutcome)
       ? requestedOutcome
       : 'Open';
 
@@ -702,24 +655,21 @@ app.post('/api/journal/entry', (req, res) => {
     ...entry // Spread other fields
   };
 
-  const list = db.getJournal(sessionId);
+  const list = await db.getJournal(sessionId);
   list.unshift(stored);
-  db.setJournal(sessionId, list);
+  await db.setJournal(sessionId, list);
 
   res.json(stored);
 });
 
-/**
- * PATCH /api/journal/entry/:id
- */
-app.patch('/api/journal/entry/:id', (req, res) => {
+app.patch('/api/journal/entry/:id', async (req, res) => {
   const { sessionId, updates } = req.body || {};
   const entryId = req.params.id;
 
-  const session = getSessionOrThrow(sessionId, res);
+  const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
-  const list = db.getJournal(sessionId);
+  const list = await db.getJournal(sessionId);
   const idx = list.findIndex((e) => e.id === entryId);
 
   if (idx === -1) {
@@ -730,27 +680,22 @@ app.patch('/api/journal/entry/:id', (req, res) => {
   const next = { ...current, ...updates };
 
   list[idx] = next;
-  db.setJournal(sessionId, list);
+  await db.setJournal(sessionId, list);
 
   res.json(next);
 });
 
-// Health Check
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
-// --- PRODUCTION SERVING ---
-// Serve the React frontend from the 'dist' directory (after build)
 const clientDistPath = path.join(__dirname, '..', 'dist');
 
 if (fs.existsSync(clientDistPath)) {
   console.log(`[Server] Serving static files from ${clientDistPath}`);
   app.use(express.static(clientDistPath));
 
-  // Catch-all handler for React Routing (SPA)
   app.get('*', (req, res) => {
-    // If it's an API call that fell through, don't serve index.html
     if (req.path.startsWith('/api')) {
       return res.status(404).json({ error: 'API endpoint not found' });
     }
@@ -760,10 +705,8 @@ if (fs.existsSync(clientDistPath)) {
   console.log('[Server] Dist folder not found. Assuming development mode.');
 }
 
-// Setup WebSocket for Hybrid Market Data
 setupMarketData(server);
 
-// Start Server
 server.listen(PORT, () => {
-  console.log(`AI Trading Analyst Backend (Production Ready) listening on port ${PORT}`);
+  console.log(`AI Trading Analyst Backend (Production Ready with SQLite) listening on port ${PORT}`);
 });

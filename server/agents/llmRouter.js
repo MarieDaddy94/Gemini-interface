@@ -50,7 +50,6 @@ function buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, 
     `- Other agents' notes this round (JSON): ${JSON.stringify(squadContext || []).slice(0, 3000)}`
   ].join("\n");
 
-  // Specific logic for Journal Coach to enforce mode behavior
   let modeInstruction = "";
   if (agentCfg.id === 'journal_coach') {
      modeInstruction = journalMode === "post_trade"
@@ -61,7 +60,7 @@ function buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, 
   return [
     GLOBAL_ANALYST_SYSTEM_PROMPT,
     `You are "${agentCfg.name}".`,
-    `ROLE: ${agentCfg.journalStyle}`, // Using journalStyle as the role/description slot
+    `ROLE: ${agentCfg.journalStyle}`, 
     modeInstruction,
     contextBlock,
     JSON_RESPONSE_INSTRUCTION
@@ -70,7 +69,6 @@ function buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, 
 
 function safeJsonParse(text) {
   try {
-    // Attempt to clean markdown code blocks if present
     const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
     return JSON.parse(clean);
   } catch (e) {
@@ -79,8 +77,8 @@ function safeJsonParse(text) {
 }
 
 /**
- * Main entry point: run a turn for multiple agents in SEQUENTIAL order so they can see squadContext.
- * Uses `runAgentWithTools` to support real tool execution.
+ * Main entry point: run a turn for multiple agents in SEQUENTIAL order.
+ * Now takes `db` instead of Maps.
  */
 async function runAgentsTurn(opts) {
   const { 
@@ -91,18 +89,15 @@ async function runAgentsTurn(opts) {
       screenshot, 
       journalMode = "live", 
       agentOverrides,
-      sessions,
-      journals,
-      accountId // Broker session ID
+      db, // PASSED DB INSTANCE
+      accountId 
   } = opts;
 
   const results = [];
   
-  // We run agents one by one
   for (const id of agentIds) {
       let agentCfg = { ...agentsById[id] };
       
-      // Apply overrides if any
       if (agentOverrides && agentOverrides[id]) {
         agentCfg = { ...agentCfg, ...agentOverrides[id] };
       }
@@ -116,7 +111,6 @@ async function runAgentsTurn(opts) {
           continue;
       }
 
-      // Squad Context is what previous agents have said
       const squadContext = results.map(r => ({
           agentId: r.agentId,
           agentName: r.agentName,
@@ -125,21 +119,17 @@ async function runAgentsTurn(opts) {
       }));
 
       try {
-        // 1. Create Runtime Context (Tools access real data)
-        const ctx = createRuntimeContext(sessions, journals, {
+        // 1. Create Runtime Context (Tools access real DB)
+        const ctx = createRuntimeContext(db, {
             brokerSessionId: accountId,
-            journalSessionId: accountId, // Use broker ID as journal session key for simplicity in demo
+            journalSessionId: accountId, 
             symbol: chartContext.symbol || 'US30'
         });
 
-        // 2. Build System Prompt
         const systemPrompt = buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext);
 
-        // 3. Prepare Vision
         const visionImages = screenshot ? [{ mimeType: "image/jpeg", data: screenshot.replace(/^data:image\/\w+;base64,/, "") }] : undefined;
 
-        // 4. Configure Agent Request for Tool Runner
-        // We inject `forceJson: true` to ensure the final output complies with our schema
         const agentReq = {
             agent: { 
                 ...agentCfg, 
@@ -148,17 +138,15 @@ async function runAgentsTurn(opts) {
                 thinkingConfig: agentCfg.thinkingBudget ? { thinkingBudget: agentCfg.thinkingBudget } : undefined
             },
             messages: [{ role: 'user', content: userMessage }],
-            tools: brokerAndJournalTools, // In a real app, filter based on agentCfg.tools allowed list
+            tools: brokerAndJournalTools, 
             visionImages
         };
 
-        // 5. Run with Tools
         const llmResult = await runAgentWithTools(agentReq, ctx);
         const parsed = safeJsonParse(llmResult.finalText);
         
         const finalOutput = parsed || { answer: llmResult.finalText };
 
-        // 6. Map to Result
         if (finalOutput.journalDraft) {
             finalOutput.journalDraft.agentId = agentCfg.id;
             finalOutput.journalDraft.agentName = agentCfg.name;
@@ -170,7 +158,7 @@ async function runAgentsTurn(opts) {
           text: finalOutput.answer || JSON.stringify(finalOutput),
           journalDraft: finalOutput.journalDraft || null,
           tradeMeta: finalOutput.tradeMeta || null,
-          toolCalls: llmResult.toolResults // Pass tool calls back to UI
+          toolCalls: llmResult.toolResults 
         });
 
       } catch (err) {
@@ -186,12 +174,8 @@ async function runAgentsTurn(opts) {
   return results;
 }
 
-/**
- * Run a debrief round where agents react to previous insights.
- * Also updated to use `runAgentWithTools` but likely fewer tools needed here.
- */
 async function runAgentsDebrief(opts) {
-  const { previousInsights, chartContext, journalContext, agentOverrides, sessions, journals, accountId } = opts;
+  const { previousInsights, chartContext, journalContext, agentOverrides, db, accountId } = opts;
   const results = [];
 
   const activeAgentIds = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
@@ -222,7 +206,7 @@ Participate in the roundtable debrief. Read "squadContext".
       if (!agentCfg || !agentCfg.id) continue;
 
       try {
-        const ctx = createRuntimeContext(sessions, journals, {
+        const ctx = createRuntimeContext(db, {
              brokerSessionId: accountId,
              journalSessionId: accountId,
              symbol: chartContext.symbol || 'US30'

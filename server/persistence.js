@@ -1,9 +1,9 @@
+const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const path = require('path');
 
 const DATA_DIR = path.join(__dirname, '.data');
-const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
-const JOURNALS_FILE = path.join(DATA_DIR, 'journals.json');
+const DB_FILE = path.join(DATA_DIR, 'trading.db');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -12,87 +12,114 @@ if (!fs.existsSync(DATA_DIR)) {
 
 class PersistenceLayer {
   constructor() {
-    this.sessions = new Map();
-    this.journals = new Map();
-    this.loadData();
-  }
-
-  loadData() {
-    try {
-      if (fs.existsSync(SESSIONS_FILE)) {
-        const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
-        const data = JSON.parse(raw);
-        // Convert array of entries back to Map
-        this.sessions = new Map(data);
-        console.log(`[Persistence] Loaded ${this.sessions.size} sessions.`);
+    this.db = new sqlite3.Database(DB_FILE, (err) => {
+      if (err) {
+        console.error('[Persistence] Could not connect to database:', err.message);
+      } else {
+        console.log('[Persistence] Connected to SQLite database.');
+        this.init();
       }
-    } catch (err) {
-      console.error('[Persistence] Error loading sessions:', err);
-    }
+    });
+  }
 
+  init() {
+    this.db.serialize(() => {
+      // Sessions Table: Stores broker session data as JSON
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          data TEXT
+        )
+      `);
+
+      // Journals Table: Stores the entire journal array as JSON (for now, to match existing logic)
+      // In a strict schema migration, we would normalize entries, but JSON blob is fine for this stage.
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS journals (
+          sessionId TEXT PRIMARY KEY,
+          data TEXT
+        )
+      `);
+    });
+  }
+
+  // --- GENERIC HELPERS ---
+
+  run(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.run(sql, params, function (err) {
+        if (err) reject(err);
+        else resolve(this);
+      });
+    });
+  }
+
+  get(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.get(sql, params, (err, result) => {
+        if (err) reject(err);
+        else resolve(result);
+      });
+    });
+  }
+
+  all(sql, params = []) {
+    return new Promise((resolve, reject) => {
+      this.db.all(sql, params, (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
+    });
+  }
+
+  // --- SESSIONS ---
+
+  async getSession(id) {
+    if (!id) return null;
+    const row = await this.get('SELECT data FROM sessions WHERE id = ?', [id]);
+    if (!row) return null;
     try {
-      if (fs.existsSync(JOURNALS_FILE)) {
-        const raw = fs.readFileSync(JOURNALS_FILE, 'utf8');
-        const data = JSON.parse(raw);
-        this.journals = new Map(data);
-        console.log(`[Persistence] Loaded ${this.journals.size} journals.`);
-      }
-    } catch (err) {
-      console.error('[Persistence] Error loading journals:', err);
+      return JSON.parse(row.data);
+    } catch (e) {
+      console.error('Failed to parse session data', e);
+      return null;
     }
   }
 
-  saveSessions() {
+  async setSession(id, data) {
+    const json = JSON.stringify(data);
+    await this.run(
+      `INSERT INTO sessions (id, data) VALUES (?, ?)
+       ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
+      [id, json]
+    );
+  }
+
+  async deleteSession(id) {
+    await this.run('DELETE FROM sessions WHERE id = ?', [id]);
+  }
+
+  // --- JOURNALS ---
+
+  async getJournal(sessionId) {
+    if (!sessionId) return [];
+    const row = await this.get('SELECT data FROM journals WHERE sessionId = ?', [sessionId]);
+    if (!row) return [];
     try {
-      // Convert Map to array of entries for JSON serialization
-      const data = Array.from(this.sessions.entries());
-      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(data, null, 2));
-    } catch (err) {
-      console.error('[Persistence] Error saving sessions:', err);
+      return JSON.parse(row.data);
+    } catch (e) {
+      console.error('Failed to parse journal data', e);
+      return [];
     }
   }
 
-  saveJournals() {
-    try {
-      const data = Array.from(this.journals.entries());
-      fs.writeFileSync(JOURNALS_FILE, JSON.stringify(data, null, 2));
-    } catch (err) {
-      console.error('[Persistence] Error saving journals:', err);
-    }
-  }
-
-  // Session Methods
-  getSession(id) {
-    return this.sessions.get(id);
-  }
-
-  setSession(id, data) {
-    this.sessions.set(id, data);
-    this.saveSessions();
-  }
-
-  deleteSession(id) {
-    this.sessions.delete(id);
-    this.saveSessions();
-  }
-
-  // Journal Methods
-  getJournal(sessionId) {
-    return this.journals.get(sessionId) || [];
-  }
-
-  setJournal(sessionId, entries) {
-    this.journals.set(sessionId, entries);
-    this.saveJournals();
-  }
-  
-  // Expose raw maps if needed for reference, but prefer methods
-  getSessionsMap() {
-    return this.sessions;
-  }
-  
-  getJournalsMap() {
-    return this.journals;
+  async setJournal(sessionId, entries) {
+    const json = JSON.stringify(entries);
+    await this.run(
+      `INSERT INTO journals (sessionId, data) VALUES (?, ?)
+       ON CONFLICT(sessionId) DO UPDATE SET data = excluded.data`,
+      [sessionId, json]
+    );
   }
 }
 

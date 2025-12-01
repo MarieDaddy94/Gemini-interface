@@ -1,9 +1,10 @@
+
 const express = require('express');
 const { runAgentWithTools } = require('../ai-providers');
 const { getRegisteredAgent } = require('../ai-config');
 const { createRuntimeContext } = require('../tool-runner');
 
-function createAgentsRouter(sessions, journals) {
+function createAgentsRouter(db) {
   const router = express.Router();
 
   router.post('/api/agents/:agentId/chat', async (req, res) => {
@@ -18,15 +19,12 @@ function createAgentsRouter(sessions, journals) {
 
       const { config, tools } = agentReg;
 
-      // Create runtime context using the existing sessions/journals maps
-      const ctx = createRuntimeContext(sessions, journals, {
+      // Create runtime context using the DB instance
+      const ctx = createRuntimeContext(db, {
         brokerSessionId: accountId,
         symbol: symbol || 'US30'
       });
 
-      // Prepare vision data if present
-      // Frontend sends { mimeType, data } (base64 w/o prefix)
-      // runAgentWithTools expects array of { mimeType, dataBase64 } or data
       const processedVision = visionImages
         ? visionImages.map(img => ({
             mimeType: img.mimeType,

@@ -5,22 +5,11 @@ const { getPrice } = require('./marketData');
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
  * to execute tool handlers.
+ * 
+ * Updated to support Async DB Access (SQLite).
  */
-function createRuntimeContext(sessions, journals, reqContext) {
+function createRuntimeContext(db, reqContext) {
   const { brokerSessionId, journalSessionId, symbol } = reqContext || {};
-
-  // Helpers to get data from memory stores
-  const getSession = (id) => {
-    const sid = id || brokerSessionId;
-    if (!sid || !sessions.has(sid)) return null;
-    return sessions.get(sid);
-  };
-
-  const getJournal = (id) => {
-    const sid = id || journalSessionId;
-    if (!sid) return [];
-    return journals.get(sid) || [];
-  };
 
   return {
     accountId: brokerSessionId, // Treat sessionId as primary account lookup for now
@@ -31,8 +20,11 @@ function createRuntimeContext(sessions, journals, reqContext) {
     // --- Tool Impl ---
 
     getBrokerState: async (accountId) => {
-      const session = getSession(accountId);
-      if (!session) return "No broker session connected.";
+      const id = accountId || brokerSessionId;
+      if (!id) return "No broker session connected.";
+      
+      const session = await db.getSession(id);
+      if (!session) return "No broker session found.";
       
       // Use cached state from polling, fallback to initial account info
       const state = session.latestState || {};
@@ -50,8 +42,12 @@ function createRuntimeContext(sessions, journals, reqContext) {
     },
 
     getOpenPositions: async (accountId, filterSymbol) => {
-      const session = getSession(accountId);
-      if (!session) return "No broker session.";
+      const id = accountId || brokerSessionId;
+      if (!id) return "No broker session.";
+      
+      const session = await db.getSession(id);
+      if (!session) return "No broker session found.";
+
       const positions = Object.values(session.lastPositionsById || {});
       const filtered = filterSymbol 
         ? positions.filter(p => p.symbol.includes(filterSymbol)) 
@@ -63,8 +59,11 @@ function createRuntimeContext(sessions, journals, reqContext) {
 
     executeOrder: async (args) => {
       const { symbol, side, size, stopLoss, takeProfit } = args;
-      const session = getSession(null); // use context brokerSessionId
-      if (!session) return "Error: No active broker session to execute trade.";
+      // use context brokerSessionId
+      if (!brokerSessionId) return "Error: No active broker session to execute trade.";
+      
+      const session = await db.getSession(brokerSessionId);
+      if (!session) return "Error: Session expired or invalid.";
 
       try {
         const entryPrice = getPrice(symbol) || 0;
@@ -87,6 +86,9 @@ function createRuntimeContext(sessions, journals, reqContext) {
 
         if (!session.simulatedPositions) session.simulatedPositions = [];
         session.simulatedPositions.push(newPosition);
+        
+        // SAVE DB (Async)
+        await db.setSession(brokerSessionId, session);
 
         console.log(`[Autopilot] Executed ${side} ${size} ${symbol} @ ${entryPrice}`);
         return `SUCCESS: Order executed. ID: ${positionId}. Entry: ${entryPrice}`;
@@ -97,7 +99,7 @@ function createRuntimeContext(sessions, journals, reqContext) {
     },
 
     getRecentTrades: async ({ limit }) => {
-      const entries = getJournal(null);
+      const entries = await db.getJournal(journalSessionId);
       // Map journal entries to a "trade" like structure if they have outcomes
       const trades = entries.slice(0, limit).map(e => ({
         timestamp: e.timestamp,
@@ -120,8 +122,8 @@ function createRuntimeContext(sessions, journals, reqContext) {
     },
 
     appendJournalEntry: async (entry) => {
-      // We can push to the in-memory journal for this session
-      const list = getJournal(null);
+      // We can push to the journal for this session
+      const list = await db.getJournal(journalSessionId);
       
       const newEntry = {
         id: `ai-${Date.now()}`,
@@ -153,10 +155,8 @@ function createRuntimeContext(sessions, journals, reqContext) {
       };
       
       if (journalSessionId) {
-          // If the list exists in the map, we can update it (mutating the array ref)
           list.unshift(newEntry);
-          // Also verify if we need to set it back if it was a new array
-          if (!journals.has(journalSessionId)) journals.set(journalSessionId, list);
+          await db.setJournal(journalSessionId, list);
       }
       console.log(`[AI] appended structured journal entry for ${newEntry.symbol}`);
     },
