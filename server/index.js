@@ -27,6 +27,12 @@ const {
   deleteAgent
 } = require('./agents/agents');
 
+// Broker State Store
+const {
+  setBrokerSnapshot,
+  getBrokerSnapshot
+} = require('./broker/brokerStateStore');
+
 // Phase 4: Autopilot
 const { 
   handleAutopilotProposedTrade,
@@ -125,6 +131,40 @@ app.get('/api/proxy', async (req, res) => {
   } catch (err) {
     console.error('Proxy Error:', err.message);
     res.status(502).send(`Proxy Error: ${err.message}`);
+  }
+});
+
+// ------------------------------
+// Broker / account snapshot
+// ------------------------------
+// GET /api/broker/snapshot
+// POST /api/broker/snapshot
+
+app.get('/api/broker/snapshot', (req, res) => {
+  try {
+    // For now, single-user "default"
+    const snapshot = getBrokerSnapshot('default');
+    res.json(snapshot);
+  } catch (err) {
+    console.error('Error in GET /api/broker/snapshot:', err);
+    res.status(500).json({
+      error: 'BrokerSnapshotError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/broker/snapshot', (req, res) => {
+  try {
+    const payload = req.body || {};
+    const snapshot = setBrokerSnapshot('default', payload);
+    res.json(snapshot);
+  } catch (err) {
+    console.error('Error in POST /api/broker/snapshot:', err);
+    res.status(500).json({
+      error: 'BrokerSnapshotError',
+      message: err.message || 'Unknown error',
+    });
   }
 });
 

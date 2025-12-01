@@ -1,7 +1,7 @@
 
 // server/roundtable/roundTableEngine.js
 //
-// Multi-agent trading round-table with per-agent memory.
+// Multi-agent trading round-table with per-agent memory AND broker/account state.
 // Agents:
 // - Strategist (GPT-5.1)
 // - Pattern GPT (Gemini)
@@ -10,10 +10,10 @@
 //
 // Each agent sees:
 // - Shared trading context
+// - Broker/account snapshot (balance, equity, open positions, daily DD)
 // - Its own local memory (past notes in similar contexts)
 //
-// After they respond, their replies are written back into their memory,
-// so over time they accumulate a history of how they advise Anthony.
+// After they respond, their replies are written back into their memory.
 
 const { callAgentLLM } = require('../llmRouter');
 const {
@@ -27,15 +27,20 @@ const {
   getAgentMemoryForContext,
   formatAgentMemoryForPrompt,
 } = require('../memory/agentMemoryStore');
+const {
+  getBrokerSnapshot,
+  formatBrokerSnapshotForPrompt,
+} = require('../broker/brokerStateStore');
 
 /**
- * Build a textual context from session state + recent history + visual summary.
+ * Build a textual context from session state + recent history + visual summary + broker snapshot.
  *
  * @param {object} sessionState
  * @param {Array<object>} recentJournal
  * @param {string|null} visualSummary
+ * @param {object|null} brokerSnapshot
  */
-function buildContextText(sessionState, recentJournal, visualSummary) {
+function buildContextText(sessionState, recentJournal, visualSummary, brokerSnapshot) {
   const instrument = sessionState?.instrument || {};
   const tf = sessionState?.timeframe || {};
   const env = sessionState?.environment || 'sim';
@@ -60,6 +65,10 @@ function buildContextText(sessionState, recentJournal, visualSummary) {
   if (sessionState?.dayContext) {
     parts.push(`Day context: ${sessionState.dayContext}`);
   }
+
+  // Broker / account info
+  const brokerText = formatBrokerSnapshotForPrompt(brokerSnapshot);
+  parts.push('', 'ACCOUNT SNAPSHOT:', brokerText);
 
   // Last few journal / autopilot entries
   if (Array.isArray(recentJournal) && recentJournal.length) {
@@ -122,7 +131,7 @@ AGENT MEMORY:
 ${memoryText}
 
 -------------------------------
-CURRENT CONTEXT:
+CURRENT CONTEXT (including broker/account state):
 ${baseContextText}
 ${questionBlock}
 `.trim();
@@ -155,6 +164,9 @@ async function runTradingRoundTable({
     );
   }
 
+  // Broker/account snapshot (single-user "default" for now)
+  const brokerSnapshot = getBrokerSnapshot('default');
+
   const similarHistory = sessionState
     ? getSimilarAutopilotHistory(sessionState, 25)
     : [];
@@ -162,7 +174,8 @@ async function runTradingRoundTable({
   const contextText = buildContextText(
     sessionState,
     similarHistory,
-    visualSummary
+    visualSummary,
+    brokerSnapshot
   );
 
   // ----- get per-agent memory -----
@@ -185,6 +198,9 @@ You are the Strategist. Your job:
 - Decide the likely directional bias (long / short / balanced).
 - Describe the narrative: where price is in the larger structure, what it's hunting (liquidity, prior highs/lows).
 - Suggest 1–2 clean "plays" (setups) that fit this context, with entry zone, invalidation, and target ideas.
+
+You MUST respect the current account state: do not encourage over-risking if daily drawdown is high
+or if multiple positions are already open on the same instrument.
 
 Focus on US30/NAS100/XAUUSD intraday scalping style.
 Always be concrete and keep it < 300 words.
@@ -221,6 +237,10 @@ You are Pattern GPT. You focus on:
 - HTF/LTF structure
 - Key levels (PDH/PDL, PDC, weekly highs/lows, obvious liquidity)
 - Clean patterns: breakouts, retests, sweeps, fair value gaps, orderblocks.
+
+You are aware of the current account state but prioritize clean technical reads.
+Use account state mainly to avoid recommending high-risk actions when the account
+is already stressed.
 
 Using the context and any chart summary, list:
 - clear structural bias (bullish/bearish/ranging),
@@ -260,8 +280,12 @@ Be concrete; keep it < 300 words.
     const riskSystemPrompt = `
 You are the Risk Manager. Your job:
 - Enforce prop-firm style rules (max daily dd, max trades, etc.).
-- Consider recent history in this context (streaks, consistency).
+- Consider the CURRENT ACCOUNT SNAPSHOT very carefully (balance, equity, daily PnL, daily drawdown, open positions).
+- Consider recent trade history in this context (streaks, consistency).
 - Suggest position sizing, max number of attempts, and what *not* to do.
+
+If daily drawdown is already large or multiple trades are open, you may recommend
+"no trading" or very reduced risk.
 
 Give 3–7 bullet points that Anthony should follow *today*.
 Keep it < 250 words.
@@ -301,13 +325,16 @@ You are the Execution Bot. Your job is to turn the Strategist+Pattern+Risk ideas
 - target ideas
 - management guidelines (scale-in/out, when to bail).
 
-You must assume Anthony is trading indices with high pip value (US30/NAS100).
+You MUST consider current open positions and daily drawdown to avoid stacking
+too much risk on the same instrument.
+
+Assume Anthony is trading indices with high pip value (US30/NAS100).
 Think in terms of points and clear "if/then" rules.
 Keep it < 250 words.
     `.trim();
 
     const combinedForExecution = `
-CONTEXT (same as others):
+CONTEXT (including account state and recent history):
 ${contextText}
 
 YOUR PERSONAL MEMORY:
@@ -361,17 +388,17 @@ You have heard from:
 Your job is to produce a final compact gameplan for Anthony, with this structure:
 
 1) BIAS: (one line, long / short / mixed, and which instrument/timeframes)
-2) CONTEXT SNAPSHOT: 3–5 bullet points summarizing structure, key levels, and volatility.
+2) CONTEXT SNAPSHOT: 3–5 bullet points summarizing structure, key levels, volatility, AND account state.
 3) PRIMARY PLAY: clear description of the main setup to execute (entry zone, invalidation, target, session).
 4) RISK NOTES: 3–5 bullets summarizing risk constraints (max attempts, size, avoid conditions).
-5) EXECUTION CHEAT-SHEET: quick bullet "if/then" rules for live trading (when to enter, add, cut).
+5) EXECUTION CHEAT-SHEET: quick bullet "if/then" rules for live trading (when to enter, add, cut), explicitly aligned with account health.
 
 Do NOT repeat the full raw messages; synthesize them.
 Keep it under ~350–400 words.
   `.trim();
 
   const synthesisUserPrompt = `
-CONTEXT:
+CONTEXT (includes broker/account state):
 ${contextText}
 
 TRADER QUESTION:
@@ -397,9 +424,6 @@ ${executionText || '(no execution bot agent configured)'}
     temperature: 0.3,
     maxTokens: 900,
   });
-
-  // NOTE: we *could* also log the synthesis as a separate memory entry,
-  // but for now we keep memories per-agent for their individual voices.
 
   const agents = [];
 
