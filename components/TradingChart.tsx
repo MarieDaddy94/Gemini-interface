@@ -15,7 +15,6 @@ const TradingChart: React.FC<TradingChartProps> = ({ config, entries = [], onDat
   const isPositive = config.data[config.data.length - 1].value >= config.data[0].value;
   const strokeColor = isPositive ? '#089981' : '#f23645';
   const fillColor = isPositive ? 'url(#colorPositive)' : 'url(#colorNegative)';
-  const gradientColor = isPositive ? '#089981' : '#f23645';
 
   // Map entries to chart data points by time (fuzzy match for demo purposes)
   const entriesByTime = useMemo(() => {
@@ -112,7 +111,6 @@ const TradingChart: React.FC<TradingChartProps> = ({ config, entries = [], onDat
                // Only render if we have a match
                const hasEntry = entriesByTime.has(pt.time);
                if (hasEntry) {
-                 const entryCount = entriesByTime.get(pt.time)?.length || 0;
                  return (
                    <ReferenceDot 
                      key={`entry-${idx}`} 
