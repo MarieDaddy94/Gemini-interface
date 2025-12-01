@@ -1,11 +1,12 @@
-
-
 const express = require('express');
 const http = require('http'); // Required for WS
 const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+
+// Import Persistence
+const db = require('./persistence');
 
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
@@ -22,29 +23,23 @@ const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
 // Create HTTP server explicitly to attach WS
 const server = http.createServer(app);
 
-// In-memory session store: sessionId -> TradeLocker session info + accounts
-const sessions = new Map();
-// In-memory journaling store: sessionId -> JournalEntry[]
-const journalBySession = new Map();
-
 /**
- * For demo: allow your frontend origin.
- * Change origin to match where your React app runs.
+ * CORS Configuration
  */
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+    origin: process.env.CORS_ORIGIN || true, // Allow all in dev/demo
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'x-openai-key', 'x-gemini-key']
   })
 );
 
-app.use(express.json({ limit: '10mb' })); // Increased limit for vision/base64
+app.use(express.json({ limit: '10mb' }));
 
-// Mount the new Agents router
-app.use(createAgentsRouter(sessions, journalBySession));
+// Mount the new Agents router - pass the DB maps
+app.use(createAgentsRouter(db.getSessionsMap(), db.getJournalsMap()));
 
-// --- NEW Multi-agent AI chat endpoint (GPT-4o + Gemini) ---
+// --- NEW Multi-agent AI chat endpoint ---
 app.post("/api/agents/chat", async (req, res) => {
   try {
     const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId } = req.body || {};
@@ -70,10 +65,10 @@ app.post("/api/agents/chat", async (req, res) => {
       journalMode: journalMode || "live",
       apiKeys,
       agentOverrides,
-      // Pass State
-      sessions,
-      journals: journalBySession,
-      accountId // Pass broker session ID
+      // Pass State Maps from DB
+      sessions: db.getSessionsMap(),
+      journals: db.getJournalsMap(),
+      accountId 
     });
 
     res.json({
@@ -97,7 +92,6 @@ app.post("/api/agents/debrief", async (req, res) => {
       return res.status(400).json({ error: "previousInsights array is required" });
     }
 
-    // Extract BYOK keys
     const apiKeys = {
       openai: req.headers['x-openai-key'],
       gemini: req.headers['x-gemini-key']
@@ -109,9 +103,8 @@ app.post("/api/agents/debrief", async (req, res) => {
       journalContext: journalContext || [],
       apiKeys,
       agentOverrides,
-      // Pass State
-      sessions,
-      journals: journalBySession,
+      sessions: db.getSessionsMap(),
+      journals: db.getJournalsMap(),
       accountId
     });
 
@@ -129,10 +122,10 @@ app.post("/api/agents/debrief", async (req, res) => {
   }
 });
 
-// --- LEGACY AI ROUTE (Optional, kept for backward compat if needed) ---
+// --- LEGACY AI ROUTE ---
 app.post('/api/ai/route', async (req, res) => {
   try {
-    const result = await handleAiRoute(req.body, sessions, journalBySession);
+    const result = await handleAiRoute(req.body, db.getSessionsMap(), db.getJournalsMap());
     res.json(result);
   } catch (err) {
     console.error('AI Route Error:', err);
@@ -193,7 +186,6 @@ function getBaseUrl(isDemo) {
 
 /**
  * POST /api/tradelocker/login
- * Body: { email, password, server, isDemo }
  */
 app.post('/api/tradelocker/login', async (req, res) => {
   const { email, password, server, isDemo } = req.body || {};
@@ -238,7 +230,6 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     if (!accountsRes.ok) {
       const errorText = await accountsRes.text();
-      console.error('TradeLocker accounts error:', errorText);
       return res
         .status(accountsRes.status)
         .send(errorText || 'Failed to fetch TradeLocker accounts');
@@ -279,7 +270,7 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     const sessionId = crypto.randomUUID();
 
-    sessions.set(sessionId, {
+    const sessionData = {
       baseUrl,
       accessToken,
       refreshToken,
@@ -290,14 +281,19 @@ app.post('/api/tradelocker/login', async (req, res) => {
       email,
       server,
       accounts,
-      lastPositionsById: {}, // id -> full position object
-      latestState: {},        // balance, equity, margin
-      recentEventsQueue: [],   // Store events for polling
-      simulatedPositions: [] // For "Simulate" functionality or mixed mode
-    });
+      lastPositionsById: {}, 
+      latestState: {},        
+      recentEventsQueue: [],   
+      simulatedPositions: [] 
+    };
 
-    // Initialize empty journal for this session
-    journalBySession.set(sessionId, []);
+    // SAVE SESSION VIA DB
+    db.setSession(sessionId, sessionData);
+    
+    // Initialize empty journal if not exists
+    if (db.getJournal(sessionId).length === 0) {
+       db.setJournal(sessionId, []);
+    }
 
     res.json({
       sessionId,
@@ -316,7 +312,7 @@ function getSessionOrThrow(sessionId, res) {
     res.status(400).send('Missing sessionId');
     return null;
   }
-  const session = sessions.get(sessionId);
+  const session = db.getSession(sessionId);
   if (!session) {
     res.status(401).send('Unknown or expired sessionId');
     return null;
@@ -326,7 +322,6 @@ function getSessionOrThrow(sessionId, res) {
 
 /**
  * POST /api/tradelocker/select-account
- * Body: { sessionId, accountId, accNum }
  */
 app.post('/api/tradelocker/select-account', (req, res) => {
   const { sessionId, accountId, accNum } = req.body || {};
@@ -355,6 +350,9 @@ app.post('/api/tradelocker/select-account', (req, res) => {
   session.recentEventsQueue = [];
   session.simulatedPositions = [];
 
+  // Update DB
+  db.setSession(sessionId, session);
+
   res.json({
     ok: true,
     accountId: session.accountId,
@@ -364,9 +362,6 @@ app.post('/api/tradelocker/select-account', (req, res) => {
 
 /**
  * POST /api/tradelocker/order
- * Body: { sessionId, symbol, side, size, stopLoss, takeProfit }
- * Executes a simulated order (mixed into real session) for "Simulate" functionality
- * or acts as a proxy for real execution if IDs were mapped (currently simulation mode).
  */
 app.post('/api/tradelocker/order', async (req, res) => {
   const { sessionId, symbol, side, size, stopLoss, takeProfit } = req.body || {};
@@ -374,11 +369,8 @@ app.post('/api/tradelocker/order', async (req, res) => {
   if (!session) return;
 
   try {
-    // In a full production app, we would look up Instrument ID and call TradeLocker API
-    // For this demo/simulation scope, we execute a simulated order in-memory.
     const entryPrice = getPrice(symbol) || 0;
     
-    // Fallback if market data missing
     if (entryPrice === 0) {
       return res.status(400).json({ error: "Market data unavailable for symbol" });
     }
@@ -401,11 +393,8 @@ app.post('/api/tradelocker/order', async (req, res) => {
     if (!session.simulatedPositions) session.simulatedPositions = [];
     session.simulatedPositions.push(newPosition);
     
-    // Prime the event trigger by adding it to "lastPositions" immediately
-    // The next poll will see it as an existing position, so we add it here manually to prevent "new position" event?
-    // Actually, we WANT a "New Position" event on next poll. 
-    // So we DON'T add it to lastPositionsById yet. The next polling cycle in /overview will see it in the combined list
-    // and trigger the "ORDER_FILLED" event naturally.
+    // SAVE DB
+    db.setSession(sessionId, session);
 
     res.json({ ok: true, orderId: positionId, entryPrice });
   } catch (err) {
@@ -436,7 +425,6 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     ]);
 
     if (!stateRes.ok) {
-      // Handle token expiration if needed
       return res.status(stateRes.status).send('Failed to fetch account state');
     }
 
@@ -478,21 +466,16 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     });
 
     // === SIMULATION MERGE ===
-    // Process simulated positions: update PnL based on live market data
     const simulatedPositions = session.simulatedPositions || [];
     const updatedSimulated = simulatedPositions.map(pos => {
        const marketPrice = getPrice(pos.symbol) || pos.currentPrice;
        const diff = marketPrice - pos.entryPrice;
-       // Simple PnL: diff * size * contract_multiplier (assuming 1 for demo)
-       // Adjust for direction
        let pnl = diff * pos.size; 
        if (pos.side === 'sell') pnl = -pnl;
        
-       // Note: In real app, consider tick value/pip value. For demo, we do raw price diff.
-       // Scaling factor for indices/crypto to make PnL look realistic
        if (pos.symbol.includes('US30') || pos.symbol.includes('NAS')) pnl *= 1; 
        else if (pos.symbol.includes('BTC')) pnl *= 1; 
-       else pnl *= 10000; // forex approximation
+       else pnl *= 10000; 
        
        return {
          ...pos,
@@ -501,12 +484,11 @@ app.get('/api/tradelocker/overview', async (req, res) => {
        };
     });
 
-    // Save updated state back to session (for next PnL calc)
     session.simulatedPositions = updatedSimulated;
 
     const positions = [...realPositions, ...updatedSimulated];
 
-    // === DEEP READINESS: State Diffing & Event Emission ===
+    // === DEEP READINESS: State Diffing ===
     
     const prevPositionsById = session.lastPositionsById || {};
     const currentPositionsById = {};
@@ -516,7 +498,6 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     for (const pos of positions) {
       currentPositionsById[pos.id] = pos;
       if (!prevPositionsById[pos.id]) {
-        // NEW POSITION DETECTED
         events.push({
           type: 'ORDER_FILLED',
           timestamp: new Date().toISOString(),
@@ -532,32 +513,28 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       }
     }
 
-    // 2. Detect Closed Positions & Handle Ghost Trades
+    // 2. Detect Closed Positions
     const closedIds = Object.keys(prevPositionsById).filter(
       (id) => !currentPositionsById[id]
     );
 
     if (closedIds.length) {
-      const journalList = journalBySession.get(sessionId) || [];
+      const journalList = db.getJournal(sessionId);
       let journalChanged = false;
 
       for (const closedId of closedIds) {
         const prev = prevPositionsById[closedId];
         if (!prev) continue;
 
-        // NOTE: In a real app, we'd fetch closed orders from broker to get exact fill price.
-        // Here, we approximate final PnL using the last known state.
         const finalPnl = Number(prev.pnl || 0);
         let outcome = 'BreakEven';
         const threshold = 0.5;
         if (finalPnl > threshold) outcome = 'Win';
         else if (finalPnl < -threshold) outcome = 'Loss';
 
-        // Check if we have a linked journal entry
         let matchedEntryIndex = journalList.findIndex(e => e.linkedPositionId === closedId);
 
         if (matchedEntryIndex !== -1) {
-          // Update Existing Entry
           const entry = journalList[matchedEntryIndex];
           if (entry.outcome === 'Open') {
             journalList[matchedEntryIndex] = {
@@ -565,20 +542,20 @@ app.get('/api/tradelocker/overview', async (req, res) => {
               outcome,
               finalPnl,
               closedAt: new Date().toISOString(),
-              pnl: finalPnl // Standardize analytics field
+              pnl: finalPnl 
             };
             journalChanged = true;
           }
         } else {
-          // GHOST TRADE: Trade closed but no journal entry exists. Auto-Log it.
+          // GHOST TRADE LOG
           const autoEntry = {
             id: `auto-${closedId}`,
             timestamp: new Date().toISOString(),
             symbol: prev.symbol,
             direction: prev.side === 'buy' ? 'long' : 'short',
-            timeframe: '15m', // default
+            timeframe: '15m', 
             entryPrice: prev.entryPrice,
-            exitPrice: prev.currentPrice, // approx
+            exitPrice: prev.currentPrice,
             size: prev.size,
             netPnl: finalPnl,
             pnl: finalPnl,
@@ -593,7 +570,6 @@ app.get('/api/tradelocker/overview', async (req, res) => {
           };
           journalList.unshift(autoEntry);
           journalChanged = true;
-          console.log(`[AutoJournal] Created entry for ghost trade ${closedId}`);
         }
 
         events.push({
@@ -613,13 +589,12 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       }
 
       if (journalChanged) {
-        journalBySession.set(sessionId, journalList);
+        db.setJournal(sessionId, journalList);
       }
     }
 
     session.lastPositionsById = currentPositionsById;
     
-    // Merge equity for simulated trades
     const simPnL = updatedSimulated.reduce((sum, p) => sum + p.pnl, 0);
     const adjustedEquity = equity + simPnL;
 
@@ -628,8 +603,10 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       equity: adjustedEquity,
       marginUsed
     };
+    
+    // Save DB
+    db.setSession(sessionId, session);
 
-    // Return events so frontend can react (Toast/Refresh)
     const overview = {
       isConnected: true,
       balance,
@@ -647,14 +624,14 @@ app.get('/api/tradelocker/overview', async (req, res) => {
 });
 
 /**
- * GET /api/journal/entries?sessionId=...
+ * GET /api/journal/entries
  */
 app.get('/api/journal/entries', (req, res) => {
   const sessionId = req.query.sessionId;
   const session = getSessionOrThrow(sessionId, res);
   if (!session) return;
 
-  const entries = journalBySession.get(sessionId) || [];
+  const entries = db.getJournal(sessionId);
   res.json(entries);
 });
 
@@ -710,9 +687,9 @@ app.post('/api/journal/entry', (req, res) => {
     ...entry // Spread other fields
   };
 
-  const list = journalBySession.get(sessionId) || [];
+  const list = db.getJournal(sessionId);
   list.unshift(stored);
-  journalBySession.set(sessionId, list);
+  db.setJournal(sessionId, list);
 
   res.json(stored);
 });
@@ -727,7 +704,7 @@ app.patch('/api/journal/entry/:id', (req, res) => {
   const session = getSessionOrThrow(sessionId, res);
   if (!session) return;
 
-  const list = journalBySession.get(sessionId) || [];
+  const list = db.getJournal(sessionId);
   const idx = list.findIndex((e) => e.id === entryId);
 
   if (idx === -1) {
@@ -738,20 +715,20 @@ app.patch('/api/journal/entry/:id', (req, res) => {
   const next = { ...current, ...updates };
 
   list[idx] = next;
-  journalBySession.set(sessionId, list);
+  db.setJournal(sessionId, list);
 
   res.json(next);
 });
 
-// Simple health check
+// Health Check
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, sessions: sessions.size });
+  res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
-// Setup WebSocket for Real-time Market Data
+// Setup WebSocket for Hybrid Market Data
 setupMarketData(server);
 
-// Start Server (using server.listen instead of app.listen for WS support)
+// Start Server
 server.listen(PORT, () => {
-  console.log(`TradeLocker proxy API & Market Feed listening on http://localhost:${PORT}`);
+  console.log(`TradeLocker proxy API & Hybrid Market Feed listening on http://localhost:${PORT}`);
 });
