@@ -4,6 +4,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
 
 // Import Persistence
 const db = require('./persistence');
@@ -22,6 +23,20 @@ const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
 
 // Create HTTP server explicitly to attach WS
 const server = http.createServer(app);
+
+// --- SECURITY: Rate Limiting ---
+// Limit AI requests to prevent cost runaways
+const aiLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000, // 15 minutes
+	limit: 100, // Limit each IP to 100 AI requests per window
+	standardHeaders: 'draft-7',
+	legacyHeaders: false,
+    message: { error: "Too many AI requests, please try again later." }
+});
+
+// Apply limiter to API routes only
+app.use('/api/agents/', aiLimiter);
+app.use('/api/ai/', aiLimiter);
 
 /**
  * CORS Configuration
@@ -725,10 +740,30 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, timestamp: new Date().toISOString() });
 });
 
+// --- PRODUCTION SERVING ---
+// Serve the React frontend from the 'dist' directory (after build)
+const clientDistPath = path.join(__dirname, '..', 'dist');
+
+if (fs.existsSync(clientDistPath)) {
+  console.log(`[Server] Serving static files from ${clientDistPath}`);
+  app.use(express.static(clientDistPath));
+
+  // Catch-all handler for React Routing (SPA)
+  app.get('*', (req, res) => {
+    // If it's an API call that fell through, don't serve index.html
+    if (req.path.startsWith('/api')) {
+      return res.status(404).json({ error: 'API endpoint not found' });
+    }
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+} else {
+  console.log('[Server] Dist folder not found. Assuming development mode.');
+}
+
 // Setup WebSocket for Hybrid Market Data
 setupMarketData(server);
 
 // Start Server
 server.listen(PORT, () => {
-  console.log(`TradeLocker proxy API & Hybrid Market Feed listening on http://localhost:${PORT}`);
+  console.log(`AI Trading Analyst Backend (Production Ready) listening on port ${PORT}`);
 });
