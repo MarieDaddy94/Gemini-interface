@@ -1,6 +1,17 @@
 
 import React, { useMemo, useState } from 'react';
 import { useJournal } from '../context/JournalContext';
+import { 
+  BarChart, 
+  Bar, 
+  XAxis, 
+  YAxis, 
+  Tooltip as RechartsTooltip, 
+  ResponsiveContainer, 
+  Cell, 
+  PieChart, 
+  Pie 
+} from 'recharts';
 
 const AnalyticsPanel: React.FC = () => {
   const { entries, clearJournal } = useJournal();
@@ -120,8 +131,34 @@ const AnalyticsPanel: React.FC = () => {
       overallWinrate,
       avgPnlPerTrade,
       bySymbolWinLoss,
+      winCount,
+      lossCount,
+      beCount,
+      closedTrades
     };
   }, [entries]);
+
+  // --- Chart Data Preparation ---
+
+  const pnlData = useMemo(() => {
+    return Object.entries(stats.bySymbolWinLoss)
+      .map(([symbol, data]) => ({
+        symbol,
+        pnl: data.pnl,
+        closed: data.closed
+      }))
+      .filter(d => d.closed > 0 && d.pnl !== 0) // Only show active symbols with PnL
+      .sort((a, b) => b.pnl - a.pnl);
+  }, [stats]);
+
+  const outcomeData = useMemo(() => {
+    return [
+      { name: 'Win', value: stats.winCount, color: '#089981' },
+      { name: 'Loss', value: stats.lossCount, color: '#f23645' },
+      { name: 'BE', value: stats.beCount, color: '#787b86' },
+    ].filter(d => d.value > 0);
+  }, [stats]);
+
 
   const sortRecord = (rec: Record<string, number>) =>
     Object.entries(rec).sort((a, b) => b[1] - a[1]);
@@ -200,125 +237,182 @@ const AnalyticsPanel: React.FC = () => {
 
       {/* Body */}
       <div className="flex-1 overflow-auto p-4 space-y-4 text-xs">
-        {/* Overview cards */}
+        {/* KPI Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="rounded-lg border border-white/10 p-3">
-            <div className="text-[11px] opacity-70 mb-1">Total Notes</div>
-            <div className="text-lg font-semibold">{stats.total}</div>
-          </div>
-
-          <div className="rounded-lg border border-white/10 p-3">
-            <div className="text-[11px] opacity-70 mb-1">AI Notes</div>
-            <div className="text-lg font-semibold">
-              {stats.bySource['ai'] || 0}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-white/10 p-3">
-            <div className="text-[11px] opacity-70 mb-1">Manual Notes</div>
-            <div className="text-lg font-semibold">
-              {stats.bySource['manual'] || 0}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-white/10 p-3">
-            <div className="text-[11px] opacity-70 mb-1">Symbols Tracked</div>
-            <div className="text-lg font-semibold">
-              {Object.keys(stats.bySymbol).length}
-            </div>
-          </div>
-
-          {/* 🔥 Total PnL */}
-          <div className="rounded-lg border border-white/10 p-3 col-span-2 md:col-span-2">
+          {/* 🔥 Total PnL (Spans 2 on desktop) */}
+          <div className="rounded-lg border border-white/10 p-3 col-span-2 md:col-span-1">
             <div className="text-[11px] opacity-70 mb-1">Total Realized PnL</div>
-            <div className={`text-lg font-semibold ${stats.totalPnl > 0 ? 'text-[#089981]' : stats.totalPnl < 0 ? 'text-[#f23645]' : ''}`}>
+            <div className={`text-xl font-bold ${stats.totalPnl > 0 ? 'text-[#089981]' : stats.totalPnl < 0 ? 'text-[#f23645]' : ''}`}>
               {stats.totalPnl > 0 ? '+' : ''}
               {formatNumber(stats.totalPnl, 2)}
-            </div>
-            <div className="text-[10px] opacity-60 mt-1">
-              Sum of all entries with a PnL value.
-            </div>
-          </div>
-
-          {/* 🔥 Avg R:R */}
-          <div className="rounded-lg border border-white/10 p-3">
-            <div className="text-[11px] opacity-70 mb-1">Average R:R</div>
-            <div className="text-lg font-semibold">
-              {formatNumber(stats.avgRR, 2)}R
             </div>
           </div>
 
           {/* 🔥 Winrate */}
           <div className="rounded-lg border border-white/10 p-3">
             <div className="text-[11px] opacity-70 mb-1">Winrate</div>
-            <div className="text-lg font-semibold">
+            <div className="text-xl font-bold">
               {formatNumber(stats.overallWinrate, 1)}%
             </div>
           </div>
-        </div>
 
-        {/* Outcome distribution */}
-        <div className="rounded-lg border border-white/10 p-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-            Outcomes
+          {/* 🔥 Avg R:R */}
+          <div className="rounded-lg border border-white/10 p-3">
+            <div className="text-[11px] opacity-70 mb-1">Avg R:R</div>
+            <div className="text-xl font-bold">
+              {formatNumber(stats.avgRR, 2)}R
+            </div>
           </div>
 
-          {sortRecord(stats.byOutcome).length === 0 ? (
-            <div className="text-[11px] opacity-60">
-              No outcome data yet. As you tag trades as Win / Loss / BE / Open,
-              this will fill in.
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {sortRecord(stats.byOutcome).map(([name, count]) => {
-                const pct = stats.total
-                  ? Math.round((count / stats.total) * 100)
-                  : 0;
-
-                return (
-                  <div key={name} className="flex items-center gap-2">
-                    <div className="w-20 text-[11px] capitalize">{name}</div>
-                    <div className="flex-1 h-2 rounded-full bg-white/5 overflow-hidden">
-                      <div
-                        className="h-full bg-white/60"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="w-10 text-right text-[11px] opacity-70">
-                      {pct}%
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <div className="rounded-lg border border-white/10 p-3">
+             <div className="text-[11px] opacity-70 mb-1">Total Trades</div>
+             <div className="text-xl font-bold">{stats.total}</div>
+          </div>
         </div>
 
-        {/* Symbols (Top 5 by count) */}
-        <div className="rounded-lg border border-white/10 p-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-            Symbols (Top 5 by Notes)
+        {/* 📊 Visual Charts Section */}
+        {stats.total > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 h-52">
+             {/* PnL by Symbol Bar Chart */}
+             <div className="lg:col-span-2 rounded-lg border border-white/10 p-3 flex flex-col bg-[#161a25]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70 mb-2">PnL by Symbol</div>
+                <div className="flex-1 min-h-0">
+                  {pnlData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={pnlData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                        <XAxis 
+                          dataKey="symbol" 
+                          tick={{fontSize: 10, fill: '#64748b'}} 
+                          axisLine={false} 
+                          tickLine={false} 
+                          interval={0}
+                        />
+                        <YAxis 
+                          tick={{fontSize: 10, fill: '#64748b'}} 
+                          axisLine={false} 
+                          tickLine={false} 
+                        />
+                        <RechartsTooltip 
+                            contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#d1d4dc', fontSize: '11px', borderRadius: '4px' }}
+                            cursor={{fill: 'rgba(255,255,255,0.03)'}}
+                            itemStyle={{ color: '#fff' }}
+                            formatter={(value: number) => [`${value > 0 ? '+' : ''}${value.toFixed(2)}`, 'PnL']}
+                        />
+                        <Bar dataKey="pnl" radius={[2, 2, 0, 0]}>
+                          {pnlData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.pnl >= 0 ? '#089981' : '#f23645'} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-500 italic">
+                      No PnL data available yet.
+                    </div>
+                  )}
+                </div>
+             </div>
+
+             {/* Outcome Distribution Pie Chart */}
+             <div className="rounded-lg border border-white/10 p-3 flex flex-col bg-[#161a25]">
+                <div className="text-[11px] font-semibold uppercase tracking-wide opacity-70 mb-2">Outcome Dist.</div>
+                <div className="flex-1 min-h-0 relative">
+                  {outcomeData.length > 0 ? (
+                    <>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={outcomeData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={35}
+                            outerRadius={55}
+                            paddingAngle={4}
+                            dataKey="value"
+                            stroke="none"
+                          >
+                            {outcomeData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <RechartsTooltip 
+                             contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#d1d4dc', fontSize: '11px', borderRadius: '4px' }}
+                             itemStyle={{ color: '#fff' }}
+                             separator=": "
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                         <div className="text-center">
+                           <div className="text-[10px] text-gray-400 uppercase">Win Rate</div>
+                           <div className={`text-base font-bold ${stats.overallWinrate >= 50 ? 'text-[#089981]' : 'text-[#f23645]'}`}>
+                             {stats.overallWinrate.toFixed(0)}%
+                           </div>
+                         </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-gray-500 italic">
+                      No outcomes yet.
+                    </div>
+                  )}
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* Breakdown Lists Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Symbols (Top 5 by count) */}
+          <div className="rounded-lg border border-white/10 p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+              Symbols (Top 5 by Notes)
+            </div>
+
+            {sortRecord(stats.bySymbol).slice(0, 5).map(([sym, count]) => (
+              <div key={sym} className="flex justify-between text-[11px] mb-1 py-1 border-b border-white/5 last:border-0">
+                <span>{sym}</span>
+                <span className="opacity-70 font-mono">{count}</span>
+              </div>
+            ))}
+
+            {Object.keys(stats.bySymbol).length === 0 && (
+              <div className="text-[11px] opacity-60">
+                No symbols yet. As you log trades and notes, you&apos;ll see which
+                markets you actually trade the most.
+              </div>
+            )}
           </div>
 
-          {sortRecord(stats.bySymbol).slice(0, 5).map(([sym, count]) => (
-            <div key={sym} className="flex justify-between text-[11px] mb-1">
-              <span>{sym}</span>
-              <span className="opacity-70">{count}</span>
+          {/* Agent contribution */}
+          <div className="rounded-lg border border-white/10 p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
+              Agent Contribution
             </div>
-          ))}
 
-          {Object.keys(stats.bySymbol).length === 0 && (
-            <div className="text-[11px] opacity-60">
-              No symbols yet. As you log trades and notes, you&apos;ll see which
-              markets you actually trade the most.
-            </div>
-          )}
+            {Object.keys(stats.byAgent).length === 0 ? (
+              <div className="text-[11px] opacity-60">
+                Once the AI team starts logging journal entries, you&apos;ll see
+                which agent is carrying the most weight.
+              </div>
+            ) : (
+              sortRecord(stats.byAgent).map(([agent, count]) => (
+                <div
+                  key={agent}
+                  className="flex justify-between text-[11px] mb-1 py-1 border-b border-white/5 last:border-0"
+                >
+                  <span className="capitalize">{agent}</span>
+                  <span className="opacity-70 font-mono">{count}</span>
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
-        {/* 🔥 Per-Symbol performance */}
+        {/* 🔥 Detailed Per-Symbol performance */}
         <div className="rounded-lg border border-white/10 p-3">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-            Per-Symbol Performance
+            Performance Detail
           </div>
 
           {sortSymbolsByClosed.length === 0 ? (
@@ -327,7 +421,7 @@ const AnalyticsPanel: React.FC = () => {
               and PnL, you&apos;ll see winrate and performance by symbol here.
             </div>
           ) : (
-            <div className="space-y-1">
+            <div className="grid grid-cols-1 gap-2">
               {sortSymbolsByClosed.map(([sym, perf]) => {
                 const { wins, losses, be, closed, pnl } = perf;
                 const winrate = closed ? (wins / closed) * 100 : 0;
@@ -335,59 +429,38 @@ const AnalyticsPanel: React.FC = () => {
                 return (
                   <div
                     key={sym}
-                    className="flex flex-col border border-white/5 rounded-md px-2 py-1"
+                    className="flex items-center justify-between border border-white/5 bg-white/[0.02] rounded px-3 py-2 text-[11px]"
                   >
-                    <div className="flex justify-between text-[11px] mb-1">
-                      <span className="font-semibold">{sym}</span>
-                      <span className="opacity-70">
-                        {closed} closed • {wins}W / {losses}L / {be}BE
-                      </span>
+                    <div className="flex flex-col min-w-[80px]">
+                      <span className="font-bold text-white text-xs">{sym}</span>
+                      <span className="opacity-60 text-[10px]">{closed} trades</span>
                     </div>
-                    <div className="flex justify-between text-[11px]">
-                      <span>Winrate</span>
-                      <span className="opacity-80">
-                        {formatNumber(winrate, 1)}%
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-[11px]">
-                      <span>Total PnL</span>
-                      <span
-                        className={
-                          pnl > 0 ? 'opacity-80 text-[#089981]' : pnl < 0 ? 'opacity-80 text-[#f23645]' : 'opacity-80'
-                        }
-                      >
-                        {pnl >= 0 ? '+' : ''}
-                        {formatNumber(pnl, 2)}
-                      </span>
+
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-1.5 opacity-80">
+                         <span className="text-[#089981] font-medium">{wins}W</span>
+                         <span className="text-[#f23645] font-medium">{losses}L</span>
+                         <span className="text-gray-400">{be}BE</span>
+                      </div>
+                      
+                      <div className="w-16 text-right">
+                         <div className="text-[10px] opacity-50">Winrate</div>
+                         <div className={`font-semibold ${winrate >= 50 ? 'text-[#089981]' : 'text-[#f23645]'}`}>
+                            {winrate.toFixed(0)}%
+                         </div>
+                      </div>
+
+                      <div className="w-20 text-right">
+                         <div className="text-[10px] opacity-50">Net PnL</div>
+                         <div className={`font-bold ${pnl > 0 ? 'text-[#089981]' : pnl < 0 ? 'text-[#f23645]' : 'text-gray-300'}`}>
+                           {pnl > 0 ? '+' : ''}{formatNumber(pnl, 0)}
+                         </div>
+                      </div>
                     </div>
                   </div>
                 );
               })}
             </div>
-          )}
-        </div>
-
-        {/* Agent contribution */}
-        <div className="rounded-lg border border-white/10 p-3">
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide opacity-70">
-            Agent Contribution
-          </div>
-
-          {Object.keys(stats.byAgent).length === 0 ? (
-            <div className="text-[11px] opacity-60">
-              Once the AI team starts logging journal entries, you&apos;ll see
-              which agent is carrying the most weight.
-            </div>
-          ) : (
-            sortRecord(stats.byAgent).map(([agent, count]) => (
-              <div
-                key={agent}
-                className="flex justify-between text-[11px] mb-1"
-              >
-                <span>{agent}</span>
-                <span className="opacity-70">{count}</span>
-              </div>
-            ))
           )}
         </div>
       </div>
