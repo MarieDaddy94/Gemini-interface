@@ -1,32 +1,42 @@
 
-import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta, ToolCall } from '../services/agentApi';
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { callAgentRouter, AgentId, TradeMeta, ToolCall } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 import { useAgentConfig } from '../context/AgentConfigContext';
-import { BrokerPosition } from '../types';
+import { useTradingSession } from '../context/TradingSessionContext';
+import { BrokerPosition, AgentMessage } from '../types';
 import { executeTrade } from '../services/tradeLockerService';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
   quant_bot: { avatar: '🤖', color: 'bg-blue-100 text-blue-800' },
+  "quant-analyst": { avatar: '🤖', color: 'bg-blue-100 text-blue-800' }, // New ID mapping
+  
   trend_master: { avatar: '📈', color: 'bg-purple-100 text-purple-800' },
+  "strategist-main": { avatar: '🧠', color: 'bg-purple-100 text-purple-800' }, // New ID mapping
+  
   pattern_gpt: { avatar: '🧠', color: 'bg-green-100 text-green-800' },
+  
   journal_coach: { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' },
+  "journal-coach": { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' }, // New ID mapping
+  
+  "risk-manager": { avatar: '🛡️', color: 'bg-red-100 text-red-800' },
+  "execution-bot": { avatar: '⚡', color: 'bg-yellow-100 text-yellow-800' },
+
   // Fallbacks
   default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
 };
-
-const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
 
 export interface ChatOverlayHandle {
   sendSystemMessageToAgent: (params: { prompt: string; agentId: string }) => Promise<void>;
 }
 
-interface ChatMessage {
+// UI-Specific Message Type (Mapping layer)
+interface UIChatMessage {
   id: string;
   role: 'user' | 'assistant';
-  author?: string; // "You", "QuantBot", etc.
-  agentId?: string; // for color mapping
+  author?: string; 
+  agentId?: string; 
   text: string;
   isError?: boolean;
   tradeMeta?: TradeMeta;
@@ -289,8 +299,6 @@ const CropModal: React.FC<{
 
   const handleConfirm = () => {
     if (!selection || !imgRef.current || selection.width < 10 || selection.height < 10) {
-      // If no selection or tiny selection, just verify if they want full image? 
-      // For now, require selection.
       if (!selection) alert("Please select a region to capture.");
       return;
     }
@@ -316,7 +324,6 @@ const CropModal: React.FC<{
         canvas.height
       );
       const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-      // Remove data prefix for API
       onConfirm(dataUrl.split(',')[1]); 
     }
   };
@@ -360,8 +367,6 @@ const CropModal: React.FC<{
             className="max-h-[80vh] max-w-[90vw] object-contain pointer-events-none select-none"
             draggable={false}
           />
-          
-          {/* Dark Overlay for non-selected areas */}
           {selection && (
             <>
                <div className="absolute bg-black/60 inset-0 pointer-events-none" style={{
@@ -395,15 +400,12 @@ const CropModal: React.FC<{
 
 
 // --- Trade Ticket Component ---
-// Replaces static trade cards with an interactive ticket that has editable SL/TP.
 const TradeTicket: React.FC<{ 
   meta: TradeMeta; 
   sessionId: string | null;
 }> = ({ meta, sessionId }) => {
-  // Local state for editable fields
   const [stopLoss, setStopLoss] = useState<string>(meta.stopLoss ? String(meta.stopLoss) : '');
   const [takeProfit, setTakeProfit] = useState<string>(meta.takeProfit1 ? String(meta.takeProfit1) : '');
-  
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
@@ -416,7 +418,7 @@ const TradeTicket: React.FC<{
          sessionId,
          symbol: meta.symbol,
          side: meta.direction === 'short' ? 'sell' : 'buy',
-         size: 0.1, // Default lot size for demo
+         size: 0.1, // Default lot size
          stopLoss: parseFloat(stopLoss) || undefined,
          takeProfit: parseFloat(takeProfit) || undefined
        });
@@ -431,7 +433,6 @@ const TradeTicket: React.FC<{
 
   return (
     <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg overflow-hidden w-full max-w-[280px] shadow-sm">
-      {/* Header */}
       <div className="bg-slate-100 px-3 py-2 border-b border-slate-200 flex justify-between items-center">
         <div className="font-bold text-slate-700 flex items-center gap-2">
           <span>{meta.symbol || 'SYMBOL'}</span>
@@ -445,7 +446,6 @@ const TradeTicket: React.FC<{
       </div>
 
       <div className="p-3 grid grid-cols-2 gap-y-3 gap-x-4 text-xs">
-          {/* Static Info */}
           <div className="flex justify-between items-baseline">
             <span className="text-slate-500 text-[10px] uppercase tracking-wider">Entry</span>
             <span className="font-mono font-medium text-slate-800">Market</span>
@@ -455,7 +455,6 @@ const TradeTicket: React.FC<{
             <span className="font-mono font-medium text-slate-800">{meta.confidence || '?'}%</span>
           </div>
 
-          {/* Editable Inputs */}
           <div className="col-span-2 space-y-2 pt-2 border-t border-slate-200">
              <div>
                 <label className="block text-[9px] uppercase text-slate-500 font-bold mb-1">Stop Loss</label>
@@ -483,7 +482,6 @@ const TradeTicket: React.FC<{
              </div>
           </div>
           
-          {/* Execution Button */}
           <div className="col-span-2 mt-2">
             {!sessionId ? (
                <div className="text-center text-[10px] text-slate-400 py-1 border border-dashed border-slate-300 rounded">
@@ -531,41 +529,20 @@ const TradeTicket: React.FC<{
 
 const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref) => {
   const { 
-    chartContext, 
     isBrokerConnected, 
     autoFocusSymbol,
     brokerSessionId,
-    chartSymbol = 'US30',
-    chartTimeframe = '15m',
     openPositions = []
   } = props;
 
+  // Global Session State via Context (Replaces local state for persistence)
+  const { state: sessionState, addMessage } = useTradingSession();
+
   // UI State
   const [isOpen, setIsOpen] = useState(true);
-  
-  // -- MESSAGES STATE WITH PERSISTENCE --
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = window.localStorage.getItem('ai_chat_history');
-        if (saved) return JSON.parse(saved);
-      } catch (e) {
-        console.error("Failed to parse chat history", e);
-      }
-    }
-    return [];
-  });
-
-  // Save to localStorage whenever messages change
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('ai_chat_history', JSON.stringify(messages));
-    }
-  }, [messages]);
-
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [showPositions, setShowPositions] = useState(true); // default open if connected
+  const [showPositions, setShowPositions] = useState(true);
 
   // Vision / File State
   const [isVisionActive, setIsVisionActive] = useState(false);
@@ -575,8 +552,37 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
 
+  // Region Selection & Annotation State
+  const [showCropModal, setShowCropModal] = useState(false);
+  const [tempSnapshotForCrop, setTempSnapshotForCrop] = useState<string | null>(null);
+  const [showAnnotationModal, setShowAnnotationModal] = useState(false);
+  const [tempCroppedImage, setTempCroppedImage] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const { addEntry } = useJournal(); 
+  const { agentConfigs } = useAgentConfig(); 
+
+  // --- Map Session Messages to UI Format ---
+  const messages = useMemo<UIChatMessage[]>(() => {
+    return sessionState.messages.map(msg => ({
+      id: msg.id,
+      role: msg.sender === 'user' ? 'user' : 'assistant',
+      author: msg.sender === 'user' ? 'You' : (msg.agentId ? (AGENT_UI_META[msg.agentId]?.avatar + ' ' + (msg.agentId.replace(/[-_]/g, ' '))) : 'AI Agent'),
+      agentId: msg.agentId,
+      text: msg.content,
+      // Pass-through metadata if present
+      isError: false, 
+      tradeMeta: undefined, 
+      toolCalls: undefined 
+    }));
+  }, [sessionState.messages]);
+
+  // --- Voice Logic ---
   useEffect(() => {
-    // Initialize Speech Recognition
     if (typeof window !== 'undefined') {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRecognition) {
@@ -600,7 +606,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
             });
           }
         };
-
         recognitionRef.current = recognition;
       }
     }
@@ -617,129 +622,24 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
       recognitionRef.current.start();
     }
   };
-  
-  // Region Selection & Annotation State
-  const [showCropModal, setShowCropModal] = useState(false);
-  const [tempSnapshotForCrop, setTempSnapshotForCrop] = useState<string | null>(null);
-  
-  const [showAnnotationModal, setShowAnnotationModal] = useState(false);
-  const [tempCroppedImage, setTempCroppedImage] = useState<string | null>(null);
-
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  const { addEntry, entries } = useJournal(); 
-  const { agentConfigs } = useAgentConfig(); 
-
-  // ... (processJournalDraft helper - unchanged)
-  const processJournalDraft = (draft: AgentJournalDraft, agentId: string, agentName: string) => {
-      const effectiveAgentId = (draft.agentId || agentId);
-      addEntry({
-        id: `ai-${effectiveAgentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        timestamp: new Date().toISOString(),
-        source: 'ai',
-        
-        playbook: draft.title, 
-        note: draft.summary,
-        sentiment: draft.sentiment,
-        tags: draft.tags,
-        
-        agentId: effectiveAgentId,
-        agentName: draft.agentName || agentName,
-        
-        outcome: (draft.outcome as any) || 'Open',
-        symbol: draft.symbol || chartSymbol,
-        direction: draft.direction,
-        
-        entryPrice: undefined,
-        stopPrice: undefined,
-        targetPrice: undefined,
-        size: undefined,
-
-        rr: draft.rr ?? null,
-        pnl: draft.pnl ?? null,
-      });
-      console.log(`[ChatOverlay] Added journal draft from ${agentName}`);
-  };
 
   useImperativeHandle(ref, () => ({
     sendSystemMessageToAgent: async ({ prompt, agentId }) => {
-      // ... (unchanged system message handler)
-      const displayPrompt = prompt.includes('"entries":') ? "Please review my recent journal entries and identify lessons." : prompt;
-      const userMsg: ChatMessage = {
-        id: `sys-${Date.now()}`,
-        role: 'user',
-        author: 'System',
-        text: displayPrompt
-      };
-      setMessages(prev => [...prev, userMsg]);
-      setIsSending(true);
-
-      try {
-        const insights = await fetchAgentInsights({
-          agentIds: [agentId as AgentId],
-          userMessage: prompt,
-          chartContext: chartContext,
-          screenshot: null,
-          agentOverrides: agentConfigs,
-          accountId: brokerSessionId
-        });
-        setMessages(prev => {
-          const next = [...prev];
-          insights.forEach(insight => {
-             if (insight.text || (insight.toolCalls && insight.toolCalls.length > 0)) {
-                next.push({
-                   id: `msg-${insight.agentId}-${Date.now()}`,
-                   role: 'assistant',
-                   author: insight.agentName,
-                   agentId: insight.agentId as string,
-                   text: insight.text || '',
-                   tradeMeta: insight.tradeMeta || undefined,
-                   toolCalls: insight.toolCalls
-                });
-             }
-             if (insight.error) {
-                next.push({
-                   id: `err-${insight.agentId}-${Date.now()}`,
-                   role: 'assistant',
-                   author: insight.agentName,
-                   agentId: insight.agentId as string,
-                   text: `⚠️ ${insight.error}`,
-                   isError: true
-                });
-             }
-          });
-          return next;
-        });
-        insights.forEach(i => {
-          if (i.journalDraft) {
-             processJournalDraft(i.journalDraft, i.agentId as string, i.agentName);
-          }
-        });
-      } catch (e: any) {
-        console.error("System Agent Error", e);
-        setMessages(prev => [...prev, {
-          id: `sys-err-${Date.now()}`,
-          role: 'assistant',
-          author: 'System',
-          text: `Error processing request: ${e.message}`,
-          isError: true
-        }]);
-      } finally {
-        setIsSending(false);
-      }
+      // Direct pass-through logic for system messages
+      // This can be enhanced later to use the router too
+      handleSendMessageRaw(prompt, agentId);
     }
   }));
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+  
   useEffect(() => {
     scrollToBottom();
   }, [messages, isSending, isOpen]);
 
+  // --- Vision Logic ---
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -793,13 +693,10 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-    // Return full dataUrl so it can be used in <img> src, caller can strip prefix if needed
     return dataUrl; 
   };
 
-  // Triggered when user wants to crop
   const handleCaptureRegion = () => {
-    // Capture full resolution for cropping
     const fullFrame = captureFrame(1.0); 
     if (fullFrame) {
       setTempSnapshotForCrop(fullFrame);
@@ -807,9 +704,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     }
   };
 
-  // After crop confirmation, move to annotation
   const handleCropConfirm = (croppedBase64: string) => {
-    // Add prefix back for the image src
     setTempCroppedImage(`data:image/jpeg;base64,${croppedBase64}`);
     setShowCropModal(false);
     setTempSnapshotForCrop(null);
@@ -821,7 +716,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     setTempSnapshotForCrop(null);
   };
 
-  // After annotation confirmation, set as final image
   const handleAnnotationConfirm = (finalBase64: string) => {
     setPendingFileImage({ mimeType: 'image/jpeg', data: finalBase64 });
     setShowAnnotationModal(false);
@@ -853,179 +747,69 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     e.target.value = '';
   };
 
-  // ... (getCommonPayloads, handleAgentRoundtable - unchanged)
-  const getCommonPayloads = () => {
-    const journalContextPayload = entries.slice(0, 10).map((e) => ({
-      id: e.id,
-      symbol: e.symbol,
-      outcome: e.outcome,
-      playbook: e.playbook,
-      note: e.note,
-      agentId: e.agentId,
-      agentName: e.agentName,
-      timestamp: e.timestamp,
-    }));
+  // --- Main Message Logic (Wired to Router) ---
 
-    const chartContextPayload = {
-      summary: chartContext,
-      symbol: chartSymbol,
-      timeframe: chartTimeframe
-    };
-
-    return { journalContextPayload, chartContextPayload };
-  };
-
-  const handleDebrief = async () => {
-      // ... (implementation same as before)
-      const agentMessages = messages.filter(m => m.role === 'assistant');
-      if (agentMessages.length === 0) return;
-      setIsSending(true);
-      try {
-        const previousInsightsPayload = agentMessages.map(m => ({
-          agentId: m.agentId || 'unknown',
-          agentName: m.author || 'Agent',
-          message: m.text,
-          tradeMeta: m.tradeMeta,
-        }));
-        const { journalContextPayload, chartContextPayload } = getCommonPayloads();
-        const insights = await fetchAgentDebrief({
-          previousInsights: previousInsightsPayload,
-          chartContext: chartContextPayload,
-          journalContext: journalContextPayload,
-          agentOverrides: agentConfigs,
-          accountId: brokerSessionId
-        });
-        setMessages(prev => {
-          const next = [...prev];
-          insights.forEach(insight => {
-             if (insight.text || (insight.toolCalls && insight.toolCalls.length > 0)) {
-                next.push({
-                   id: `debrief-${insight.agentId}-${Date.now()}`,
-                   role: 'assistant',
-                   author: insight.agentName,
-                   agentId: insight.agentId as string,
-                   text: insight.text || '',
-                   tradeMeta: insight.tradeMeta || undefined,
-                   toolCalls: insight.toolCalls
-                });
-             }
-             if (insight.error) {
-                next.push({
-                   id: `err-debrief-${insight.agentId}-${Date.now()}`,
-                   role: 'assistant',
-                   author: insight.agentName,
-                   agentId: insight.agentId as string,
-                   text: `⚠️ ${insight.error}`,
-                   isError: true
-                });
-             }
-          });
-          return next;
-        });
-        insights.forEach(i => {
-          if (i.journalDraft) {
-             processJournalDraft(i.journalDraft, i.agentId as string, i.agentName);
-          }
-        });
-      } catch (e: any) {
-        console.error("Roundtable Error", e);
-        setMessages(prev => [...prev, {
-          id: `sys-err-debrief-${Date.now()}`,
-          role: 'assistant',
-          author: 'System',
-          text: `Error calling Roundtable: ${e.message}`,
-          isError: true
-        }]);
-      } finally {
-        setIsSending(false);
-      }
-  };
-
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() && !pendingFileImage && !isVisionActive) return;
-    if (isSending) return;
-
-    const userText = inputValue;
-    const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      author: 'You',
-      text: userText
-    };
-    setMessages(prev => [...prev, userMsg]);
-    setInputValue('');
+  const handleSendMessageRaw = async (text: string, agentId?: string) => {
+    if (!text.trim() && !pendingFileImage) return;
+    
+    // Add user message to context immediately
+    addMessage({
+      sender: 'user',
+      content: text,
+      agentId: undefined
+    });
+    
     setIsSending(true);
 
     try {
-      let screenshot: string | null = null;
-      if (pendingFileImage) {
-        screenshot = `data:${pendingFileImage.mimeType};base64,${pendingFileImage.data}`;
-      } else if (isVisionActive) {
-        // Fallback: If vision active but no region captured, grab full screen (scaled)
-        const frame = captureFrame(0.5);
-        if (frame) {
-          screenshot = frame;
+      // Build history for API
+      // We take the current context state, plus the message we just added (conceptually)
+      // Note: addMessage updates state asynchronously, so we construct the history explicitly here
+      const historyForApi: AgentMessage[] = [
+        ...sessionState.messages,
+        {
+          id: `temp_user_${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          sender: 'user',
+          content: text,
+          agentId: undefined
         }
-      }
-      setPendingFileImage(null); 
+      ];
 
-      const { journalContextPayload, chartContextPayload } = getCommonPayloads();
-
-      const insights = await fetchAgentInsights({
-        agentIds: ACTIVE_AGENT_IDS,
-        userMessage: userText,
-        chartContext: chartContextPayload,
-        journalContext: journalContextPayload,
-        screenshot: screenshot ? screenshot.split(',')[1] : null, // API expects base64 without prefix
-        agentOverrides: agentConfigs,
-        accountId: brokerSessionId
+      // Call Agent Router (Orchestrator)
+      // Default to strategist-main if no specific agent targeted
+      const targetAgentId = agentId || 'strategist-main';
+      
+      const response = await callAgentRouter({
+        agentId: targetAgentId,
+        userMessage: text,
+        sessionState: sessionState,
+        history: historyForApi
       });
 
-      setMessages(prev => {
-        const next = [...prev];
-        insights.forEach(insight => {
-          if (insight.error) {
-            next.push({
-              id: `err-${insight.agentId}-${Date.now()}`,
-              role: 'assistant',
-              author: insight.agentName,
-              agentId: insight.agentId as string,
-              text: `⚠️ ${insight.error}`,
-              isError: true
-            });
-          } else if (insight.text || (insight.toolCalls && insight.toolCalls.length > 0)) {
-             next.push({
-              id: `msg-${insight.agentId}-${Date.now()}`,
-              role: 'assistant',
-              author: insight.agentName,
-              agentId: insight.agentId as string,
-              text: insight.text || '',
-              tradeMeta: insight.tradeMeta || undefined,
-              toolCalls: insight.toolCalls
-            });
-          }
-        });
-        return next;
-      });
-
-      insights.forEach(i => {
-        if (i.journalDraft) {
-          processJournalDraft(i.journalDraft, i.agentId as string, i.agentName);
-        }
+      // Add agent response to context
+      addMessage({
+        sender: 'agent',
+        content: response.content,
+        agentId: response.agentId
       });
 
     } catch (e: any) {
-      console.error("Agent Error", e);
-      setMessages(prev => [...prev, {
-        id: `sys-err-${Date.now()}`,
-        role: 'assistant',
-        author: 'System',
-        text: `Error connecting to AI team: ${e.message}`,
-        isError: true
-      }]);
+      console.error("Router Error", e);
+      addMessage({
+        sender: 'agent',
+        content: `Error: ${e.message || 'Failed to contact agent router.'}`,
+        agentId: 'system'
+      });
     } finally {
       setIsSending(false);
+      setPendingFileImage(null);
     }
+  };
+
+  const handleSendMessage = () => {
+    handleSendMessageRaw(inputValue);
+    setInputValue('');
   };
 
   // --- RENDER ---
@@ -1054,7 +838,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
   return (
     <>
       <div className="w-[400px] h-full bg-white flex flex-col border-l border-[#2a2e39] shadow-xl relative z-30 animate-fade-in-right shrink-0">
-        {/* Hidden video stream element */}
         <video ref={videoRef} autoPlay playsInline muted className="hidden" />
         <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
         
@@ -1065,17 +848,17 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
             <div>
               <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
               <p className="text-[10px] text-gray-400 font-medium">
-                QuantBot · TrendMaster · Pattern_GPT · Coach
+                Strategist · Risk · Quant · Execution
               </p>
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {/* Clear Chat Button (Added for convenience with persistence) */}
             <button 
               onClick={() => {
                 if (window.confirm("Clear all chat history?")) {
-                  setMessages([]);
-                  localStorage.removeItem('ai_chat_history');
+                  // Not strictly clearing global context, but conceptually handled by context reset if implemented
+                  // For now, this is a placeholder or requires context clear capability
+                  console.warn("Clear history requested via UI");
                 }
               }} 
               className="text-gray-400 hover:text-red-500 p-1 rounded-md hover:bg-gray-100"
@@ -1099,7 +882,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
                     </span>
-                    <span>Vision Active</span>
+                    <span>Active</span>
                   </>
               ) : (
                   <>
@@ -1176,10 +959,10 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
           {messages.length === 0 && (
             <div className="text-center mt-10 p-4">
-              <div className="text-3xl mb-3">🤖 📈 🧠 🎓</div>
+              <div className="text-3xl mb-3">🤖 📈 🛡️ ⚡</div>
               <p className="text-gray-500 text-sm font-medium">Ask your AI Team</p>
               <p className="text-gray-400 text-xs mt-1">
-                QuantBot, TrendMaster, Pattern_GPT, and Coach are ready to analyze charts and suggest trades.
+                Strategist, Risk Manager, and Quant Analyst are ready to assist.
               </p>
             </div>
           )}
@@ -1209,23 +992,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                   }`}>
                     {msg.text}
 
-                    {/* Render Tool Calls */}
-                    {msg.toolCalls && msg.toolCalls.length > 0 && (
-                      <div className="mt-3 space-y-2">
-                        {msg.toolCalls.map((tc, tcIdx) => (
-                          <div key={tcIdx} className="text-xs bg-gray-50 border border-gray-200 rounded p-2">
-                            <div className="flex items-center gap-1.5 mb-1">
-                              <span className="text-xs">🛠️</span>
-                              <span className="font-semibold text-gray-600 font-mono text-[10px]">{tc.toolName}</span>
-                            </div>
-                            <div className="text-[10px] text-gray-500 font-mono break-all pl-5">
-                              args: {JSON.stringify(tc.args)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    
                     {/* Trade Ticket (Interactive) */}
                     {msg.tradeMeta && (
                         <TradeTicket 
@@ -1245,7 +1011,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                 <span className="animate-spin">⏳</span>
               </div>
               <div className="bg-white p-3 rounded-2xl rounded-tl-none border border-gray-100 shadow-sm flex items-center gap-2">
-                  <span className="text-xs text-gray-500 font-medium">Agents thinking...</span>
+                  <span className="text-xs text-gray-500 font-medium">Squad thinking...</span>
                   <span className="flex space-x-1">
                     <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
                     <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
@@ -1257,12 +1023,11 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Vision Preview Area (New) */}
+        {/* Vision Preview Area */}
         {isVisionActive && (
           <div className="px-4 pt-2 bg-white border-t border-gray-100">
             <div className="bg-gray-900 rounded-lg p-2 flex items-center gap-3 shadow-inner">
                <div className="relative w-16 h-10 bg-black rounded overflow-hidden flex-shrink-0 border border-gray-700">
-                 {/* Live Video Mirror for Preview */}
                  <video 
                    ref={(ref) => {
                      if (ref && streamRef.current) ref.srcObject = streamRef.current;
@@ -1284,7 +1049,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                  className="text-[10px] bg-[#2962ff] hover:bg-[#1e53e5] text-white px-2 py-1.5 rounded flex items-center gap-1 transition-colors font-medium shadow"
                >
                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                 Capture Region
+                 Capture
                </button>
             </div>
           </div>
@@ -1337,16 +1102,6 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
           </div>
           <div className="mt-2 px-1 flex justify-between items-center">
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleDebrief}
-                disabled={isSending || messages.filter(m => m.role === 'assistant').length === 0}
-                 className="flex items-center gap-1.5 text-[10px] px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                 title="Trigger a team debrief based on recent analysis"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a2 2 0 0 0-2-2-3-3 0 0 0-3-3"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                Team Debrief
-              </button>
               <p className="text-[10px] text-gray-400">
                 {isBrokerConnected ? 'Broker Connected' : 'Simulated Environment'}
               </p>
