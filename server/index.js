@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -275,7 +276,8 @@ app.post('/api/tradelocker/login', async (req, res) => {
       server,
       accounts,
       lastPositionsById: {}, // id -> full position object
-      latestState: {}        // balance, equity, margin
+      latestState: {},        // balance, equity, margin
+      recentEventsQueue: []   // Store events for polling
     });
 
     // Initialize empty journal for this session
@@ -334,6 +336,7 @@ app.post('/api/tradelocker/select-account', (req, res) => {
   session.accNum = Number(target.accNum);
   session.lastPositionsById = {};
   session.latestState = {};
+  session.recentEventsQueue = [];
 
   res.json({
     ok: true,
@@ -364,162 +367,167 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     ]);
 
     if (!stateRes.ok) {
-      const errorText = await stateRes.text();
-      console.error('TradeLocker state error:', errorText);
-      return res
-        .status(stateRes.status)
-        .send(errorText || 'Failed to fetch account state');
+      // Handle token expiration if needed
+      return res.status(stateRes.status).send('Failed to fetch account state');
     }
 
     if (!positionsRes.ok) {
-      const errorText = await positionsRes.text();
-      console.error('TradeLocker positions error:', errorText);
-      return res
-        .status(positionsRes.status)
-        .send(errorText || 'Failed to fetch open positions');
+      return res.status(positionsRes.status).send('Failed to fetch open positions');
     }
 
     const stateJson = await stateRes.json();
     const positionsJson = await positionsRes.json();
 
-    const balance =
-      stateJson.balance ??
-      stateJson.Balance ??
-      stateJson.accountBalance ??
-      0;
-
-    const equity =
-      stateJson.equity ??
-      stateJson.Equity ??
-      stateJson.accountEquity ??
-      balance;
-
-    const marginUsed =
-      stateJson.marginUsed ??
-      stateJson.margin ??
-      stateJson.Margin ??
-      0;
+    const balance = Number(stateJson.balance || stateJson.accountBalance || 0);
+    const equity = Number(stateJson.equity || stateJson.accountEquity || balance);
+    const marginUsed = Number(stateJson.marginUsed || stateJson.margin || 0);
 
     const rawPositions = Array.isArray(positionsJson)
       ? positionsJson
       : positionsJson.positions || positionsJson.data || [];
 
     const positions = rawPositions.map((p) => {
-      const sideRaw = (
-        p.side ??
-        p.positionSide ??
-        p.direction ??
-        ''
-      )
-        .toString()
-        .toLowerCase();
-
-      const side =
-        sideRaw.includes('sell') || sideRaw.includes('short') ? 'sell' : 'buy';
-
-      const symbol = p.symbol ?? p.instrument ?? p.symbolName ?? 'UNKNOWN';
-
-      const size = p.volume ?? p.lots ?? p.positionVolume ?? 0;
-
-      const entryPrice =
-        p.openPrice ??
-        p.priceOpen ??
-        p.entryPrice ??
-        p.price ??
-        0;
-
-      const currentPrice =
-        p.currentPrice ??
-        p.priceCurrent ??
-        p.closePrice ??
-        p.lastPrice ??
-        entryPrice;
-
-      const pnl =
-        p.unrealizedPnL ??
-        p.unrealisedPnl ??
-        p.pnl ??
-        p.profit ??
-        0;
+      const sideRaw = (p.side || p.direction || '').toString().toLowerCase();
+      const side = sideRaw.includes('sell') || sideRaw.includes('short') ? 'sell' : 'buy';
+      const symbol = p.symbol || p.instrument || 'UNKNOWN';
+      const size = Number(p.volume || p.lots || 0);
+      const entryPrice = Number(p.openPrice || p.entryPrice || 0);
+      const currentPrice = Number(p.currentPrice || p.lastPrice || entryPrice);
+      const pnl = Number(p.unrealizedPnL || p.pnl || 0);
+      const openTime = p.openTime || p.created || new Date().toISOString();
 
       return {
-        id: String(
-          p.positionId ??
-            p.id ??
-            `${symbol}-${entryPrice}-${currentPrice}`
-        ),
+        id: String(p.positionId || p.id),
         symbol,
         side,
-        size: Number(size),
-        entryPrice: Number(entryPrice),
-        currentPrice: Number(currentPrice),
-        pnl: Number(pnl)
+        size,
+        entryPrice,
+        currentPrice,
+        pnl,
+        openTime
       };
     });
 
-    // === Update Session Cache for AI Tools ===
+    // === DEEP READINESS: State Diffing & Event Emission ===
     
     const prevPositionsById = session.lastPositionsById || {};
     const currentPositionsById = {};
+    const events = [];
+
+    // 1. Detect Opened Positions
     for (const pos of positions) {
-      // Store full position object so AI can read it
       currentPositionsById[pos.id] = pos;
+      if (!prevPositionsById[pos.id]) {
+        // NEW POSITION DETECTED
+        events.push({
+          type: 'ORDER_FILLED',
+          timestamp: new Date().toISOString(),
+          data: {
+            id: pos.id,
+            symbol: pos.symbol,
+            side: pos.side,
+            pnl: 0
+          }
+        });
+      }
     }
 
-    // Check for closed positions (ids that disappeared)
+    // 2. Detect Closed Positions & Handle Ghost Trades
     const closedIds = Object.keys(prevPositionsById).filter(
       (id) => !currentPositionsById[id]
     );
 
-    if (closedIds.length && journalBySession.has(sessionId)) {
-      const list = journalBySession.get(sessionId) || [];
-      let changed = false;
+    if (closedIds.length) {
+      const journalList = journalBySession.get(sessionId) || [];
+      let journalChanged = false;
 
       for (const closedId of closedIds) {
         const prev = prevPositionsById[closedId];
         if (!prev) continue;
-        const finalPnl = typeof prev.pnl === 'number' ? prev.pnl : 0;
 
+        // NOTE: In a real app, we'd fetch closed orders from broker to get exact fill price.
+        // Here, we approximate final PnL using the last known state.
+        const finalPnl = Number(prev.pnl || 0);
         let outcome = 'BreakEven';
-        const threshold = 0.5; // small buffer
+        const threshold = 0.5;
         if (finalPnl > threshold) outcome = 'Win';
         else if (finalPnl < -threshold) outcome = 'Loss';
 
-        for (let i = 0; i < list.length; i++) {
-          const entry = list[i];
-          if (
-            entry.linkedPositionId === closedId &&
-            entry.outcome === 'Open'
-          ) {
-            list[i] = {
+        // Check if we have a linked journal entry
+        let matchedEntryIndex = journalList.findIndex(e => e.linkedPositionId === closedId);
+
+        if (matchedEntryIndex !== -1) {
+          // Update Existing Entry
+          const entry = journalList[matchedEntryIndex];
+          if (entry.outcome === 'Open') {
+            journalList[matchedEntryIndex] = {
               ...entry,
               outcome,
               finalPnl,
-              closedAt: new Date().toISOString()
+              closedAt: new Date().toISOString(),
+              pnl: finalPnl // Standardize analytics field
             };
-            changed = true;
+            journalChanged = true;
           }
+        } else {
+          // GHOST TRADE: Trade closed but no journal entry exists. Auto-Log it.
+          const autoEntry = {
+            id: `auto-${closedId}`,
+            timestamp: new Date().toISOString(),
+            symbol: prev.symbol,
+            direction: prev.side === 'buy' ? 'long' : 'short',
+            timeframe: '15m', // default
+            entryPrice: prev.entryPrice,
+            exitPrice: prev.currentPrice, // approx
+            size: prev.size,
+            netPnl: finalPnl,
+            pnl: finalPnl,
+            currency: 'USD',
+            playbook: 'Manual Execution',
+            note: `Auto-logged from broker execution. PnL: ${finalPnl.toFixed(2)}`,
+            source: 'broker',
+            outcome,
+            linkedPositionId: closedId,
+            tags: ['AutoLog', prev.symbol],
+            sessionId: sessionId
+          };
+          journalList.unshift(autoEntry);
+          journalChanged = true;
+          console.log(`[AutoJournal] Created entry for ghost trade ${closedId}`);
         }
+
+        events.push({
+          type: 'POSITION_CLOSED',
+          timestamp: new Date().toISOString(),
+          data: {
+            id: closedId,
+            symbol: prev.symbol,
+            pnl: finalPnl,
+            reason: 'Closed on Broker'
+          }
+        });
       }
 
-      if (changed) {
-        journalBySession.set(sessionId, list);
+      if (journalChanged) {
+        journalBySession.set(sessionId, journalList);
       }
     }
 
     session.lastPositionsById = currentPositionsById;
     session.latestState = {
-      balance: Number(balance),
-      equity: Number(equity),
-      marginUsed: Number(marginUsed)
+      balance,
+      equity,
+      marginUsed
     };
 
+    // Return events so frontend can react (Toast/Refresh)
     const overview = {
       isConnected: true,
-      balance: Number(balance),
-      equity: Number(equity),
-      marginUsed: Number(marginUsed),
-      positions
+      balance,
+      equity,
+      marginUsed,
+      positions,
+      recentEvents: events
     };
 
     res.json(overview);
@@ -574,34 +582,23 @@ app.post('/api/journal/entry', (req, res) => {
     ? entry.tags.map((t) => String(t)).filter((t) => t.trim().length > 0)
     : [];
 
-  const linkedPositionId =
-    typeof entry.linkedPositionId === 'string' &&
-    entry.linkedPositionId.trim().length > 0
-      ? entry.linkedPositionId.trim()
-      : null;
-
-  const linkedSymbol =
-    typeof entry.linkedSymbol === 'string' &&
-    entry.linkedSymbol.trim().length > 0
-      ? entry.linkedSymbol.trim()
-      : null;
-
   const stored = {
     id,
     timestamp,
     focusSymbol: entry.focusSymbol || 'Unknown',
     bias: entry.bias || 'Neutral',
-    confidence:
-      typeof entry.confidence === 'number' ? entry.confidence : 3,
+    confidence: typeof entry.confidence === 'number' ? entry.confidence : 3,
     note: entry.note,
     entryType,
     outcome,
     tags,
     accountSnapshot: entry.accountSnapshot || null,
-    linkedPositionId,
-    linkedSymbol,
-    finalPnl: null,
-    closedAt: null
+    linkedPositionId: entry.linkedPositionId || null,
+    linkedSymbol: entry.linkedSymbol || null,
+    finalPnl: entry.pnl || null,
+    pnl: entry.pnl || null,
+    closedAt: null,
+    ...entry // Spread other fields
   };
 
   const list = journalBySession.get(sessionId) || [];
@@ -629,37 +626,7 @@ app.patch('/api/journal/entry/:id', (req, res) => {
   }
 
   const current = list[idx];
-  const next = { ...current };
-
-  if (updates) {
-    if (typeof updates.note === 'string') {
-      next.note = updates.note;
-    }
-
-    if (Array.isArray(updates.tags)) {
-      next.tags = updates.tags
-        .map((t) => String(t))
-        .filter((t) => t.trim().length > 0);
-    }
-
-    if (typeof updates.outcome === 'string') {
-      const validOutcomes = ['Open', 'Win', 'Loss', 'BreakEven'];
-      if (validOutcomes.includes(updates.outcome)) {
-        next.outcome = updates.outcome;
-      }
-    }
-
-    if (updates.hasOwnProperty('linkedPositionId')) {
-      if (
-        typeof updates.linkedPositionId === 'string' &&
-        updates.linkedPositionId.trim().length > 0
-      ) {
-        next.linkedPositionId = updates.linkedPositionId.trim();
-      } else {
-        next.linkedPositionId = null;
-      }
-    }
-  }
+  const next = { ...current, ...updates };
 
   list[idx] = next;
   journalBySession.set(sessionId, list);

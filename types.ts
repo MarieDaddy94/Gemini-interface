@@ -75,6 +75,21 @@ export interface BrokerPosition {
   entryPrice: number;
   currentPrice: number;
   pnl: number;
+  openTime?: string;
+}
+
+export type BrokerEventType = 'ORDER_FILLED' | 'POSITION_CLOSED' | 'BALANCE_UPDATE';
+
+export interface BrokerEvent {
+  type: BrokerEventType;
+  timestamp: string;
+  data: {
+    id: string;
+    symbol: string;
+    pnl?: number;
+    side?: string;
+    reason?: string;
+  };
 }
 
 export interface BrokerAccountInfo {
@@ -83,6 +98,8 @@ export interface BrokerAccountInfo {
   equity: number;
   marginUsed: number;
   positions: BrokerPosition[];
+  // New field for event-driven updates from polling
+  recentEvents?: BrokerEvent[];
 }
 
 // --- High-level AI Session Summary ---
@@ -167,6 +184,8 @@ export interface JournalEntry {
   finalPnl?: number | null;
   closedAt?: string | null;
   sessionId?: string;
+  rr?: number | null;
+  pnl?: number | null;
 }
 
 export interface NewJournalEntryInput {
