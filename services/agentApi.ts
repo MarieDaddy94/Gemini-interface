@@ -47,6 +47,12 @@ export interface AgentDebriefInput {
   tradeMeta?: TradeMeta;
 }
 
+export interface AgentConfigOverride {
+  provider?: 'gemini' | 'openai';
+  model?: string;
+  temperature?: number;
+}
+
 // Safely resolve API URL for Vite/ESM environments
 const API_BASE_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
@@ -76,6 +82,7 @@ export async function fetchAgentInsights(params: {
   journalContext?: any[];
   screenshot?: string | null;
   journalMode?: JournalMode;
+  agentOverrides?: Record<string, AgentConfigOverride>;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/chat`, {
     method: "POST",
@@ -87,6 +94,7 @@ export async function fetchAgentInsights(params: {
       journalContext: params.journalContext || [],
       screenshot: params.screenshot || null,
       journalMode: params.journalMode || "live",
+      agentOverrides: params.agentOverrides
     }),
   });
 
@@ -117,6 +125,7 @@ export async function fetchAgentDebrief(params: {
   previousInsights: AgentDebriefInput[];
   chartContext?: any;
   journalContext?: any[];
+  agentOverrides?: Record<string, AgentConfigOverride>;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/debrief`, {
     method: "POST",
@@ -125,6 +134,7 @@ export async function fetchAgentDebrief(params: {
       previousInsights: params.previousInsights,
       chartContext: params.chartContext || {},
       journalContext: params.journalContext || [],
+      agentOverrides: params.agentOverrides
     }),
   });
 

@@ -10,6 +10,7 @@ import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
 import { JournalProvider } from './context/JournalContext';
 import { TradeEventsProvider } from './context/TradeEventsContext';
+import { AgentConfigProvider } from './context/AgentConfigContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
@@ -257,6 +258,7 @@ const App: React.FC = () => {
       : 0;
 
   return (
+    <AgentConfigProvider>
     <JournalProvider>
     <TradeEventsProvider>
     <TradeEventsToJournal />
@@ -497,6 +499,7 @@ const App: React.FC = () => {
     </div>
     </TradeEventsProvider>
     </JournalProvider>
+    </AgentConfigProvider>
   );
 };
 

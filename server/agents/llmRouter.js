@@ -1,4 +1,5 @@
 
+
 // server/agents/llmRouter.js
 
 const {
@@ -270,14 +271,20 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalCont
  * Main entry point: run a turn for multiple agents in SEQUENTIAL order so they can see squadContext.
  */
 async function runAgentsTurn(opts) {
-  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live" } = opts;
+  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live", agentOverrides } = opts;
 
   const results = [];
   
   // We run agents one by one
   for (const id of agentIds) {
-      const agentCfg = agentsById[id];
-      if (!agentCfg) {
+      let agentCfg = { ...agentsById[id] };
+      
+      // Apply overrides if any
+      if (agentOverrides && agentOverrides[id]) {
+        agentCfg = { ...agentCfg, ...agentOverrides[id] };
+      }
+
+      if (!agentCfg || !agentCfg.id) {
           results.push({
               agentId: id,
               agentName: id,
@@ -345,7 +352,7 @@ async function runAgentsTurn(opts) {
  * Run a debrief round where agents react to previous insights.
  */
 async function runAgentsDebrief(opts) {
-  const { previousInsights, chartContext, journalContext } = opts;
+  const { previousInsights, chartContext, journalContext, agentOverrides } = opts;
   const results = [];
 
   // We want active agents from the previous round or a standard set. 
@@ -377,8 +384,14 @@ Remember: respond in the same JSON format (AgentResponse) as before.
   }));
 
   for (const id of activeAgentIds) {
-      const agentCfg = agentsById[id];
-      if (!agentCfg) continue;
+      let agentCfg = { ...agentsById[id] };
+      
+      // Apply overrides if any
+      if (agentOverrides && agentOverrides[id]) {
+         agentCfg = { ...agentCfg, ...agentOverrides[id] };
+      }
+      
+      if (!agentCfg || !agentCfg.id) continue;
 
       try {
         const payload = {

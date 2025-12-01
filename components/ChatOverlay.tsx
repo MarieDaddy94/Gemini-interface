@@ -1,9 +1,9 @@
 
 
-
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
+import { useAgentConfig } from '../context/AgentConfigContext';
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
@@ -68,6 +68,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { addEntry, entries } = useJournal(); 
+  const { agentConfigs } = useAgentConfig(); // <--- Get agent configuration
 
   // Handle journal drafts from AI response
   const processJournalDraft = (draft: AgentJournalDraft, agentId: string, agentName: string) => {
@@ -123,7 +124,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
           agentIds: [agentId as AgentId],
           userMessage: prompt, // Send full prompt to LLM
           chartContext: chartContext,
-          screenshot: null
+          screenshot: null,
+          agentOverrides: agentConfigs // <--- Pass overrides
         });
 
         setMessages(prev => {
@@ -301,6 +303,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         previousInsights: previousInsightsPayload,
         chartContext: chartContextPayload,
         journalContext: journalContextPayload,
+        agentOverrides: agentConfigs // <--- Pass overrides
       });
   
       setMessages(prev => {
@@ -384,7 +387,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         userMessage: userText,
         chartContext: chartContextPayload,
         journalContext: journalContextPayload,
-        screenshot
+        screenshot,
+        agentOverrides: agentConfigs // <--- Pass overrides
       });
 
       setMessages(prev => {
