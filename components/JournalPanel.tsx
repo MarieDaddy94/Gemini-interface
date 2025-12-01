@@ -3,12 +3,87 @@ import { useJournal } from "../context/JournalContext";
 
 type ViewMode = "journal" | "playbooks";
 
-const JournalPanel: React.FC = () => {
+type PlayDirection = "long" | "short";
+
+type PlaybookRow = {
+  playbook: string;
+  symbol: string;
+  direction?: PlayDirection;
+  total: number;
+  wins: number;
+  losses: number;
+  be: number;
+};
+
+export type PlaybookReviewPayload = {
+  filter: "journal_coach_only" | "all_entries";
+  topPlaybooks: {
+    playbook: string;
+    symbol: string;
+    direction?: PlayDirection;
+    total: number;
+    wins: number;
+    losses: number;
+    be: number;
+    winRate: number;
+  }[];
+};
+
+interface JournalPanelProps {
+  /**
+   * Optional callback so the parent (or Chat overlay) can
+   * trigger an AI call when the user asks for a playbook review.
+   */
+  onRequestPlaybookReview?: (payload: PlaybookReviewPayload) => void;
+}
+
+const buildPlaybookReviewPrompt = (payload: PlaybookReviewPayload): string => {
+  const { filter, topPlaybooks } = payload;
+
+  const lines: string[] = [];
+  lines.push(
+    "You are my trading journal coach. Using the stats below, analyze my top playbooks and tell me:"
+  );
+  lines.push(
+    "1) Which setups are my true edge, 2) Which ones are leaks I should avoid or refine, and 3) Concrete rules to turn the best ones into repeatable playbooks."
+  );
+  lines.push("");
+  lines.push(
+    `Filter applied: ${
+      filter === "journal_coach_only" ? "Journal Coach entries only" : "All entries"
+    }`
+  );
+  lines.push("");
+  lines.push("Top playbooks by trade count:");
+  lines.push("");
+
+  topPlaybooks.forEach((p, i) => {
+    lines.push(
+      `${i + 1}. Playbook: ${p.playbook} | Symbol: ${p.symbol} | Direction: ${
+        p.direction ? (p.direction === "long" ? "Long" : "Short") : "Mixed/NA"
+      }`
+    );
+    lines.push(
+      `   Stats -> Total: ${p.total}, Wins: ${p.wins}, Losses: ${p.losses}, BE: ${p.be}, Win Rate: ${p.winRate.toFixed(
+        1
+      )}%`
+    );
+    lines.push("");
+  });
+
+  lines.push(
+    "Based on this, please: (a) rank these from strongest to weakest edge, (b) suggest what conditions I should require before taking each play, and (c) recommend what I should stop doing or de-emphasize."
+  );
+
+  return lines.join("\n");
+};
+
+const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) => {
   const { entries } = useJournal();
   const [showJournalCoachOnly, setShowJournalCoachOnly] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("journal");
 
-  // Apply Journal Coach filter first (this is the "base" dataset)
+  // Apply Journal Coach filter first (base dataset)
   const baseEntries = useMemo(
     () =>
       showJournalCoachOnly
@@ -17,13 +92,10 @@ const JournalPanel: React.FC = () => {
     [entries, showJournalCoachOnly]
   );
 
-  // Global stats (only closed trades: Win/Loss/BE)
+  // Global stats (only closed trades)
   const stats = useMemo(() => {
     const closed = baseEntries.filter(
-      (e) =>
-        e.outcome === "Win" ||
-        e.outcome === "Loss" ||
-        e.outcome === "BE"
+      (e) => e.outcome === "Win" || e.outcome === "Loss" || e.outcome === "BE"
     );
 
     const total = closed.length;
@@ -42,27 +114,16 @@ const JournalPanel: React.FC = () => {
   }, [baseEntries]);
 
   // Playbooks view = grouped by playbook + symbol + direction
-  const playbookRows = useMemo(() => {
-    type Row = {
-      playbook: string;
-      symbol: string;
-      direction?: "long" | "short";
-      total: number;
-      wins: number;
-      losses: number;
-      be: number;
-    };
-
-    const map = new Map<string, Row>();
+  const playbookRows: PlaybookRow[] = useMemo(() => {
+    const map = new Map<string, PlaybookRow>();
 
     baseEntries.forEach((e) => {
       // Only count trades with a final outcome
       if (!e.outcome || e.outcome === "Open") return;
 
-      const playbook =
-        (e.playbook && e.playbook.trim()) || "Unnamed Setup";
+      const playbook = (e.playbook && e.playbook.trim()) || "Unnamed Setup";
       const symbol = e.symbol || "-";
-      const direction = e.direction;
+      const direction = e.direction as PlayDirection | undefined;
 
       const key = `${playbook}::${symbol}::${direction ?? ""}`;
       const existing =
@@ -75,7 +136,7 @@ const JournalPanel: React.FC = () => {
           wins: 0,
           losses: 0,
           be: 0,
-        } as Row);
+        } as PlaybookRow);
 
       existing.total += 1;
       if (e.outcome === "Win") existing.wins += 1;
@@ -93,15 +154,107 @@ const JournalPanel: React.FC = () => {
     return rows;
   }, [baseEntries]);
 
-  // Convenience flags
   const isJournalView = viewMode === "journal";
   const isPlaybookView = viewMode === "playbooks";
+
+  const handleExportCsv = () => {
+    if (playbookRows.length === 0) return;
+
+    const header = [
+      "Playbook",
+      "Symbol",
+      "Direction",
+      "Total",
+      "Wins",
+      "Losses",
+      "BE",
+      "WinRatePercent",
+    ];
+
+    const lines: string[] = [];
+    lines.push(header.join(","));
+
+    playbookRows.forEach((row) => {
+      const winRate = row.total > 0 ? (row.wins / row.total) * 100 : 0;
+      const directionLabel = row.direction
+        ? row.direction === "long"
+          ? "Long"
+          : "Short"
+        : "";
+
+      const safePlaybook = `"${row.playbook.replace(/"/g, '""')}"`;
+
+      lines.push(
+        [
+          safePlaybook,
+          row.symbol,
+          directionLabel,
+          row.total.toString(),
+          row.wins.toString(),
+          row.losses.toString(),
+          row.be.toString(),
+          winRate.toFixed(1),
+        ].join(",")
+      );
+    });
+
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.download = `journal_playbooks_${dateStr}.csv`;
+
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRequestReview = () => {
+    if (playbookRows.length === 0) return;
+
+    const top = playbookRows.slice(0, 3).map((row) => {
+      const winRate = row.total > 0 ? (row.wins / row.total) * 100 : 0;
+      return {
+        playbook: row.playbook,
+        symbol: row.symbol,
+        direction: row.direction,
+        total: row.total,
+        wins: row.wins,
+        losses: row.losses,
+        be: row.be,
+        winRate,
+      };
+    });
+
+    const payload: PlaybookReviewPayload = {
+      filter: showJournalCoachOnly ? "journal_coach_only" : "all_entries",
+      topPlaybooks: top,
+    };
+
+    if (onRequestPlaybookReview) {
+      onRequestPlaybookReview(payload);
+    } else {
+      // Fallback: log + copy a ready-to-paste prompt
+      console.log("[JournalPanel] AI review requested:", payload);
+      const prompt = buildPlaybookReviewPrompt(payload);
+
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(prompt).catch(() => {
+          // ignore clipboard errors
+        });
+      }
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-slate-950 border-t border-slate-800">
       {/* HEADER BAR */}
       <div className="flex items-center justify-between px-4 py-2 text-xs border-b border-slate-800">
-        {/* Title + tabs */}
+        {/* Left: title + view tabs */}
         <div className="flex items-center gap-4">
           <div className="flex flex-col">
             <span className="font-semibold tracking-wide text-slate-200 uppercase">
@@ -141,7 +294,7 @@ const JournalPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Right side: filter + stats */}
+        {/* Right: stats + buttons + filter */}
         <div className="flex items-center gap-4">
           {/* Stats widget */}
           <div className="flex items-center gap-3 text-[11px]">
@@ -179,6 +332,37 @@ const JournalPanel: React.FC = () => {
                 {stats.winRate.toFixed(1)}%
               </span>
             </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              disabled={playbookRows.length === 0}
+              className={[
+                "px-2 py-1 rounded-md border text-[11px] font-medium transition",
+                playbookRows.length === 0
+                  ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
+                  : "border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800",
+              ].join(" ")}
+            >
+              Export Playbooks CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRequestReview}
+              disabled={playbookRows.length === 0}
+              className={[
+                "px-2 py-1 rounded-md border text-[11px] font-medium transition",
+                playbookRows.length === 0
+                  ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
+                  : "border-amber-400/70 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20",
+              ].join(" ")}
+            >
+              Ask AI: Review Top 3
+            </button>
           </div>
 
           {/* Journal Coach Filter */}
