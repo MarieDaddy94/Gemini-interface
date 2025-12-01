@@ -49,22 +49,6 @@ export interface ChartConfig {
   data: ChartDataPoint[];
 }
 
-export interface TechnicalIndicators {
-  rsi?: number;
-  sma20?: number;
-  ema50?: number;
-  bb?: {
-    upper: number;
-    middle: number;
-    lower: number;
-  };
-  macd?: {
-    macd: number;
-    signal: number;
-    histogram: number;
-  };
-}
-
 export interface MarketTick {
   symbol: string;
   price: number;
@@ -73,7 +57,6 @@ export interface MarketTick {
   rsi?: number;
   sma?: number;
   timestamp: string;
-  indicators?: TechnicalIndicators;
 }
 
 // --- TradeLocker / Broker Types ---
