@@ -1,5 +1,4 @@
 
-
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
@@ -11,6 +10,25 @@ import {
 // Fallback is http://localhost:4000 where the Express server runs.
 const API_BASE_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+
+// Helper: Wraps fetch to catch "Failed to fetch" (network errors) and give a helpful message
+async function safeFetch(url: string, options?: RequestInit): Promise<Response> {
+  try {
+    const res = await fetch(url, options);
+    return res;
+  } catch (error: any) {
+    console.error("API Connection Error:", error);
+    // Detect typical network failure messages (backend down, CORS, etc.)
+    if (error.name === 'TypeError' || error.message.includes('Failed to fetch')) {
+      throw new Error(
+        `Could not connect to backend server at ${API_BASE_URL}.\n\n` +
+        `1. Ensure the Node.js server is running (cd server && npm run dev).\n` +
+        `2. If running in cloud, check VITE_API_BASE_URL.`
+      );
+    }
+    throw error;
+  }
+}
 
 export interface ConnectResult {
   sessionId: string;
@@ -29,7 +47,7 @@ export interface ConnectResult {
 export const connectToTradeLocker = async (
   creds: TradeLockerCredentials
 ): Promise<ConnectResult> => {
-  const res = await fetch(`${API_BASE_URL}/api/tradelocker/login`, {
+  const res = await safeFetch(`${API_BASE_URL}/api/tradelocker/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -64,7 +82,7 @@ export const selectTradeLockerAccount = async (
   accountId: string,
   accNum: number
 ): Promise<void> => {
-  const res = await fetch(`${API_BASE_URL}/api/tradelocker/select-account`, {
+  const res = await safeFetch(`${API_BASE_URL}/api/tradelocker/select-account`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -84,7 +102,7 @@ export const selectTradeLockerAccount = async (
 export const fetchBrokerData = async (
   sessionId: string
 ): Promise<BrokerAccountInfo> => {
-  const res = await fetch(
+  const res = await safeFetch(
     `${API_BASE_URL}/api/tradelocker/overview?sessionId=${encodeURIComponent(
       sessionId
     )}`,
@@ -109,7 +127,7 @@ export const fetchBrokerData = async (
 export const executeTrade = async (
   order: TradeOrderRequest
 ): Promise<{ ok: boolean; orderId?: string; entryPrice?: number }> => {
-  const res = await fetch(`${API_BASE_URL}/api/tradelocker/order`, {
+  const res = await safeFetch(`${API_BASE_URL}/api/tradelocker/order`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',

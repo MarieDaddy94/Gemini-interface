@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { TradeLockerCredentials } from '../types';
 
@@ -160,7 +161,7 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
           </div>
 
           {error && (
-            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-red-500 text-xs flex items-center gap-2 animate-fade-in">
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded text-red-500 text-xs flex items-start gap-2 animate-fade-in whitespace-pre-wrap">
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="14"
@@ -171,12 +172,13 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                className="mt-0.5 shrink-0"
               >
                 <circle cx="12" cy="12" r="10"></circle>
                 <line x1="12" y1="8" x2="12" y2="12"></line>
                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
               </svg>
-              {error}
+              <span>{error}</span>
             </div>
           )}
 
