@@ -1,7 +1,8 @@
 
 
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta } from '../services/agentApi';
+import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta, ToolCall } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 import { useAgentConfig } from '../context/AgentConfigContext';
 
@@ -30,6 +31,7 @@ interface ChatMessage {
   text: string;
   isError?: boolean;
   tradeMeta?: TradeMeta;
+  toolCalls?: ToolCall[];
 }
 
 interface ChatOverlayProps {
@@ -125,20 +127,22 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
           userMessage: prompt, // Send full prompt to LLM
           chartContext: chartContext,
           screenshot: null,
-          agentOverrides: agentConfigs // <--- Pass overrides
+          agentOverrides: agentConfigs, // <--- Pass overrides
+          accountId: brokerSessionId
         });
 
         setMessages(prev => {
           const next = [...prev];
           insights.forEach(insight => {
-             if (insight.text) {
+             if (insight.text || (insight.toolCalls && insight.toolCalls.length > 0)) {
                 next.push({
                    id: `msg-${insight.agentId}-${Date.now()}`,
                    role: 'assistant',
                    author: insight.agentName,
                    agentId: insight.agentId as string,
                    text: insight.text || '',
-                   tradeMeta: insight.tradeMeta || undefined
+                   tradeMeta: insight.tradeMeta || undefined,
+                   toolCalls: insight.toolCalls
                 });
              }
              if (insight.error) {
@@ -303,20 +307,22 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         previousInsights: previousInsightsPayload,
         chartContext: chartContextPayload,
         journalContext: journalContextPayload,
-        agentOverrides: agentConfigs // <--- Pass overrides
+        agentOverrides: agentConfigs, // <--- Pass overrides
+        accountId: brokerSessionId
       });
   
       setMessages(prev => {
         const next = [...prev];
         insights.forEach(insight => {
-           if (insight.text) {
+           if (insight.text || (insight.toolCalls && insight.toolCalls.length > 0)) {
               next.push({
                  id: `debrief-${insight.agentId}-${Date.now()}`,
                  role: 'assistant',
                  author: insight.agentName,
                  agentId: insight.agentId as string,
                  text: insight.text || '',
-                 tradeMeta: insight.tradeMeta || undefined
+                 tradeMeta: insight.tradeMeta || undefined,
+                 toolCalls: insight.toolCalls
               });
            }
            if (insight.error) {
@@ -388,7 +394,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         chartContext: chartContextPayload,
         journalContext: journalContextPayload,
         screenshot,
-        agentOverrides: agentConfigs // <--- Pass overrides
+        agentOverrides: agentConfigs, // <--- Pass overrides
+        accountId: brokerSessionId
       });
 
       setMessages(prev => {
@@ -403,14 +410,15 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
               text: `⚠️ ${insight.error}`,
               isError: true
             });
-          } else if (insight.text) {
+          } else if (insight.text || (insight.toolCalls && insight.toolCalls.length > 0)) {
              next.push({
               id: `msg-${insight.agentId}-${Date.now()}`,
               role: 'assistant',
               author: insight.agentName,
               agentId: insight.agentId as string,
               text: insight.text || '',
-              tradeMeta: insight.tradeMeta || undefined
+              tradeMeta: insight.tradeMeta || undefined,
+              toolCalls: insight.toolCalls
             });
           }
         });
@@ -542,6 +550,24 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
                      : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
                  }`}>
                    {msg.text}
+
+                   {/* Render Tool Calls */}
+                   {msg.toolCalls && msg.toolCalls.length > 0 && (
+                     <div className="mt-3 space-y-2">
+                       {msg.toolCalls.map((tc, tcIdx) => (
+                         <div key={tcIdx} className="text-xs bg-gray-50 border border-gray-200 rounded p-2">
+                           <div className="flex items-center gap-1.5 mb-1">
+                             <span className="text-xs">🛠️</span>
+                             <span className="font-semibold text-gray-600 font-mono text-[10px]">{tc.toolName}</span>
+                           </div>
+                           <div className="text-[10px] text-gray-500 font-mono break-all pl-5">
+                             args: {JSON.stringify(tc.args)}
+                           </div>
+                           {/* Optionally show results? Usually too verbose */}
+                         </div>
+                       ))}
+                     </div>
+                   )}
                    
                    {/* Mini Trade Card */}
                    {msg.tradeMeta && (

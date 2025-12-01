@@ -1,5 +1,6 @@
 
 
+
 export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_coach";
 
 export type JournalMode = "live" | "post_trade";
@@ -31,6 +32,12 @@ export interface AgentJournalDraft {
   pnl?: number;
 }
 
+export interface ToolCall {
+  toolName: string;
+  args: any;
+  result: any;
+}
+
 export interface AgentInsight {
   agentId: AgentId | string;
   agentName: string;
@@ -38,6 +45,7 @@ export interface AgentInsight {
   error?: string;
   journalDraft?: AgentJournalDraft | null;
   tradeMeta?: TradeMeta | null;
+  toolCalls?: ToolCall[];
 }
 
 export interface AgentDebriefInput {
@@ -83,6 +91,7 @@ export async function fetchAgentInsights(params: {
   screenshot?: string | null;
   journalMode?: JournalMode;
   agentOverrides?: Record<string, AgentConfigOverride>;
+  accountId?: string | null;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/chat`, {
     method: "POST",
@@ -94,7 +103,8 @@ export async function fetchAgentInsights(params: {
       journalContext: params.journalContext || [],
       screenshot: params.screenshot || null,
       journalMode: params.journalMode || "live",
-      agentOverrides: params.agentOverrides
+      agentOverrides: params.agentOverrides,
+      accountId: params.accountId
     }),
   });
 
@@ -115,6 +125,7 @@ export async function fetchAgentInsights(params: {
     error: a.error,
     journalDraft: a.journalDraft || null,
     tradeMeta: a.tradeMeta || null,
+    toolCalls: a.toolCalls || []
   }));
 }
 
@@ -126,6 +137,7 @@ export async function fetchAgentDebrief(params: {
   chartContext?: any;
   journalContext?: any[];
   agentOverrides?: Record<string, AgentConfigOverride>;
+  accountId?: string | null;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/debrief`, {
     method: "POST",
@@ -134,7 +146,8 @@ export async function fetchAgentDebrief(params: {
       previousInsights: params.previousInsights,
       chartContext: params.chartContext || {},
       journalContext: params.journalContext || [],
-      agentOverrides: params.agentOverrides
+      agentOverrides: params.agentOverrides,
+      accountId: params.accountId
     }),
   });
 
@@ -155,5 +168,6 @@ export async function fetchAgentDebrief(params: {
     error: a.error,
     journalDraft: a.journalDraft || null,
     tradeMeta: a.tradeMeta || null,
+    toolCalls: a.toolCalls || []
   }));
 }

@@ -46,7 +46,7 @@ app.use(createAgentsRouter(sessions, journalBySession));
 // --- NEW Multi-agent AI chat endpoint (GPT-4o + Gemini) ---
 app.post("/api/agents/chat", async (req, res) => {
   try {
-    const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides } = req.body || {};
+    const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId } = req.body || {};
 
     if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
       return res.status(400).json({
@@ -68,7 +68,11 @@ app.post("/api/agents/chat", async (req, res) => {
       screenshot: screenshot || null,
       journalMode: journalMode || "live",
       apiKeys,
-      agentOverrides
+      agentOverrides,
+      // Pass State
+      sessions,
+      journals: journalBySession,
+      accountId // Pass broker session ID
     });
 
     res.json({
@@ -86,7 +90,7 @@ app.post("/api/agents/chat", async (req, res) => {
 
 app.post("/api/agents/debrief", async (req, res) => {
   try {
-    const { previousInsights, chartContext, journalContext, agentOverrides } = req.body || {};
+    const { previousInsights, chartContext, journalContext, agentOverrides, accountId } = req.body || {};
 
     if (!previousInsights || !Array.isArray(previousInsights)) {
       return res.status(400).json({ error: "previousInsights array is required" });
@@ -103,7 +107,11 @@ app.post("/api/agents/debrief", async (req, res) => {
       chartContext: chartContext || {},
       journalContext: journalContext || [],
       apiKeys,
-      agentOverrides
+      agentOverrides,
+      // Pass State
+      sessions,
+      journals: journalBySession,
+      accountId
     });
 
     res.json({

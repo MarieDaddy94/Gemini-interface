@@ -32,7 +32,7 @@ function buildOpenAiMessages(agent, messages, visionImages) {
     if (m.role === 'tool') {
        chatMessages.push({
          role: 'tool',
-         tool_call_id: m.toolCallId, // Ensure your message structure has this
+         tool_call_id: m.toolCallId,
          content: m.content
        });
        return;
@@ -88,6 +88,9 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
   let iterations = 0;
   const maxIterations = 5;
 
+  // Check for JSON mode preference
+  const responseFormat = agent.response_format || (agent.forceJson ? { type: "json_object" } : undefined);
+
   while (iterations < maxIterations) {
     iterations += 1;
 
@@ -98,6 +101,7 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
       max_tokens: agent.maxTokens ?? 1024,
       tools: toolSpecs,
       tool_choice: toolSpecs ? "auto" : undefined,
+      response_format: responseFormat
     });
 
     raw = completion;
@@ -197,9 +201,8 @@ function buildGeminiContents(agent, messages, visionImages) {
     const role = m.role === "assistant" ? "model" : "user";
     
     if (m.role === 'tool') {
-        // Gemini handles tool outputs differently in history, but for simplicity
-        // in stateless generateContent, we'll append as user context or ignore if strictly using chat sessions.
-        // Here we just append as user text to keep context.
+        // Gemini handles tool outputs differently in history.
+        // We simulate by adding context as user.
         contents.push({
             role: 'user',
             parts: [{ text: `[System Tool Output]: ${m.content}` }]
@@ -253,13 +256,14 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
 
   const contents = buildGeminiContents(agent, messages, visionImages);
 
-  // We are using stateless generateContent loop for tools
-  // We need to maintain a history that grows
   let currentHistory = [...contents]; 
   
   const systemInstruction = agent.systemPrompt && agent.systemPrompt.trim().length > 0
       ? agent.systemPrompt
       : undefined;
+
+  // Determine if we should force JSON output
+  const responseMimeType = agent.responseMimeType || (agent.forceJson ? "application/json" : undefined);
 
   let iterations = 0;
   const maxIterations = 5;
@@ -268,23 +272,23 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
     iterations++;
 
     // Call model
-    // generateContent returns a GenerateContentResponse object directly.
     const response = await ai.models.generateContent({
         model: modelId,
         contents: currentHistory,
         config: {
             systemInstruction,
             tools: toolSpecs,
-            temperature: agent.temperature ?? 0.4
+            temperature: agent.temperature ?? 0.4,
+            responseMimeType: responseMimeType,
+            // Pass thinking config if present
+            thinkingConfig: agent.thinkingConfig
         }
     });
 
-    // property access, not method call
     const calls = response.functionCalls;
 
     if (calls && calls.length > 0) {
         // 1. Add model's function call message to history
-        // The API returns candidates with content parts. We must replicate that structure.
         const modelContent = response.candidates?.[0]?.content;
         if (modelContent) {
              currentHistory.push(modelContent);
@@ -307,14 +311,13 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
             // Store for return value
             toolResults.push({ toolName: call.name, args: call.args, result: output });
             
-            // Build response part
             functionResponses.push({
                 name: call.name,
-                response: { result: output } // Correct format for v1.30
+                response: { result: output }
             });
         }
 
-        // 3. Add function responses to history as a single 'function' role message (or 'user'/'function' depending on API version)
+        // 3. Add function responses to history
         currentHistory.push({
             role: 'tool', 
             parts: functionResponses.map(fr => ({
@@ -352,7 +355,7 @@ async function runAgentWithTools(request, ctx) {
     return callGeminiWithTools(agent, messages, tools, visionImages, ctx);
   }
 
-  // Default fallback if provider unspecified but model looks like Gemini
+  // Default fallback
   if (agent.model && agent.model.includes('gemini')) {
       return callGeminiWithTools(agent, messages, tools, visionImages, ctx);
   }
@@ -414,33 +417,24 @@ const brokerAndJournalTools = [
     parameters: {
       type: "object",
       properties: {
-        // Core context
         timestamp: { type: "string", description: "ISO datetime" },
         symbol: { type: "string", description: "Symbol traded (e.g. US30)" },
         direction: { type: "string", enum: ["long", "short"] },
         timeframe: { type: "string", description: "e.g. 5m, 15m, 1h" },
         session: { type: "string", description: "e.g. London, NY, Asia" },
-        
-        // Financials
         size: { type: "number", description: "Lot size" },
         netPnl: { type: "number" },
         rMultiple: { type: "number", description: "Realized R" },
-        
-        // Strategy / Notes
         playbook: { type: "string", description: "Name of strategy/setup" },
         preTradePlan: { type: "string", description: "Plan before entry" },
         postTradeNotes: { type: "string", description: "Review after exit" },
         sentiment: { type: "string", description: "Psychological state" },
         tags: { type: "array", items: { type: "string" } },
-        
-        // Legacy/Fallback
         note: { type: "string" },
       },
-      // Require at least a note or plan
     },
     handler: async (args, ctx) => {
       if (!ctx.appendJournalEntry) throw new Error("Missing appendJournalEntry ctx");
-      // Pass args through directly, let runner/context handle structure
       const payload = { ...args, createdAt: new Date().toISOString() };
       await ctx.appendJournalEntry(payload);
       return { status: "ok", message: "Journal entry saved." };
@@ -471,7 +465,6 @@ const brokerAndJournalTools = [
       required: ["url"]
     },
     handler: async (args, ctx) => {
-      // Simulate fetch
       return `[System] Fetched content from ${args.url}: (Mock Data: The market is waiting for FOMC minutes...)`;
     }
   },
