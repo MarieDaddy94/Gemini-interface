@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -127,49 +128,35 @@ const Dashboard: React.FC = () => {
     }
   }, [toast]);
 
-  // WEBSOCKET: Real-time Data Feed
+  // WEBSOCKET: Real-time Market Data Feed
   useEffect(() => {
-    // Only connect if not already connected
     if (wsRef.current) return;
-
-    // Use localhost:4000 for backend WS
     const wsUrl = `ws://localhost:4000/ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      console.log('Connected to Real-time Market Data Feed');
-    };
-
+    ws.onopen = () => console.log('Connected to Real-time Market Data Feed');
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'SNAPSHOT' || msg.type === 'UPDATE') {
           const updates = msg.data as Record<string, MarketTick>;
-          
           setMarketData(prev => ({ ...prev, ...updates }));
-
-          // Update Charts in real-time
           setCharts(prevCharts => {
             return prevCharts.map(chart => {
               const tick = updates[chart.symbol];
               if (!tick) return chart;
-
-              // Clone data array
               const newData = [...chart.data];
               const lastPoint = newData[newData.length - 1];
-              
-              // Update last candle or create new one logic (Simplified: just update last for demo)
               const updatedPoint = {
                 ...lastPoint,
                 value: tick.price,
                 close: tick.price,
                 high: Math.max(lastPoint.high, tick.price),
                 low: Math.min(lastPoint.low, tick.price),
-                time: lastPoint.time // keep time for now
+                time: lastPoint.time
               };
               newData[newData.length - 1] = updatedPoint;
-
               return { ...chart, data: newData };
             });
           });
@@ -178,12 +165,10 @@ const Dashboard: React.FC = () => {
         console.error('WS parse error', err);
       }
     };
-
     ws.onclose = () => {
       console.log('Market Data Feed Disconnected');
       wsRef.current = null;
     };
-
     return () => {
       if (ws.readyState === 1) ws.close();
     };
@@ -212,12 +197,11 @@ const Dashboard: React.FC = () => {
                 });
                 
                 // Dispatch to TradeEventsContext for system-wide reactivity
-                // NOTE: TradeEventsToJournal will skip this via `source: 'broker'` check to avoid duplication
                 addEvent({
                   id: evt.data.id,
                   symbol: evt.data.symbol,
                   side: evt.data.side === 'buy' ? 'long' : 'short',
-                  openedAt: new Date().toISOString(), // approximation if missing
+                  openedAt: new Date().toISOString(),
                   closedAt: new Date().toISOString(),
                   entryPrice: evt.data.entryPrice || 0,
                   exitPrice: evt.data.exitPrice || 0,
@@ -239,7 +223,6 @@ const Dashboard: React.FC = () => {
             });
 
             if (needsJournalRefresh) {
-               // The server has updated the journal in memory, we just need to re-fetch
                fetchJournalEntries(effectiveJournalSessionId).then(entries => {
                  setEntries(entries);
                  console.log("[App] Refreshed journal from server due to closed trade event.");
@@ -312,7 +295,6 @@ const Dashboard: React.FC = () => {
     if (timeframe) setChartTimeframe(timeframe);
   };
 
-  // Build Rich AI Context with Real-Time Data
   const marketContext = useMemo(() => {
     // 1. Live Market Data Context
     const liveDataStr = Object.values(marketData)
@@ -445,7 +427,7 @@ const Dashboard: React.FC = () => {
 
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
-          {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} /></div>}
+          {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} /></div>}
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {activeTab === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}

@@ -1,11 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { fetchAgentInsights, AgentId } from '../services/agentApi';
+import { useAgentConfig } from '../context/AgentConfigContext';
 
 interface AutopilotPanelProps {
   chartContext: string;
   brokerSessionId: string | null;
   symbol: string;
+  onOpenSettings?: () => void;
 }
 
 interface LogEntry {
@@ -23,13 +25,16 @@ const PRESETS: Record<string, string> = {
   DEFENSIVE: "Capital Preservation. Only A+ setups with clear invalidation. Reduce size by 50%. No counter-trend trades."
 };
 
-const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSessionId, symbol }) => {
+const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSessionId, symbol, onOpenSettings }) => {
   // Core System State
   const [isRunning, setIsRunning] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [mandate, setMandate] = useState<string>(PRESETS.SCALP);
   const [inputCommand, setInputCommand] = useState("");
   const [isListening, setIsListening] = useState(false);
+  
+  // Consuming Agent Configuration
+  const { agentConfigs } = useAgentConfig();
   
   // UI State for Logs
   const [logFilter, setLogFilter] = useState<'ALL' | 'ACTION' | 'THOUGHT' | 'ERROR'>('ALL');
@@ -229,12 +234,14 @@ INSTRUCTIONS:
 If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific condition]."
         `.trim();
 
+        // Pass Agent Configuration overrides to the API
         const insights = await fetchAgentInsights({
           agentIds: activeIds,
           userMessage: prompt,
           chartContext: chartContext,
           accountId: brokerSessionId,
-          journalMode: 'live'
+          journalMode: 'live',
+          agentOverrides: agentConfigs
         });
 
         // Process results with DETAILED logging
@@ -291,7 +298,7 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [isRunning, chartContext, brokerSessionId, symbol, activeAgents]);
+  }, [isRunning, chartContext, brokerSessionId, symbol, activeAgents, agentConfigs]);
 
   const toggleRunning = () => {
     setIsRunning(prev => !prev);
@@ -528,7 +535,18 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
 
            {/* Agent Toggle Grid */}
            <div className="p-4 border-b border-[#2a2e39] flex-1">
-              <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest mb-3">Squad Status</div>
+              <div className="flex items-center justify-between mb-3">
+                 <div className="text-[9px] text-gray-500 uppercase font-bold tracking-widest">Squad Status</div>
+                 {onOpenSettings && (
+                   <button 
+                     onClick={onOpenSettings} 
+                     className="text-[9px] text-[#2962ff] hover:text-white flex items-center gap-1 transition-colors"
+                   >
+                     <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                     Configure
+                   </button>
+                 )}
+              </div>
               <div className="space-y-2">
                  {Object.entries(activeAgents).map(([id, active]) => (
                     <div key={id} className="flex items-center justify-between bg-[#1e222d] p-2 rounded border border-[#2a2e39]">

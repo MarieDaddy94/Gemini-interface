@@ -6,16 +6,17 @@ export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_co
 export interface AgentConfig {
   provider: 'gemini' | 'openai';
   model: string;
+  temperature: number;
 }
 
 export type AgentConfigMap = Record<string, AgentConfig>;
 
 // Default configurations matching server defaults
 const DEFAULT_CONFIG: AgentConfigMap = {
-  quant_bot: { provider: 'gemini', model: 'gemini-2.5-flash' },
-  trend_master: { provider: 'gemini', model: 'gemini-2.5-flash' },
-  pattern_gpt: { provider: 'openai', model: 'gpt-4o-mini' },
-  journal_coach: { provider: 'gemini', model: 'gemini-2.5-flash' }
+  quant_bot: { provider: 'gemini', model: 'gemini-2.5-flash', temperature: 0.3 },
+  trend_master: { provider: 'gemini', model: 'gemini-2.5-flash', temperature: 0.5 },
+  pattern_gpt: { provider: 'openai', model: 'gpt-4o-mini', temperature: 0.5 },
+  journal_coach: { provider: 'gemini', model: 'gemini-2.5-flash', temperature: 0.6 }
 };
 
 interface AgentConfigContextValue {
@@ -29,10 +30,18 @@ const AgentConfigContext = createContext<AgentConfigContextValue | undefined>(un
 export const AgentConfigProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigMap>(() => {
     if (typeof window !== 'undefined') {
-      const saved = window.localStorage.getItem('ai_agent_configs_v1');
+      const saved = window.localStorage.getItem('ai_agent_configs_v2');
       if (saved) {
         try {
-          return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+          const parsed = JSON.parse(saved);
+          // Merge with defaults to ensure all fields exist (e.g. if upgrading from v1)
+          const merged: AgentConfigMap = { ...DEFAULT_CONFIG };
+          Object.keys(parsed).forEach(key => {
+            if (merged[key]) {
+              merged[key] = { ...merged[key], ...parsed[key] };
+            }
+          });
+          return merged;
         } catch (e) {
           console.error("Failed to parse saved agent configs", e);
         }
@@ -43,7 +52,7 @@ export const AgentConfigProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem('ai_agent_configs_v1', JSON.stringify(agentConfigs));
+      window.localStorage.setItem('ai_agent_configs_v2', JSON.stringify(agentConfigs));
     }
   }, [agentConfigs]);
 
@@ -51,7 +60,7 @@ export const AgentConfigProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setAgentConfigs(prev => ({
       ...prev,
       [agentId]: {
-        ...(prev[agentId] || DEFAULT_CONFIG[agentId as AgentId] || { provider: 'gemini', model: 'gemini-2.5-flash' }),
+        ...(prev[agentId] || DEFAULT_CONFIG[agentId as AgentId] || { provider: 'gemini', model: 'gemini-2.5-flash', temperature: 0.5 }),
         ...config
       }
     }));

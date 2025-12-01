@@ -1,5 +1,4 @@
 
-
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta, ToolCall } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
@@ -543,7 +542,27 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
 
   // UI State
   const [isOpen, setIsOpen] = useState(true);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  
+  // -- MESSAGES STATE WITH PERSISTENCE --
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = window.localStorage.getItem('ai_chat_history');
+        if (saved) return JSON.parse(saved);
+      } catch (e) {
+        console.error("Failed to parse chat history", e);
+      }
+    }
+    return [];
+  });
+
+  // Save to localStorage whenever messages change
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('ai_chat_history', JSON.stringify(messages));
+    }
+  }, [messages]);
+
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [showPositions, setShowPositions] = useState(true); // default open if connected
@@ -1051,6 +1070,20 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
             </div>
           </div>
           <div className="flex items-center gap-1">
+            {/* Clear Chat Button (Added for convenience with persistence) */}
+            <button 
+              onClick={() => {
+                if (window.confirm("Clear all chat history?")) {
+                  setMessages([]);
+                  localStorage.removeItem('ai_chat_history');
+                }
+              }} 
+              className="text-gray-400 hover:text-red-500 p-1 rounded-md hover:bg-gray-100"
+              title="Clear Chat History"
+            >
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+            </button>
+
             <button 
               onClick={toggleVision}
               className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${

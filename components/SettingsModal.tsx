@@ -30,11 +30,32 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [importStatus, setImportStatus] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'general' | 'ai'>('general');
 
+  // API Key State
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [showKeys, setShowKeys] = useState(false);
+
   useEffect(() => {
     if (isOpen) {
       setImportStatus('');
+      // Load keys from local storage if available
+      if (typeof window !== 'undefined') {
+        setOpenaiKey(window.localStorage.getItem('openai_api_key') || '');
+        setGeminiKey(window.localStorage.getItem('gemini_api_key') || '');
+      }
     }
   }, [isOpen]);
+
+  const handleSaveKeys = () => {
+    if (typeof window !== 'undefined') {
+      if (openaiKey) window.localStorage.setItem('openai_api_key', openaiKey);
+      else window.localStorage.removeItem('openai_api_key');
+
+      if (geminiKey) window.localStorage.setItem('gemini_api_key', geminiKey);
+      else window.localStorage.removeItem('gemini_api_key');
+    }
+    alert('API Keys saved locally.');
+  };
 
   if (!isOpen) return null;
 
@@ -57,7 +78,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
-      <div className="bg-[#1e222d] border border-[#2a2e39] rounded-lg shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-[#1e222d] border border-[#2a2e39] rounded-lg shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="px-6 py-4 border-b border-[#2a2e39] flex justify-between items-center bg-[#131722] shrink-0">
           <div className="flex items-center gap-2">
@@ -83,17 +104,65 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
              onClick={() => setActiveTab('ai')}
              className={`px-4 py-3 text-xs font-medium transition-colors border-b-2 ${activeTab === 'ai' ? 'border-[#2962ff] text-white' : 'border-transparent text-gray-400 hover:text-white'}`}
            >
-             AI Team Configuration
+             AI Squad Configuration
            </button>
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-5 overflow-y-auto">
+        <div className="p-6 space-y-6 overflow-y-auto">
           
           {activeTab === 'general' && (
             <>
+              {/* API KEYS SECTION */}
+              <div className="space-y-3 pb-4 border-b border-[#2a2e39]">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-medium text-gray-400 uppercase">
+                    API Key Management
+                  </label>
+                  <button 
+                    onClick={() => setShowKeys(!showKeys)}
+                    className="text-[10px] text-blue-400 hover:text-blue-300"
+                  >
+                    {showKeys ? 'Hide Keys' : 'Show Keys'}
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-gray-500">OpenAI API Key</span>
+                    <input 
+                      type={showKeys ? "text" : "password"} 
+                      value={openaiKey}
+                      onChange={(e) => setOpenaiKey(e.target.value)}
+                      placeholder="sk-..."
+                      className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white text-xs focus:outline-none focus:border-[#2962ff]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-gray-500">Google Gemini API Key</span>
+                    <input 
+                      type={showKeys ? "text" : "password"} 
+                      value={geminiKey}
+                      onChange={(e) => setGeminiKey(e.target.value)}
+                      placeholder="AIza..."
+                      className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white text-xs focus:outline-none focus:border-[#2962ff]"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                   <button 
+                     onClick={handleSaveKeys}
+                     className="text-[10px] bg-[#2a2e39] hover:bg-[#363a45] text-white px-3 py-1.5 rounded transition-colors border border-gray-600"
+                   >
+                     Save Keys Locally
+                   </button>
+                </div>
+                <p className="text-[10px] text-gray-500 italic">
+                  Keys are stored in your browser's LocalStorage and sent directly to the backend proxy.
+                </p>
+              </div>
+
               {/* DATA MANAGEMENT SECTION */}
-              <div className="space-y-2 pb-4">
+              <div className="space-y-2">
                 <label className="block text-xs font-medium text-gray-400 uppercase mb-1">
                   Data Management
                 </label>
@@ -137,13 +206,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                   </p>
                 </div>
               </div>
-
-              <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200">
-                <p className="font-semibold mb-1">Live Trading Mode</p>
-                <p className="opacity-80">
-                  API keys are securely managed by the server environment. Ensure your backend is configured with <code>process.env.API_KEY</code>.
-                </p>
-              </div>
             </>
           )}
 
@@ -151,7 +213,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
             <div className="space-y-4">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs text-gray-400">
-                  Customize the brains behind your AI trading squad.
+                  Configure models and creativity for your autopilot agents.
                 </p>
                 <button 
                   onClick={resetToDefaults}
@@ -163,53 +225,75 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
               <div className="grid gap-3">
                 {AGENTS_META.map(agent => {
-                  const config = agentConfigs[agent.id] || { provider: 'gemini', model: 'gemini-2.5-flash' };
+                  const config = agentConfigs[agent.id] || { provider: 'gemini', model: 'gemini-2.5-flash', temperature: 0.5 };
                   
                   return (
-                    <div key={agent.id} className="bg-[#131722] border border-[#2a2e39] rounded p-3 flex items-center gap-4">
-                       <div className="w-10 h-10 rounded bg-[#1e222d] border border-[#2a2e39] flex items-center justify-center text-xl shrink-0">
-                         {agent.avatar}
-                       </div>
-                       
-                       <div className="flex-1 min-w-0">
-                         <h3 className="text-sm font-semibold text-white">{agent.name}</h3>
-                         <p className="text-[10px] text-gray-500">{agent.description}</p>
+                    <div key={agent.id} className="bg-[#131722] border border-[#2a2e39] rounded p-4 flex flex-col gap-3">
+                       <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 rounded bg-[#1e222d] border border-[#2a2e39] flex items-center justify-center text-xl shrink-0">
+                            {agent.avatar}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h3 className="text-sm font-semibold text-white">{agent.name}</h3>
+                            <p className="text-[10px] text-gray-500">{agent.description}</p>
+                          </div>
                        </div>
 
-                       <div className="flex flex-col gap-2 min-w-[140px]">
+                       <div className="grid grid-cols-2 gap-4 pl-14">
                           {/* Provider Select */}
-                          <div className="relative">
-                            <select
-                              value={config.provider}
-                              onChange={(e) => updateAgentConfig(agent.id, { 
-                                provider: e.target.value as any,
-                                model: AVAILABLE_MODELS[e.target.value as 'gemini' | 'openai'][0] 
-                              })}
-                              className="w-full bg-[#1e222d] border border-[#2a2e39] text-gray-300 text-[10px] rounded px-2 py-1 focus:outline-none focus:border-[#2962ff] appearance-none"
-                            >
-                              {AVAILABLE_PROVIDERS.map(p => (
-                                <option key={p} value={p}>{p === 'openai' ? 'OpenAI' : 'Google Gemini'}</option>
-                              ))}
-                            </select>
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                              <svg className="fill-current h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-semibold">Provider</label>
+                            <div className="relative">
+                              <select
+                                value={config.provider}
+                                onChange={(e) => updateAgentConfig(agent.id, { 
+                                  provider: e.target.value as any,
+                                  model: AVAILABLE_MODELS[e.target.value as 'gemini' | 'openai'][0] 
+                                })}
+                                className="w-full bg-[#1e222d] border border-[#2a2e39] text-gray-300 text-[10px] rounded px-2 py-1.5 focus:outline-none focus:border-[#2962ff] appearance-none"
+                              >
+                                {AVAILABLE_PROVIDERS.map(p => (
+                                  <option key={p} value={p}>{p === 'openai' ? 'OpenAI' : 'Google Gemini'}</option>
+                                ))}
+                              </select>
                             </div>
                           </div>
 
                           {/* Model Select */}
-                          <div className="relative">
-                            <select
-                              value={config.model}
-                              onChange={(e) => updateAgentConfig(agent.id, { model: e.target.value })}
-                              className="w-full bg-[#1e222d] border border-[#2a2e39] text-gray-300 text-[10px] rounded px-2 py-1 focus:outline-none focus:border-[#2962ff] appearance-none"
-                            >
-                              {AVAILABLE_MODELS[config.provider].map(m => (
-                                <option key={m} value={m}>{m}</option>
-                              ))}
-                            </select>
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
-                              <svg className="fill-current h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/></svg>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-semibold">Model</label>
+                            <div className="relative">
+                              <select
+                                value={config.model}
+                                onChange={(e) => updateAgentConfig(agent.id, { model: e.target.value })}
+                                className="w-full bg-[#1e222d] border border-[#2a2e39] text-gray-300 text-[10px] rounded px-2 py-1.5 focus:outline-none focus:border-[#2962ff] appearance-none"
+                              >
+                                {AVAILABLE_MODELS[config.provider].map(m => (
+                                  <option key={m} value={m}>{m}</option>
+                                ))}
+                              </select>
                             </div>
+                          </div>
+
+                          {/* Temperature Slider */}
+                          <div className="col-span-2 space-y-1">
+                             <div className="flex justify-between">
+                                <label className="text-[10px] text-gray-500 uppercase font-semibold">Creativity (Temp)</label>
+                                <span className="text-[10px] text-blue-400 font-mono">{config.temperature.toFixed(1)}</span>
+                             </div>
+                             <input 
+                               type="range" 
+                               min="0" 
+                               max="1" 
+                               step="0.1" 
+                               value={config.temperature}
+                               onChange={(e) => updateAgentConfig(agent.id, { temperature: parseFloat(e.target.value) })}
+                               className="w-full h-1 bg-[#2a2e39] rounded-lg appearance-none cursor-pointer accent-[#2962ff]"
+                             />
+                             <div className="flex justify-between text-[9px] text-gray-600">
+                                <span>Precise</span>
+                                <span>Creative</span>
+                             </div>
                           </div>
                        </div>
                     </div>
