@@ -19,7 +19,7 @@ const AVAILABLE_PROVIDERS = ['gemini', 'openai'];
 
 const AVAILABLE_MODELS = {
   gemini: ['gemini-2.5-flash', 'gemini-3-pro-preview', 'gemini-2.5-flash-thinking'],
-  openai: ['gpt-4o', 'gpt-4o-mini']
+  openai: ['gpt-4o', 'gpt-4o-mini', 'o1-mini', 'o3-mini']
 };
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {

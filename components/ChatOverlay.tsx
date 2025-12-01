@@ -1,6 +1,5 @@
 
 
-
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
