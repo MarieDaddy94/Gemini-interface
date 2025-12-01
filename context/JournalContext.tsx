@@ -74,6 +74,7 @@ interface JournalContextValue {
   addEntry: (entry: JournalEntry) => void;
   addEntryFromToolResult: (toolResult: ToolResult) => void;
   setEntries: (entries: JournalEntry[]) => void;
+  clearJournal: () => void;
 }
 
 const JournalContext = createContext<JournalContextValue | undefined>(
@@ -181,12 +182,32 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
     setEntries((prev) => [entry, ...prev]);
   };
 
+  const clearJournal = () => {
+    setEntries([]);
+    // Best effort cleanup of local storage
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('ai-trading-analyst-journal-')) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach(k => localStorage.removeItem(k));
+      }
+    } catch (e) {
+      console.error("Failed to clear local storage", e);
+    }
+  };
+
   const value = useMemo(
     () => ({
       entries,
       addEntry,
       addEntryFromToolResult,
-      setEntries
+      setEntries,
+      clearJournal
     }),
     [entries]
   );

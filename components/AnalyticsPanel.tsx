@@ -1,9 +1,10 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useJournal } from '../context/JournalContext';
 
 const AnalyticsPanel: React.FC = () => {
-  const { entries } = useJournal();
+  const { entries, clearJournal } = useJournal();
+  const [showConfirmReset, setShowConfirmReset] = useState(false);
 
   const stats = useMemo(() => {
     const total = entries.length;
@@ -134,15 +135,67 @@ const AnalyticsPanel: React.FC = () => {
       minimumFractionDigits: digits,
       maximumFractionDigits: digits,
     });
+  
+  const handleReset = () => {
+    clearJournal();
+    setShowConfirmReset(false);
+  };
 
   return (
-    <div className="h-full w-full flex flex-col bg-slate-950 text-slate-50">
+    <div className="h-full w-full flex flex-col bg-slate-950 text-slate-50 relative">
+      {/* Confirmation Modal */}
+      {showConfirmReset && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-[#1e222d] border border-red-500/30 rounded-lg shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="p-4 border-b border-white/5 flex items-center gap-3 bg-[#131722]">
+              <div className="w-8 h-8 rounded-full bg-red-500/10 flex items-center justify-center text-red-500">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              </div>
+              <h3 className="font-semibold text-white">Reset Journal Data?</h3>
+            </div>
+            <div className="p-4 text-sm text-gray-300">
+              <p>This will permanently delete all <span className="text-white font-medium">{stats.total}</span> journal entries and reset your analytics stats.</p>
+              <p className="mt-2 text-red-400 text-xs flex items-center gap-1">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                This action cannot be undone.
+              </p>
+            </div>
+            <div className="p-3 bg-[#131722] flex justify-end gap-2 border-t border-white/5">
+              <button 
+                onClick={() => setShowConfirmReset(false)}
+                className="px-3 py-1.5 rounded hover:bg-white/5 text-gray-400 text-xs font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleReset}
+                className="px-3 py-1.5 rounded bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20 text-xs font-medium transition-colors"
+              >
+                Yes, Clear All Data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
         <h2 className="text-sm font-semibold">Trading Analytics</h2>
-        <span className="text-xs opacity-70">
-          {stats.total} journal entries
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs opacity-70">
+            {stats.total} journal entries
+          </span>
+          {stats.total > 0 && (
+             <button
+               onClick={() => setShowConfirmReset(true)}
+               className="text-[10px] text-red-400 hover:text-red-300 border border-red-500/20 hover:border-red-500/40 px-2 py-1 rounded bg-red-500/5 transition-colors flex items-center gap-1"
+               title="Reset all journal data"
+             >
+                <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                Reset
+             </button>
+          )}
+        </div>
       </div>
 
       {/* Body */}
@@ -178,8 +231,8 @@ const AnalyticsPanel: React.FC = () => {
           {/* 🔥 Total PnL */}
           <div className="rounded-lg border border-white/10 p-3 col-span-2 md:col-span-2">
             <div className="text-[11px] opacity-70 mb-1">Total Realized PnL</div>
-            <div className="text-lg font-semibold">
-              {stats.totalPnl >= 0 ? '+' : ''}
+            <div className={`text-lg font-semibold ${stats.totalPnl > 0 ? 'text-[#089981]' : stats.totalPnl < 0 ? 'text-[#f23645]' : ''}`}>
+              {stats.totalPnl > 0 ? '+' : ''}
               {formatNumber(stats.totalPnl, 2)}
             </div>
             <div className="text-[10px] opacity-60 mt-1">
@@ -300,7 +353,7 @@ const AnalyticsPanel: React.FC = () => {
                       <span>Total PnL</span>
                       <span
                         className={
-                          pnl >= 0 ? 'opacity-80' : 'opacity-80 text-red-300'
+                          pnl > 0 ? 'opacity-80 text-[#089981]' : pnl < 0 ? 'opacity-80 text-[#f23645]' : 'opacity-80'
                         }
                       >
                         {pnl >= 0 ? '+' : ''}
