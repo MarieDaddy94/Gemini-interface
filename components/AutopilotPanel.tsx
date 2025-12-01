@@ -1,4 +1,5 @@
 
+
 // client/src/components/AutopilotPanel.tsx
 
 import React, { useMemo, useState } from 'react';
@@ -344,6 +345,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
                     >
                       <option value="BUY">BUY</option>
                       <option value="SELL">SELL</option>
+                      <option value="BOTH">BOTH (Buy + Sell)</option>
                     </select>
                   </div>
 

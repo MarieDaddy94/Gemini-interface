@@ -562,7 +562,7 @@ export interface OpenTradeCommand {
   type: 'open';
   tradableInstrumentId: number;
   symbol?: string;
-  side: 'BUY' | 'SELL';
+  side: 'BUY' | 'SELL' | 'BOTH';
   qty: number;
   entryType: 'market' | 'limit' | 'stop';
   price?: number;      // entry price (limit/market approx)

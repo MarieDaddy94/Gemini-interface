@@ -1,3 +1,4 @@
+
 // server/autopilot/executionGuard.js
 //
 // Central risk/guardrail logic for Autopilot.
@@ -65,6 +66,45 @@ function computeOpenRisk(snapshot, command) {
     };
   }
 
+  // Handle BOTH side (Buy + Sell)
+  if (String(side).toUpperCase() === 'BOTH') {
+    // Risk is effectively sum of Buy Risk + Sell Risk.
+    // However, usually a single SL price can only protect one direction properly (e.g. SL < Entry protects Buy).
+    // If user provided one SL price for BOTH, it's likely invalid for one leg unless they meant hedge mode with separate logic.
+    // We will calculate risk for valid legs only.
+    
+    let buyRisk = 0;
+    let sellRisk = 0;
+    
+    // Check Buy Leg: SL < Entry
+    if (slPrice < entry) {
+       buyRisk = (entry - slPrice) * size;
+    }
+    
+    // Check Sell Leg: SL > Entry
+    if (slPrice > entry) {
+       sellRisk = (slPrice - entry) * size;
+    }
+    
+    const totalRiskValue = buyRisk + sellRisk;
+    
+    if (totalRiskValue <= 0) {
+       return {
+         riskValue: null,
+         riskPercent: null,
+         reason: 'StopLossNotProtectiveForEitherLeg',
+       };
+    }
+    
+    const riskPercent = (totalRiskValue / equity) * 100;
+    return {
+      riskValue: totalRiskValue,
+      riskPercent,
+      reason: null
+    };
+  }
+
+  // Normal Single Side
   const distance =
     String(side).toUpperCase() === 'BUY'
       ? entry - slPrice
@@ -145,11 +185,13 @@ function evaluateOpenCommand(snapshot, command) {
     );
   }
 
-  // Max open positions
-  if (openPositions.length >= MAX_OPEN_POSITIONS) {
+  // Max open positions (Account for BOTH creating 2 positions)
+  const newPositionsCount = String(command.side).toUpperCase() === 'BOTH' ? 2 : 1;
+  
+  if (openPositions.length + newPositionsCount > MAX_OPEN_POSITIONS) {
     base.allowed = false;
     reasons.push(
-      `MaxOpenPositionsExceeded (open=${openPositions.length}, max=${MAX_OPEN_POSITIONS})`,
+      `MaxOpenPositionsExceeded (open=${openPositions.length}, new=${newPositionsCount}, max=${MAX_OPEN_POSITIONS})`,
     );
   }
 
@@ -161,10 +203,10 @@ function evaluateOpenCommand(snapshot, command) {
     );
     base.metrics.sameSymbolOpenPositions = sameSymbol.length;
 
-    if (sameSymbol.length >= MAX_POSITIONS_PER_SYMBOL) {
+    if (sameSymbol.length + newPositionsCount > MAX_POSITIONS_PER_SYMBOL) {
       base.allowed = false;
       reasons.push(
-        `MaxPositionsPerSymbolExceeded (symbol=${symbol}, open=${sameSymbol.length}, max=${MAX_POSITIONS_PER_SYMBOL})`,
+        `MaxPositionsPerSymbolExceeded (symbol=${symbol}, open=${sameSymbol.length}, new=${newPositionsCount}, max=${MAX_POSITIONS_PER_SYMBOL})`,
       );
     }
   }

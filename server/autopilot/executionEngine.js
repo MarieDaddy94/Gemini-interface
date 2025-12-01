@@ -1,3 +1,4 @@
+
 // server/autopilot/executionEngine.js
 //
 // Autopilot execution engine.
@@ -31,7 +32,7 @@ const ALLOW_AUTO_EXECUTE =
  * @property {"open"} type
  * @property {number} tradableInstrumentId
  * @property {string} [symbol]
- * @property {"BUY"|"SELL"} side
+ * @property {"BUY"|"SELL"|"BOTH"} side
  * @property {number} qty
  * @property {"market"|"limit"|"stop"} entryType
  * @property {number} [price]
@@ -145,19 +146,55 @@ async function executeTradeCommand(options) {
 
   switch (command.type) {
     case 'open': {
-      brokerResult = await placeOrder({
-        tradableInstrumentId: command.tradableInstrumentId,
-        qty: command.qty,
-        side: command.side,
-        type: command.entryType,
-        validity: 'IOC', // you can expose GTC/IOC later
-        price: command.price,
-        stopPrice: command.stopPrice,
-        slPrice: command.slPrice,
-        tpPrice: command.tpPrice,
-        routeId: command.routeId,
-        clientOrderId: command.clientOrderId,
-      });
+      if (String(command.side).toUpperCase() === 'BOTH') {
+         // Execute separate Buy and Sell orders
+         const buyPromise = placeOrder({
+            tradableInstrumentId: command.tradableInstrumentId,
+            qty: command.qty,
+            side: 'BUY',
+            type: command.entryType,
+            validity: 'IOC',
+            price: command.price,
+            stopPrice: command.stopPrice,
+            slPrice: command.slPrice,
+            tpPrice: command.tpPrice,
+            routeId: command.routeId,
+            clientOrderId: command.clientOrderId ? `${command.clientOrderId}-B` : undefined,
+         });
+         
+         const sellPromise = placeOrder({
+            tradableInstrumentId: command.tradableInstrumentId,
+            qty: command.qty,
+            side: 'SELL',
+            type: command.entryType,
+            validity: 'IOC',
+            price: command.price,
+            stopPrice: command.stopPrice,
+            slPrice: command.slPrice,
+            tpPrice: command.tpPrice,
+            routeId: command.routeId,
+            clientOrderId: command.clientOrderId ? `${command.clientOrderId}-S` : undefined,
+         });
+         
+         const [r1, r2] = await Promise.all([buyPromise, sellPromise]);
+         brokerResult = { buy: r1, sell: r2, note: "Executed Dual-Sided (BOTH)" };
+         
+      } else {
+         // Single side execution
+         brokerResult = await placeOrder({
+            tradableInstrumentId: command.tradableInstrumentId,
+            qty: command.qty,
+            side: command.side,
+            type: command.entryType,
+            validity: 'IOC',
+            price: command.price,
+            stopPrice: command.stopPrice,
+            slPrice: command.slPrice,
+            tpPrice: command.tpPrice,
+            routeId: command.routeId,
+            clientOrderId: command.clientOrderId,
+         });
+      }
       break;
     }
 
