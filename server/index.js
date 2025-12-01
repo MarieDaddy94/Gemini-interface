@@ -3,6 +3,7 @@
 
 
 
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -36,6 +37,9 @@ const {
   closeSimPosition,
 } = require('./autopilot/simExecutor');
 
+// Phase 5: Round-table
+const { runTradingRoundTable } = require('./roundtable/roundTableEngine');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
@@ -57,6 +61,7 @@ app.use('/api/ai/', aiLimiter);
 app.use('/api/agent-router', aiLimiter); // Limit the new router too
 app.use('/api/risk/', aiLimiter); // Limit risk checks
 app.use('/api/autopilot/', aiLimiter); // Limit autopilot planning
+app.use('/api/roundtable/', aiLimiter); // Limit roundtable
 
 app.use(
   cors({
@@ -268,6 +273,29 @@ app.post('/api/autopilot/plan-trade', async (req, res) => {
     console.error('Error in /api/autopilot/plan-trade:', err);
     res.status(500).json({
       error: 'Autopilot planning error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// --- PHASE 5: ROUND-TABLE ROUTE ---
+app.post('/api/roundtable/plan', async (req, res) => {
+  try {
+    const { sessionState, userQuestion, recentJournal, recentEvents } =
+      req.body || {};
+
+    const result = await runTradingRoundTable({
+      sessionState,
+      userQuestion,
+      recentJournal: Array.isArray(recentJournal) ? recentJournal : [],
+      recentEvents: Array.isArray(recentEvents) ? recentEvents : [],
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /api/roundtable/plan:', err);
+    res.status(500).json({
+      error: 'RoundTableError',
       message: err.message || 'Unknown error',
     });
   }

@@ -1,4 +1,6 @@
 
+
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -11,6 +13,7 @@ import AnalyticsPanel from './components/AnalyticsPanel';
 import AutopilotPanel from './components/AutopilotPanel';
 import RiskAutopilotPanel from './components/RiskAutopilotPanel';
 import AutopilotJournalTab from './components/AutopilotJournalTab';
+import RoundTablePanel from './components/RoundTablePanel';
 import AccessGate from './components/AccessGate';
 import { JournalProvider, useJournal } from './context/JournalContext';
 import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
@@ -39,7 +42,7 @@ import {
 } from './symbolMap';
 import { fetchJournalEntries } from './services/journalService';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'risk' | 'autopilot-journal';
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'risk' | 'autopilot-journal' | 'roundtable';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -79,6 +82,7 @@ const Dashboard: React.FC = () => {
     { id: 'terminal', label: 'Terminal' },
     { id: 'autopilot', label: 'Autopilot' },
     { id: 'risk', label: 'Risk Desk' },
+    { id: 'roundtable', label: 'Round Table' },
     { id: 'autopilot-journal', label: 'AP Journal' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
@@ -430,6 +434,7 @@ const Dashboard: React.FC = () => {
           {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
           {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} /></div>}
           {activeTab === 'risk' && <div className="flex-1 min-h-0 flex"><div className="w-full max-w-md border-r border-[#2a2e39]"><RiskAutopilotPanel /></div><div className="flex-1 bg-[#131722] flex items-center justify-center text-gray-600 text-sm select-none">Risk Simulation Environment</div></div>}
+          {activeTab === 'roundtable' && <div className="flex-1 min-h-0 flex"><div className="w-full max-w-md border-r border-[#2a2e39]"><RoundTablePanel /></div><div className="flex-1 bg-[#131722] flex items-center justify-center text-gray-600 text-sm select-none">Squad Roundtable Analysis</div></div>}
           {activeTab === 'autopilot-journal' && <div className="flex-1 min-h-0"><AutopilotJournalTab /></div>}
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
