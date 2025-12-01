@@ -1,6 +1,4 @@
 
-
-
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -14,12 +12,15 @@ import AutopilotPanel from './components/AutopilotPanel';
 import RiskAutopilotPanel from './components/RiskAutopilotPanel';
 import AutopilotJournalTab from './components/AutopilotJournalTab';
 import RoundTablePanel from './components/RoundTablePanel';
+import ChartVisionPanel from './components/ChartVisionPanel';
+import VoiceCommander from './components/VoiceCommander';
 import AccessGate from './components/AccessGate';
 import { JournalProvider, useJournal } from './context/JournalContext';
 import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
 import { AgentConfigProvider } from './context/AgentConfigContext';
 import { TradingSessionProvider } from './context/TradingSessionContext';
 import { AutopilotJournalProvider } from './context/AutopilotJournalContext';
+import { VisionProvider } from './context/VisionContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
@@ -42,7 +43,7 @@ import {
 } from './symbolMap';
 import { fetchJournalEntries } from './services/journalService';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'risk' | 'autopilot-journal' | 'roundtable';
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'command';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -80,10 +81,8 @@ const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<MainTab>('terminal');
   const tabs: { id: MainTab; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
+    { id: 'command', label: 'Command Center' },
     { id: 'autopilot', label: 'Autopilot' },
-    { id: 'risk', label: 'Risk Desk' },
-    { id: 'roundtable', label: 'Round Table' },
-    { id: 'autopilot-journal', label: 'AP Journal' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
@@ -111,7 +110,6 @@ const Dashboard: React.FC = () => {
   
   // Real-time Data State
   const [marketData, setMarketData] = useState<Record<string, MarketTick>>({});
-  const [charts, setCharts] = useState<ChartConfig[]>(MOCK_CHARTS);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Toasts
@@ -125,13 +123,9 @@ const Dashboard: React.FC = () => {
   const effectiveJournalSessionId = brokerSessionId || journalSessionId;
   const chatOverlayRef = useRef<ChatOverlayHandle | null>(null);
   
-  // Access journal context to force refresh
   const { setEntries } = useJournal();
-  
-  // Access TradeEvents context to dispatch live events
   const { addEvent } = useTradeEvents();
 
-  // Clear toast timer
   useEffect(() => {
     if(toast) {
       const t = setTimeout(() => setToast(null), 4000);
@@ -142,7 +136,6 @@ const Dashboard: React.FC = () => {
   // WEBSOCKET: Real-time Market Data Feed
   useEffect(() => {
     if (wsRef.current) return;
-    // Assuming backend runs on 4000
     const wsUrl = `ws://localhost:4000/ws`;
     
     try {
@@ -156,7 +149,6 @@ const Dashboard: React.FC = () => {
           if (msg.type === 'SNAPSHOT' || msg.type === 'UPDATE') {
             const updates = msg.data as Record<string, MarketTick>;
             setMarketData(prev => ({ ...prev, ...updates }));
-            // Optional: Update charts if we were tracking history in this component
           }
         } catch (err) {
           console.error('WS parse error', err);
@@ -167,7 +159,6 @@ const Dashboard: React.FC = () => {
         wsRef.current = null;
       };
       ws.onerror = () => {
-        // Silently fail if dev server isn't running WS
         if (wsRef.current) wsRef.current.close();
       };
     } catch (e) {
@@ -189,7 +180,6 @@ const Dashboard: React.FC = () => {
           const data = await fetchBrokerData(brokerSessionId);
           setBrokerData(data);
 
-          // Handle Recent Events from Polling
           if (data.recentEvents && data.recentEvents.length > 0) {
             let needsJournalRefresh = false;
 
@@ -201,7 +191,6 @@ const Dashboard: React.FC = () => {
                   type: pnl >= 0 ? 'success' : 'info'
                 });
                 
-                // Dispatch to TradeEventsContext for system-wide reactivity
                 addEvent({
                   id: evt.data.id,
                   symbol: evt.data.symbol,
@@ -301,7 +290,6 @@ const Dashboard: React.FC = () => {
   };
 
   const marketContext = useMemo(() => {
-    // 1. Live Market Data Context
     const liveDataStr = Object.values(marketData)
       .map(tick => 
         `${tick.symbol}: ${tick.price.toFixed(2)} ` +
@@ -311,7 +299,6 @@ const Dashboard: React.FC = () => {
       )
       .join('\n');
 
-    // 2. Broker Data Context
     if (brokerData && brokerData.isConnected) {
       const positionsStr = brokerData.positions
         .map((p) => `${p.side.toUpperCase()} ${p.size} ${p.symbol} @ ${p.entryPrice} (PnL: $${p.pnl})`)
@@ -329,7 +316,6 @@ const Dashboard: React.FC = () => {
       `;
     }
 
-    // 3. Simulated Context (No Broker)
     return `
       LIVE MARKET FEED (Simulated):
       ${liveDataStr || 'Waiting for tick data...'}
@@ -432,10 +418,41 @@ const Dashboard: React.FC = () => {
 
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
-          {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} /></div>}
-          {activeTab === 'risk' && <div className="flex-1 min-h-0 flex"><div className="w-full max-w-md border-r border-[#2a2e39]"><RiskAutopilotPanel /></div><div className="flex-1 bg-[#131722] flex items-center justify-center text-gray-600 text-sm select-none">Risk Simulation Environment</div></div>}
-          {activeTab === 'roundtable' && <div className="flex-1 min-h-0 flex"><div className="w-full max-w-md border-r border-[#2a2e39]"><RoundTablePanel /></div><div className="flex-1 bg-[#131722] flex items-center justify-center text-gray-600 text-sm select-none">Squad Roundtable Analysis</div></div>}
-          {activeTab === 'autopilot-journal' && <div className="flex-1 min-h-0"><AutopilotJournalTab /></div>}
+          
+          {activeTab === 'command' && (
+            <div className="flex-1 min-h-0 flex overflow-hidden">
+               <div className="flex-1 border-r border-[#2a2e39] overflow-hidden flex flex-col">
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <RiskAutopilotPanel />
+                  </div>
+                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <VoiceCommander />
+                  </div>
+               </div>
+               <div className="flex-1 overflow-hidden flex flex-col">
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <RoundTablePanel />
+                  </div>
+                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <ChartVisionPanel />
+                  </div>
+               </div>
+            </div>
+          )}
+
+          {activeTab === 'autopilot' && (
+             <div className="flex-1 min-h-0 flex">
+               <div className="w-96 border-r border-[#2a2e39] flex flex-col">
+                 <AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} />
+               </div>
+               <div className="flex-1 min-h-0">
+                 <AutopilotJournalTab />
+               </div>
+             </div>
+          )}
+          
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {activeTab === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
@@ -467,10 +484,12 @@ const App: React.FC = () => {
         <TradingSessionProvider>
           <JournalProvider>
             <AutopilotJournalProvider>
-              <TradeEventsProvider>
-                <TradeEventsToJournal />
-                <Dashboard />
-              </TradeEventsProvider>
+              <VisionProvider>
+                <TradeEventsProvider>
+                  <TradeEventsToJournal />
+                  <Dashboard />
+                </TradeEventsProvider>
+              </VisionProvider>
             </AutopilotJournalProvider>
           </JournalProvider>
         </TradingSessionProvider>

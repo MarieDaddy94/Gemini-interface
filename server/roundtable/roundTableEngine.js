@@ -1,9 +1,5 @@
 
 // server/roundtable/roundTableEngine.js
-//
-// Multi-agent "trading squad" round-table.
-// Now uses a MarketSnapshot so the squad reasons from actual price structure.
-
 const { callLLM } = require('../llmRouter');
 const { getAgentById } = require('../agents/agents');
 const {
@@ -12,42 +8,22 @@ const {
 } = require('../market/marketSnapshot');
 
 /**
- * @typedef {Object} RoundTableRequest
- * @property {any} sessionState
- * @property {string} userQuestion
- * @property {Array<any>} [recentJournal]
- * @property {Array<any>} [recentEvents]
- */
-
-/**
- * @typedef {Object} RoundTableFinalPlan
- * @property {string} bias
- * @property {string} timeframe
- * @property {number} confidence
- * @property {string} narrative
- * @property {string} entryPlan
- * @property {string} riskPlan
- * @property {string} management
- * @property {string} checklist
- */
-
-/**
- * @typedef {Object} RoundTableResponse
- * @property {RoundTableFinalPlan} finalPlan
- * @property {Array<{speaker:string;role:string;content:string}>} transcript
- * @property {Array<string>} riskFlags
- * @property {Array<string>} notesForJournal
- */
-
-/**
- * Run a multi-agent "squad huddle" to create a trading plan.
- *
- * @param {RoundTableRequest} input
- * @returns {Promise<RoundTableResponse>}
+ * @param {{
+ *  sessionState: any;
+ *  userQuestion: string;
+ *  recentJournal?: any[];
+ *  recentEvents?: any[];
+ *  visualSummary?: string | null;
+ * }} input
  */
 async function runTradingRoundTable(input) {
-  const { sessionState, userQuestion, recentJournal = [], recentEvents = [] } =
-    input || {};
+  const {
+    sessionState,
+    userQuestion,
+    recentJournal = [],
+    recentEvents = [],
+    visualSummary = null,
+  } = input || {};
 
   if (!userQuestion || typeof userQuestion !== 'string') {
     throw new Error('userQuestion is required for round-table.');
@@ -70,7 +46,6 @@ async function runTradingRoundTable(input) {
     `Risk config: maxRiskPerTrade=${riskConfig.maxRiskPerTradePercent ?? 'n/a'}% / maxDailyLoss=${riskConfig.maxDailyLossPercent ?? 'n/a'}%`,
   ];
 
-  // ---- Market snapshot integration (Step B) ----
   let marketSnapshotText = '(no market snapshot available)';
   try {
     const snapshot = await getMarketSnapshotForSession(sessionState);
@@ -78,6 +53,10 @@ async function runTradingRoundTable(input) {
   } catch (err) {
     console.error('Failed to build market snapshot:', err);
   }
+
+  const visualSnapshotText = visualSummary
+    ? visualSummary
+    : '(no visual snapshot – run Chart Vision to provide one)';
 
   const journalSummary =
     recentJournal && recentJournal.length > 0
@@ -94,7 +73,9 @@ async function runTradingRoundTable(input) {
                 : j.recommended === false
                 ? 'Allowed/NoRec'
                 : 'Allowed/Rec';
-            return `${idx + 1}. ${j.instrumentSymbol || instrumentLabel} ${dir} ${risk} (${verdict}) ${pnl} - ${j.planSummary || ''}`.trim();
+            return `${idx + 1}. ${
+              j.instrumentSymbol || instrumentLabel
+            } ${dir} ${risk} (${verdict}) ${pnl} - ${j.planSummary || ''}`.trim();
           })
           .join('\n')
       : '(none provided)';
@@ -112,8 +93,8 @@ async function runTradingRoundTable(input) {
           .join('\n')
       : '(none provided)';
 
-  // Use Strategist as the "host" model
-  const strategist = getAgentById('strategist-main') || getAgentById('strategist');
+  const strategist =
+    getAgentById('strategist-main') || getAgentById('strategist');
 
   const systemPrompt = `
 You are orchestrating a TRADING SQUAD round-table for Anthony.
@@ -125,16 +106,16 @@ Squad members:
 - Risk Manager: risk rules, prop-style constraints.
 - Execution Bot: concrete entry, SL/TP, and management rules.
 
-You will simulate an internal discussion between these 5 roles.
-The discussion should be focused, practical, and tailored for intraday trading on indices like US30/NAS100 or similar instruments.
-
 You are given:
 
 SESSION STATE
 ${sessionSummaryLines.join('\n')}
 
-MARKET SNAPSHOT (multi-timeframe OHLC, most recent first within each series)
+MARKET SNAPSHOT (numeric / OHLC)
 ${marketSnapshotText}
+
+VISUAL SNAPSHOT (from Gemini Vision on the actual chart)
+${visualSnapshotText}
 
 RECENT AUTOPILOT JOURNAL (most recent first)
 ${journalSummary}
@@ -144,6 +125,9 @@ ${eventsSummary}
 
 USER QUESTION
 "${userQuestion}"
+
+You will simulate a focused internal discussion between these 5 roles.
+The discussion should be focused, practical, and tailored for intraday trading on indices like US30/NAS100 or similar instruments.
 
 Your output MUST be a single JSON object, with NO extra commentary, in this exact shape:
 
@@ -178,7 +162,8 @@ Rules:
 Do NOT wrap the JSON in backticks or markdown.
   `.trim();
 
-  const userPrompt = `Run the trading squad round-table and respond with the JSON object described above.`;
+  const userPrompt =
+    'Run the trading squad round-table and respond with the JSON object described above.';
 
   const messages = [{ role: 'user', content: userPrompt }];
 
@@ -195,19 +180,14 @@ Do NOT wrap the JSON in backticks or markdown.
     });
   } catch (err) {
     console.error('Error in runTradingRoundTable LLM call:', err);
-    throw new Error(
-      'Round-table LLM call failed. See server logs for details.'
-    );
+    throw new Error('Round-table LLM call failed. See server logs for details.');
   }
 
   let parsed;
   try {
     parsed = JSON.parse(llmText);
   } catch (err) {
-    console.error(
-      'Failed to parse round-table JSON. Raw output:',
-      llmText
-    );
+    console.error('Failed to parse round-table JSON. Raw output:', llmText);
     throw new Error('Round-table JSON parse failed.');
   }
 
@@ -220,7 +200,7 @@ Do NOT wrap the JSON in backticks or markdown.
   return {
     finalPlan: {
       bias,
-      timeframe: finalPlan.timeframe || (tf.currentTimeframe || 'n/a'),
+      timeframe: finalPlan.timeframe || tf.currentTimeframe || 'n/a',
       confidence:
         typeof finalPlan.confidence === 'number'
           ? Math.min(Math.max(finalPlan.confidence, 0), 100)

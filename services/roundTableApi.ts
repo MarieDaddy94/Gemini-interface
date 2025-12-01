@@ -1,6 +1,3 @@
-// services/roundTableApi.ts
-//
-// Frontend helper for the Trading Squad round-table.
 
 import { TradingSessionState } from '../types';
 
@@ -36,6 +33,7 @@ export async function runRoundTablePlan(args: {
   userQuestion: string;
   recentJournal?: any[];
   recentEvents?: any[];
+  visualSummary?: string | null;
 }): Promise<RoundTableResponse> {
   const resp = await fetch(`${API_BASE_URL}/api/roundtable/plan`, {
     method: 'POST',
@@ -45,6 +43,7 @@ export async function runRoundTablePlan(args: {
       userQuestion: args.userQuestion,
       recentJournal: args.recentJournal ?? [],
       recentEvents: args.recentEvents ?? [],
+      visualSummary: args.visualSummary ?? null,
     }),
   });
 

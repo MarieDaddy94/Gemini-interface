@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
 import { useAutopilotJournal } from '../context/AutopilotJournalContext';
@@ -6,10 +7,12 @@ import {
   RoundTableResponse,
   RoundTableTurn,
 } from '../services/roundTableApi';
+import { useVision } from '../context/VisionContext';
 
 const RoundTablePanel: React.FC = () => {
   const { state, addMessage } = useTradingSession();
   const { addEntry } = useAutopilotJournal();
+  const { visionSummary } = useVision();
 
   const [question, setQuestion] = useState('');
   const [isRunning, setIsRunning] = useState(false);
@@ -30,17 +33,16 @@ const RoundTablePanel: React.FC = () => {
 
     setIsRunning(true);
     try {
-      // In the future you can pass real recentJournal/recentEvents here.
       const resp = await runRoundTablePlan({
         sessionState: state,
         userQuestion: q,
-        recentJournal: [], // hook to Autopilot journal later if wanted
+        recentJournal: [],
         recentEvents: [],
+        visualSummary: visionSummary || undefined,
       });
 
       setResult(resp);
 
-      // Log a high-level summary into AutopilotJournal as well
       const instrumentSymbol =
         state.instrument.symbol || state.instrument.displayName;
 
@@ -48,12 +50,12 @@ const RoundTablePanel: React.FC = () => {
         resp.finalPlan.bias === 'short'
           ? 'short'
           : resp.finalPlan.bias === 'neutral'
-          ? 'neutral'
+          ? 'long'
           : 'long';
 
       addEntry({
         instrumentSymbol,
-        direction: biasDir === 'neutral' ? 'long' : biasDir, // journals expect long/short; treat neutral as long for now
+        direction: biasDir,
         riskPercent: state.riskConfig.maxRiskPerTradePercent ?? 0,
         environment: state.environment,
         autopilotMode: state.autopilotMode,
@@ -110,6 +112,11 @@ const RoundTablePanel: React.FC = () => {
           });
           lines.push('');
         }
+        if (visionSummary) {
+          lines.push('Visual Snapshot (Gemini):');
+          lines.push(visionSummary);
+          lines.push('');
+        }
 
         const content = lines.join('\n');
 
@@ -149,7 +156,8 @@ const RoundTablePanel: React.FC = () => {
         </div>
         <div className="text-[11px] text-gray-500 mt-1">
           Ask the AI trading team a question and let Strategist, Trend, Pattern,
-          Risk, and Execution collaborate on a plan.
+          Risk, and Execution collaborate on a plan. If you ran Chart Vision
+          recently, its summary is used as a VISUAL SNAPSHOT.
         </div>
       </div>
 
@@ -184,9 +192,7 @@ const RoundTablePanel: React.FC = () => {
             </label>
           </div>
           {error && (
-            <div className="mt-1 text-[11px] text-red-400">
-              {error}
-            </div>
+            <div className="mt-1 text-[11px] text-red-400">{error}</div>
           )}
         </section>
 
@@ -266,12 +272,9 @@ const RoundTablePanel: React.FC = () => {
               </div>
             </section>
 
-            {/* Risk flags */}
             {result.riskFlags && result.riskFlags.length > 0 && (
               <section className="space-y-1">
-                <div className="font-semibold text-gray-300">
-                  Risk Flags
-                </div>
+                <div className="font-semibold text-gray-300">Risk Flags</div>
                 <div className="border border-yellow-700 rounded-md p-2 bg-[#15120a]">
                   <ul className="list-disc list-inside space-y-0.5">
                     {result.riskFlags.map((r, idx) => (
@@ -284,23 +287,22 @@ const RoundTablePanel: React.FC = () => {
               </section>
             )}
 
-            {/* Transcript */}
             <section className="space-y-1">
               <button
                 type="button"
                 className="text-[11px] text-gray-400 underline"
                 onClick={() => setShowTranscript((v) => !v)}
               >
-                {showTranscript ? 'Hide squad transcript' : 'Show squad transcript'}
+                {showTranscript
+                  ? 'Hide squad transcript'
+                  : 'Show squad transcript'}
               </button>
               {showTranscript && (
                 <div className="border border-gray-700 rounded-md p-2 bg-[#05060b] max-h-[220px] overflow-y-auto">
                   {result.transcript && result.transcript.length > 0 ? (
                     result.transcript.map(renderTranscriptTurn)
                   ) : (
-                    <div className="text-gray-500">
-                      No transcript returned.
-                    </div>
+                    <div className="text-gray-500">No transcript returned.</div>
                   )}
                 </div>
               )}

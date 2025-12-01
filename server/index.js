@@ -1,9 +1,4 @@
 
-
-
-
-
-
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -12,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 
-// Import Persistence (Now SQLite wrapper)
+// Import Persistence
 const db = require('./persistence');
 
 // Import AI Handlers
@@ -21,10 +16,10 @@ const createAgentsRouter = require('./routes/agents');
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
 const { setupMarketData, getPrice } = require('./marketData');
 
-// Phase 2: Import new Orchestrator
+// Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
 
-// Phase 4: Import Autopilot Controller
+// Phase 4: Autopilot
 const { 
   handleAutopilotProposedTrade,
   handleAutopilotExecutionPlan 
@@ -40,10 +35,14 @@ const {
 // Phase 5: Round-table
 const { runTradingRoundTable } = require('./roundtable/roundTableEngine');
 
+// Voice & Vision
+const { parseVoiceAutopilotCommand } = require('./autopilot/voiceParser');
+const { analyzeChartImage } = require('./vision/visionService');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
-const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123'; // Default code if not set in env
+const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123';
 
 const server = http.createServer(app);
 
@@ -58,10 +57,11 @@ const aiLimiter = rateLimit({
 
 app.use('/api/agents/', aiLimiter);
 app.use('/api/ai/', aiLimiter);
-app.use('/api/agent-router', aiLimiter); // Limit the new router too
-app.use('/api/risk/', aiLimiter); // Limit risk checks
-app.use('/api/autopilot/', aiLimiter); // Limit autopilot planning
-app.use('/api/roundtable/', aiLimiter); // Limit roundtable
+app.use('/api/agent-router', aiLimiter);
+app.use('/api/risk/', aiLimiter); 
+app.use('/api/autopilot/', aiLimiter); 
+app.use('/api/roundtable/', aiLimiter); 
+app.use('/api/vision/', aiLimiter); 
 
 app.use(
   cors({
@@ -83,7 +83,7 @@ app.post('/api/auth/verify', (req, res) => {
   }
 });
 
-// --- WEB PROXY ROUTE (Bypass X-Frame-Options) ---
+// --- WEB PROXY ROUTE ---
 app.get('/api/proxy', async (req, res) => {
   const targetUrl = req.query.url;
   if (!targetUrl) return res.status(400).send('Missing url param');
@@ -95,19 +95,15 @@ app.get('/api/proxy', async (req, res) => {
       }
     });
 
-    // Copy important headers but strip blocking ones
     const contentType = response.headers.get('content-type');
     if (contentType) res.setHeader('Content-Type', contentType);
 
-    // If it's HTML, we need to inject <base> tag for relative links to work
     if (contentType && contentType.includes('text/html')) {
       let html = await response.text();
-      // Inject base tag right after head
       const baseTag = `<base href="${targetUrl}">`;
       html = html.replace('<head>', `<head>${baseTag}`);
       res.send(html);
     } else {
-      // For images/css/js, just pipe the buffer
       const buffer = await response.arrayBuffer();
       res.send(Buffer.from(buffer));
     }
@@ -117,18 +113,16 @@ app.get('/api/proxy', async (req, res) => {
   }
 });
 
-// Mount Agents router - PASS DB INSTANCE
+// Mount Agents router
 app.use(createAgentsRouter(db));
 
-// --- NEW Multi-agent AI chat endpoint ---
+// --- MULTI-AGENT CHAT ---
 app.post("/api/agents/chat", async (req, res) => {
   try {
     const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId } = req.body || {};
 
     if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
-      return res.status(400).json({
-        error: "agentIds[] and userMessage are required",
-      });
+      return res.status(400).json({ error: "agentIds[] and userMessage are required" });
     }
     
     const apiKeys = {
@@ -145,20 +139,14 @@ app.post("/api/agents/chat", async (req, res) => {
       journalMode: journalMode || "live",
       apiKeys,
       agentOverrides,
-      db, // Pass DB instance
+      db, 
       accountId 
     });
 
-    res.json({
-      ok: true,
-      agents: results,
-    });
+    res.json({ ok: true, agents: results });
   } catch (err) {
     console.error("Error in /api/agents/chat:", err);
-    res.status(500).json({
-      error: "LLM router error",
-      details: err.message,
-    });
+    res.status(500).json({ error: "LLM router error", details: err.message });
   }
 });
 
@@ -181,21 +169,14 @@ app.post("/api/agents/debrief", async (req, res) => {
       journalContext: journalContext || [],
       apiKeys,
       agentOverrides,
-      db, // Pass DB instance
+      db, 
       accountId
     });
 
-    res.json({
-      ok: true,
-      insights: results
-    });
-
+    res.json({ ok: true, insights: results });
   } catch (err) {
     console.error("Error in /api/agents/debrief:", err);
-    res.status(500).json({
-      error: "LLM debrief error",
-      details: err.message
-    });
+    res.status(500).json({ error: "LLM debrief error", details: err.message });
   }
 });
 
@@ -213,184 +194,140 @@ app.post('/api/ai/route', async (req, res) => {
   }
 });
 
-// --- PHASE 2: AGENT ROUTER ENDPOINT ---
+// --- AGENT ROUTER ---
 app.post('/api/agent-router', async (req, res) => {
   try {
     const { agentId, userMessage, sessionState, history } = req.body || {};
-
-    const result = await handleAgentRequest({
-      agentId,
-      userMessage,
-      sessionState,
-      history,
-    });
-
+    const result = await handleAgentRequest({ agentId, userMessage, sessionState, history });
     res.json(result);
   } catch (err) {
     console.error('Error in /api/agent-router:', err);
-    res.status(500).json({
-      error: 'Agent router error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Agent router error', message: err.message || 'Unknown error' });
   }
 });
 
-// --- PHASE 4: RISK / AUTOPILOT ROUTE ---
+// --- AUTOPILOT & RISK ROUTES ---
 app.post('/api/risk/preview-trade', async (req, res) => {
   try {
     const { sessionState, proposedTrade } = req.body || {};
-
-    const result = await handleAutopilotProposedTrade(
-      sessionState,
-      proposedTrade
-    );
-
+    const result = await handleAutopilotProposedTrade(sessionState, proposedTrade);
     res.json(result);
   } catch (err) {
     console.error('Error in /api/risk/preview-trade:', err);
-    res.status(500).json({
-      error: 'Risk preview error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Risk preview error', message: err.message || 'Unknown error' });
   }
 });
 
 app.post('/api/autopilot/plan-trade', async (req, res) => {
   try {
     const { sessionState, proposedTrade } = req.body || {};
-    
     if (!sessionState || !proposedTrade) {
       return res.status(400).json({ error: "Missing sessionState or proposedTrade" });
     }
-
-    const result = await handleAutopilotExecutionPlan(
-      sessionState,
-      proposedTrade
-    );
-
+    const result = await handleAutopilotExecutionPlan(sessionState, proposedTrade);
     res.json(result);
   } catch (err) {
     console.error('Error in /api/autopilot/plan-trade:', err);
-    res.status(500).json({
-      error: 'Autopilot planning error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Autopilot planning error', message: err.message || 'Unknown error' });
   }
 });
 
-// --- PHASE 5: ROUND-TABLE ROUTE ---
+app.post('/api/autopilot/voice-parse', async (req, res) => {
+  try {
+    const { transcript, sessionState } = req.body || {};
+    const parsed = await parseVoiceAutopilotCommand({ transcript, sessionState });
+    res.json(parsed);
+  } catch (err) {
+    console.error('Error in /api/autopilot/voice-parse:', err);
+    res.status(500).json({ error: 'VoiceParseError', message: err.message || 'Unknown error' });
+  }
+});
+
+// --- ROUND TABLE ---
 app.post('/api/roundtable/plan', async (req, res) => {
   try {
-    const { sessionState, userQuestion, recentJournal, recentEvents } =
-      req.body || {};
-
+    const { sessionState, userQuestion, recentJournal, recentEvents, visualSummary } = req.body || {};
     const result = await runTradingRoundTable({
       sessionState,
       userQuestion,
       recentJournal: Array.isArray(recentJournal) ? recentJournal : [],
       recentEvents: Array.isArray(recentEvents) ? recentEvents : [],
+      visualSummary: typeof visualSummary === 'string' ? visualSummary : null,
     });
-
     res.json(result);
   } catch (err) {
     console.error('Error in /api/roundtable/plan:', err);
-    res.status(500).json({
-      error: 'RoundTableError',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'RoundTableError', message: err.message || 'Unknown error' });
   }
 });
 
-// ------------------------------
-// Sim broker API
-// ------------------------------
+// --- VISION ANALYSIS ---
+app.post('/api/vision/analyze', async (req, res) => {
+  try {
+    const { fileBase64, mimeType, sessionState, question } = req.body;
+    
+    if (!fileBase64 || !mimeType) {
+      return res.status(400).json({ error: "Missing fileBase64 or mimeType" });
+    }
 
-// GET /api/broker/sim/account
+    const summary = await analyzeChartImage({ fileBase64, mimeType, sessionState, question });
+    res.json({ visionSummary: summary });
+  } catch (err) {
+    console.error('Error in /api/vision/analyze:', err);
+    res.status(500).json({ error: 'VisionError', message: err.message || 'Unknown error' });
+  }
+});
+
+// --- SIM BROKER API ---
 app.get('/api/broker/sim/account', (_req, res) => {
   try {
     const account = getSimAccount();
     res.json(account);
   } catch (err) {
     console.error('Error in /api/broker/sim/account:', err);
-    res.status(500).json({
-      error: 'Sim account error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Sim account error', message: err.message || 'Unknown error' });
   }
 });
 
-// GET /api/broker/sim/positions
 app.get('/api/broker/sim/positions', (_req, res) => {
   try {
     const positions = getSimPositions();
     res.json(positions);
   } catch (err) {
     console.error('Error in /api/broker/sim/positions:', err);
-    res.status(500).json({
-      error: 'Sim positions error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Sim positions error', message: err.message || 'Unknown error' });
   }
 });
 
-// POST /api/broker/sim/close-position
-// Body: { positionId: string, closePrice: number }
 app.post('/api/broker/sim/close-position', (req, res) => {
   try {
     const { positionId, closePrice } = req.body || {};
     if (!positionId || typeof closePrice !== 'number') {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'positionId and closePrice are required.',
-      });
+      return res.status(400).json({ error: 'BadRequest', message: 'positionId and closePrice are required.' });
     }
     const pos = closeSimPosition(positionId, closePrice);
     res.json(pos);
   } catch (err) {
     console.error('Error in /api/broker/sim/close-position:', err);
-    res.status(500).json({
-      error: 'Sim close position error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Sim close position error', message: err.message || 'Unknown error' });
   }
 });
-
-// ------------------------------
-// Autopilot Sim Execution
-// ------------------------------
-//
-// POST /api/autopilot/execute-plan-sim
-// Body:
-// {
-//   sessionState: TradingSessionState,
-//   tradeRequest: { direction: 'long'|'short', riskPercent: number, notes?: string },
-//   executionParams: { entryPrice: number, stopPrice?: number, executeIfRecommended?: boolean }
-// }
 
 app.post('/api/autopilot/execute-plan-sim', async (req, res) => {
   try {
     const { sessionState, tradeRequest, executionParams } = req.body || {};
-    const result = await executeAutopilotTradeSim(
-      sessionState,
-      tradeRequest,
-      executionParams
-    );
+    const result = await executeAutopilotTradeSim(sessionState, tradeRequest, executionParams);
     res.json(result);
   } catch (err) {
     console.error('Error in /api/autopilot/execute-plan-sim:', err);
-    res.status(500).json({
-      error: 'Autopilot sim exec error',
-      message: err.message || 'Unknown error',
-    });
+    res.status(500).json({ error: 'Autopilot sim exec error', message: err.message || 'Unknown error' });
   }
 });
 
-// --- Playbook Logging Logic ---
+// --- PLAYBOOK LOGGING ---
 function readLogFile() {
   try {
-    if (!fs.existsSync(LOG_FILE)) {
-      return [];
-    }
+    if (!fs.existsSync(LOG_FILE)) return [];
     const data = fs.readFileSync(LOG_FILE, 'utf8');
     if (!data.trim()) return [];
     return JSON.parse(data);
@@ -425,8 +362,7 @@ app.get('/api/playbooks', (req, res) => {
   res.json(entries);
 });
 
-// --- TradeLocker Proxy Logic ---
-
+// --- TRADELOCKER PROXY ---
 function getBaseUrl(isDemo) {
   return isDemo
     ? 'https://demo.tradelocker.com/backend-api'
@@ -435,15 +371,11 @@ function getBaseUrl(isDemo) {
 
 app.post('/api/tradelocker/login', async (req, res) => {
   const { email, password, server, isDemo } = req.body || {};
-
-  if (!email || !password || !server) {
-    return res.status(400).send('Missing email, password or server');
-  }
+  if (!email || !password || !server) return res.status(400).send('Missing email, password or server');
 
   const baseUrl = getBaseUrl(!!isDemo);
 
   try {
-    // 1) Fetch JWT token
     const authRes = await fetch(`${baseUrl}/auth/jwt/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -452,20 +384,15 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     if (!authRes.ok) {
       const errorText = await authRes.text();
-      return res
-        .status(authRes.status)
-        .send(errorText || 'Failed to authenticate with TradeLocker');
+      return res.status(authRes.status).send(errorText || 'Failed to authenticate with TradeLocker');
     }
 
     const authJson = await authRes.json();
     const accessToken = authJson.accessToken || authJson.access_token;
     const refreshToken = authJson.refreshToken || authJson.refresh_token;
 
-    if (!accessToken) {
-      return res.status(500).send('TradeLocker did not return an access token');
-    }
+    if (!accessToken) return res.status(500).send('TradeLocker did not return an access token');
 
-    // 2) List accounts
     const accountsRes = await fetch(`${baseUrl}/auth/jwt/all-accounts`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}` }
@@ -473,17 +400,13 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     if (!accountsRes.ok) {
       const errorText = await accountsRes.text();
-      return res
-        .status(accountsRes.status)
-        .send(errorText || 'Failed to fetch TradeLocker accounts');
+      return res.status(accountsRes.status).send(errorText || 'Failed to fetch TradeLocker accounts');
     }
 
     const accountsJson = await accountsRes.json();
     const accountsRaw = Array.isArray(accountsJson) ? accountsJson : accountsJson.accounts || [];
 
-    if (!accountsRaw.length) {
-      return res.status(400).send('No TradeLocker accounts found for this user');
-    }
+    if (!accountsRaw.length) return res.status(400).send('No TradeLocker accounts found for this user');
 
     const accounts = accountsRaw.map((a, idx) => {
       const id = String(a.accountId ?? a.id ?? `acc-${idx}`);
@@ -492,14 +415,12 @@ app.post('/api/tradelocker/login', async (req, res) => {
       const currency = a.currency ?? a.ccy ?? a.accountCurrency ?? 'USD';
       const name = a.name ?? a.accountName ?? a.broker ?? `Account ${accNum}`;
       const isDemo = a.isDemo ?? a.demo ?? a.accountType === 'DEMO';
-
       return { id, accNum, name, currency, balance: Number(balance), isDemo: !!isDemo };
     });
 
     const primary = accounts[0];
     const accountId = String(primary.id);
     const accNum = Number(primary.accNum);
-
     const sessionId = crypto.randomUUID();
 
     const sessionData = {
@@ -519,21 +440,14 @@ app.post('/api/tradelocker/login', async (req, res) => {
       simulatedPositions: [] 
     };
 
-    // SAVE SESSION VIA DB (Async)
     await db.setSession(sessionId, sessionData);
     
-    // Initialize empty journal if not exists
     const currentJournal = await db.getJournal(sessionId);
     if (currentJournal.length === 0) {
        await db.setJournal(sessionId, []);
     }
 
-    res.json({
-      sessionId,
-      accounts,
-      accountId,
-      accNum
-    });
+    res.json({ sessionId, accounts, accountId, accNum });
   } catch (err) {
     console.error('TradeLocker login fatal error', err);
     res.status(500).send('Internal error while connecting to TradeLocker');
@@ -558,9 +472,7 @@ app.post('/api/tradelocker/select-account', async (req, res) => {
   const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
-  if (!accountId && accNum == null) {
-    return res.status(400).send('Provide accountId or accNum to select account');
-  }
+  if (!accountId && accNum == null) return res.status(400).send('Provide accountId or accNum');
 
   const accounts = session.accounts || [];
   const target = accounts.find((a) => {
@@ -569,9 +481,7 @@ app.post('/api/tradelocker/select-account', async (req, res) => {
     return false;
   });
 
-  if (!target) {
-    return res.status(400).send('Account not found in this session');
-  }
+  if (!target) return res.status(400).send('Account not found in this session');
 
   session.accountId = String(target.id);
   session.accNum = Number(target.accNum);
@@ -582,11 +492,7 @@ app.post('/api/tradelocker/select-account', async (req, res) => {
 
   await db.setSession(sessionId, session);
 
-  res.json({
-    ok: true,
-    accountId: session.accountId,
-    accNum: session.accNum
-  });
+  res.json({ ok: true, accountId: session.accountId, accNum: session.accNum });
 });
 
 app.post('/api/tradelocker/order', async (req, res) => {
@@ -596,10 +502,7 @@ app.post('/api/tradelocker/order', async (req, res) => {
 
   try {
     const entryPrice = getPrice(symbol) || 0;
-    
-    if (entryPrice === 0) {
-      return res.status(400).json({ error: "Market data unavailable for symbol" });
-    }
+    if (entryPrice === 0) return res.status(400).json({ error: "Market data unavailable for symbol" });
 
     const positionId = `sim-${Date.now()}`;
     const newPosition = {
@@ -646,13 +549,8 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       fetch(`${baseUrl}/trade/accounts/${accountId}/positions`, { headers })
     ]);
 
-    if (!stateRes.ok) {
-      return res.status(stateRes.status).send('Failed to fetch account state');
-    }
-
-    if (!positionsRes.ok) {
-      return res.status(positionsRes.status).send('Failed to fetch open positions');
-    }
+    if (!stateRes.ok) return res.status(stateRes.status).send('Failed to fetch account state');
+    if (!positionsRes.ok) return res.status(positionsRes.status).send('Failed to fetch open positions');
 
     const stateJson = await stateRes.json();
     const positionsJson = await positionsRes.json();
@@ -661,9 +559,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     const equity = Number(stateJson.equity || stateJson.accountEquity || balance);
     const marginUsed = Number(stateJson.marginUsed || stateJson.margin || 0);
 
-    const rawPositions = Array.isArray(positionsJson)
-      ? positionsJson
-      : positionsJson.positions || positionsJson.data || [];
+    const rawPositions = Array.isArray(positionsJson) ? positionsJson : positionsJson.positions || positionsJson.data || [];
 
     const realPositions = rawPositions.map((p) => {
       const sideRaw = (p.side || p.direction || '').toString().toLowerCase();
@@ -675,19 +571,9 @@ app.get('/api/tradelocker/overview', async (req, res) => {
       const pnl = Number(p.unrealizedPnL || p.pnl || 0);
       const openTime = p.openTime || p.created || new Date().toISOString();
 
-      return {
-        id: String(p.positionId || p.id),
-        symbol,
-        side,
-        size,
-        entryPrice,
-        currentPrice,
-        pnl,
-        openTime
-      };
+      return { id: String(p.positionId || p.id), symbol, side, size, entryPrice, currentPrice, pnl, openTime };
     });
 
-    // === SIMULATION MERGE ===
     const simulatedPositions = session.simulatedPositions || [];
     const updatedSimulated = simulatedPositions.map(pos => {
        const marketPrice = getPrice(pos.symbol) || pos.currentPrice;
@@ -699,46 +585,28 @@ app.get('/api/tradelocker/overview', async (req, res) => {
        else if (pos.symbol.includes('BTC')) pnl *= 1; 
        else pnl *= 10000; 
        
-       return {
-         ...pos,
-         currentPrice: marketPrice,
-         pnl
-       };
+       return { ...pos, currentPrice: marketPrice, pnl };
     });
 
     session.simulatedPositions = updatedSimulated;
-
     const positions = [...realPositions, ...updatedSimulated];
 
-    // === DEEP READINESS: State Diffing ===
-    
     const prevPositionsById = session.lastPositionsById || {};
     const currentPositionsById = {};
     const events = [];
 
-    // 1. Detect Opened Positions
     for (const pos of positions) {
       currentPositionsById[pos.id] = pos;
       if (!prevPositionsById[pos.id]) {
         events.push({
           type: 'ORDER_FILLED',
           timestamp: new Date().toISOString(),
-          data: {
-            id: pos.id,
-            symbol: pos.symbol,
-            side: pos.side,
-            pnl: 0,
-            size: pos.size,
-            entryPrice: pos.entryPrice
-          }
+          data: { id: pos.id, symbol: pos.symbol, side: pos.side, pnl: 0, size: pos.size, entryPrice: pos.entryPrice }
         });
       }
     }
 
-    // 2. Detect Closed Positions
-    const closedIds = Object.keys(prevPositionsById).filter(
-      (id) => !currentPositionsById[id]
-    );
+    const closedIds = Object.keys(prevPositionsById).filter((id) => !currentPositionsById[id]);
 
     if (closedIds.length) {
       const journalList = await db.getJournal(sessionId);
@@ -759,17 +627,10 @@ app.get('/api/tradelocker/overview', async (req, res) => {
         if (matchedEntryIndex !== -1) {
           const entry = journalList[matchedEntryIndex];
           if (entry.outcome === 'Open') {
-            journalList[matchedEntryIndex] = {
-              ...entry,
-              outcome,
-              finalPnl,
-              closedAt: new Date().toISOString(),
-              pnl: finalPnl 
-            };
+            journalList[matchedEntryIndex] = { ...entry, outcome, finalPnl, closedAt: new Date().toISOString(), pnl: finalPnl };
             journalChanged = true;
           }
         } else {
-          // GHOST TRADE LOG
           const autoEntry = {
             id: `auto-${closedId}`,
             timestamp: new Date().toISOString(),
@@ -797,16 +658,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
         events.push({
           type: 'POSITION_CLOSED',
           timestamp: new Date().toISOString(),
-          data: {
-            id: closedId,
-            symbol: prev.symbol,
-            side: prev.side,
-            size: prev.size,
-            entryPrice: prev.entryPrice,
-            exitPrice: prev.currentPrice,
-            pnl: finalPnl,
-            reason: 'Closed on Broker'
-          }
+          data: { id: closedId, symbol: prev.symbol, side: prev.side, size: prev.size, entryPrice: prev.entryPrice, exitPrice: prev.currentPrice, pnl: finalPnl, reason: 'Closed on Broker' }
         });
       }
 
@@ -820,35 +672,21 @@ app.get('/api/tradelocker/overview', async (req, res) => {
     const simPnL = updatedSimulated.reduce((sum, p) => sum + p.pnl, 0);
     const adjustedEquity = equity + simPnL;
 
-    session.latestState = {
-      balance,
-      equity: adjustedEquity,
-      marginUsed
-    };
-    
+    session.latestState = { balance, equity: adjustedEquity, marginUsed };
     await db.setSession(sessionId, session);
 
-    const overview = {
-      isConnected: true,
-      balance,
-      equity: adjustedEquity,
-      marginUsed,
-      positions,
-      recentEvents: events
-    };
-
-    res.json(overview);
+    res.json({ isConnected: true, balance, equity: adjustedEquity, marginUsed, positions, recentEvents: events });
   } catch (err) {
     console.error('TradeLocker overview fatal error', err);
     res.status(500).send('Internal error while fetching broker data');
   }
 });
 
+// --- JOURNAL ROUTES ---
 app.get('/api/journal/entries', async (req, res) => {
   const sessionId = req.query.sessionId;
   const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
-
   const entries = await db.getJournal(sessionId);
   res.json(entries);
 });
@@ -858,28 +696,13 @@ app.post('/api/journal/entry', async (req, res) => {
   const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
-  if (!entry || !entry.note) {
-    return res.status(400).send('Missing entry or note');
-  }
+  if (!entry || !entry.note) return res.status(400).send('Missing entry or note');
 
   const id = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-
-  const entryType =
-    entry.entryType === 'Post-Trade' || entry.entryType === 'SessionReview'
-      ? entry.entryType
-      : 'Pre-Trade';
-
-  const validOutcomes = ['Open', 'Win', 'Loss', 'BreakEven'];
-  const requestedOutcome = entry.outcome;
-  let outcome =
-    typeof requestedOutcome === 'string' && validOutcomes.includes(requestedOutcome)
-      ? requestedOutcome
-      : 'Open';
-
-  const tags = Array.isArray(entry.tags)
-    ? entry.tags.map((t) => String(t)).filter((t) => t.trim().length > 0)
-    : [];
+  const entryType = entry.entryType === 'Post-Trade' || entry.entryType === 'SessionReview' ? entry.entryType : 'Pre-Trade';
+  const outcome = ['Open', 'Win', 'Loss', 'BreakEven'].includes(entry.outcome) ? entry.outcome : 'Open';
+  const tags = Array.isArray(entry.tags) ? entry.tags.map((t) => String(t)).filter((t) => t.trim().length > 0) : [];
 
   const stored = {
     id,
@@ -897,7 +720,7 @@ app.post('/api/journal/entry', async (req, res) => {
     finalPnl: entry.pnl || null,
     pnl: entry.pnl || null,
     closedAt: null,
-    ...entry // Spread other fields
+    ...entry 
   };
 
   const list = await db.getJournal(sessionId);
@@ -910,20 +733,15 @@ app.post('/api/journal/entry', async (req, res) => {
 app.patch('/api/journal/entry/:id', async (req, res) => {
   const { sessionId, updates } = req.body || {};
   const entryId = req.params.id;
-
   const session = await getSessionOrThrow(sessionId, res);
   if (!session) return;
 
   const list = await db.getJournal(sessionId);
   const idx = list.findIndex((e) => e.id === entryId);
-
-  if (idx === -1) {
-    return res.status(404).send('Journal entry not found');
-  }
+  if (idx === -1) return res.status(404).send('Journal entry not found');
 
   const current = list[idx];
   const next = { ...current, ...updates };
-
   list[idx] = next;
   await db.setJournal(sessionId, list);
 
@@ -935,15 +753,11 @@ app.get('/api/health', (_req, res) => {
 });
 
 const clientDistPath = path.join(__dirname, '..', 'dist');
-
 if (fs.existsSync(clientDistPath)) {
   console.log(`[Server] Serving static files from ${clientDistPath}`);
   app.use(express.static(clientDistPath));
-
   app.get('*', (req, res) => {
-    if (req.path.startsWith('/api')) {
-      return res.status(404).json({ error: 'API endpoint not found' });
-    }
+    if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API endpoint not found' });
     res.sendFile(path.join(clientDistPath, 'index.html'));
   });
 } else {
