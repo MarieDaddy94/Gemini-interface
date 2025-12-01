@@ -85,6 +85,10 @@ function extractJournalFromText(rawText, agentCfg) {
       summary: String(obj.summary || "").slice(0, 2000),
       sentiment: obj.sentiment || "neutral",
       tags: Array.isArray(obj.tags) ? obj.tags.map(String) : [],
+      // Optional mapping fields
+      symbol: obj.symbol,
+      direction: obj.direction,
+      outcome: obj.outcome
     };
     return { cleanText: main, journalDraft: draft };
   } catch (err) {
@@ -99,7 +103,66 @@ function extractJournalFromText(rawText, agentCfg) {
 /**
  * Build the instruction the model sees (system-style).
  */
-function buildSystemPrompt(agentCfg) {
+function buildSystemPrompt(agentCfg, journalMode) {
+  // Special handling for Journal Coach based on mode
+  if (agentCfg.id === 'journal_coach') {
+    const modeInstruction =
+      journalMode === "post_trade"
+        ? `
+MODE: POST-TRADE REVIEW
+- The trade ALREADY HAPPENED.
+- Focus on what actually happened, execution quality, risk, management, and specific lessons.
+- You MUST set "outcome" to "Win", "Loss", or "BE" (never "Open").
+- Highlight concrete rules the trader should KEEP doing or STOP doing next time.
+`
+        : `
+MODE: LIVE / PRE-TRADE
+- The trade may be planned or in progress.
+- "outcome" can be "Open" if the result is not known yet.
+- Focus on scenario planning, if/then rules, and what would make this a valid or invalid setup.
+`;
+    
+    // Override the generic journal style with the mode specific one for the coach
+    return [
+      `You are Journal Coach, a trading psychologist + journaling assistant.`,
+      `GOAL:\nTurn the user's message and chart context into a clean, structured TRADING JOURNAL ENTRY.`,
+      modeInstruction,
+      `
+GLOBAL RULES (IMPORTANT):
+- Do NOT talk about emotions or feelings. No mentions of fear, confidence, tilt, frustration, etc.
+- Focus ONLY on structure, execution, risk, edge, and specific lessons.
+- Use short, powerful tags that help later filtering.
+- If it is unclear, make your best reasonable guess from the message.
+
+Direction logic:
+- Long/buy bias → "long"
+- Short/sell bias → "short"
+- If truly unclear → null
+
+Sentiment logic:
+- Upside / long bias → "Bullish"
+- Downside / short bias → "Bearish"
+- Otherwise → "Neutral"
+      `,
+      `
+At the very end of your answer, output exactly one line starting with:
+JOURNAL_JSON: { ... }
+
+The JSON object MUST contain:
+- "title": short string
+- "summary": string
+- "sentiment": one of ["bullish","bearish","neutral","mixed"]
+- "tags": array of strings
+- "symbol": string (e.g. "US30")
+- "direction": "long" | "short" | null
+- "outcome": "Open" | "Win" | "Loss" | "BE"
+
+Do NOT explain the JSON. Do NOT put it in a code block.
+      `.trim()
+    ].join("\n\n");
+  }
+
+  // Default logic for other agents
   return [
     GLOBAL_ANALYST_SYSTEM_PROMPT,
     `You are the "${agentCfg.name}" agent. Your specialization:`,
@@ -113,6 +176,9 @@ The JSON object MUST contain:
 - "summary": string
 - "sentiment": one of ["bullish","bearish","neutral","mixed"]
 - "tags": array of strings
+- "symbol": string (optional)
+- "direction": "long" | "short" (optional)
+- "outcome": string (optional)
 
 Do NOT explain the JSON. Do NOT put it in a code block.
     `.trim(),
@@ -183,14 +249,14 @@ function buildGeminiParts({ userMessage, chartContext, screenshot }) {
 /**
  * Run one agent using OpenAI.
  */
-async function runOpenAIAgent(agentCfg, { userMessage, chartContext, screenshot }) {
+async function runOpenAIAgent(agentCfg, { userMessage, chartContext, screenshot, journalMode }) {
   const openai = await getOpenAI();
   if (!openai) {
     // Return a dummy response if no key, to prevent crash
     return { text: "Error: OpenAI API key is not configured.", journalDraft: null };
   }
 
-  const systemPrompt = buildSystemPrompt(agentCfg);
+  const systemPrompt = buildSystemPrompt(agentCfg, journalMode);
   const messages = [
     { role: "system", content: systemPrompt },
     buildOpenAIUserMessage({ userMessage, chartContext, screenshot }),
@@ -219,7 +285,7 @@ async function runOpenAIAgent(agentCfg, { userMessage, chartContext, screenshot 
 /**
  * Run one agent using Gemini.
  */
-async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot }) {
+async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot, journalMode }) {
   const gemini = await getGemini();
   if (!gemini) {
     return { text: "Error: Gemini API key is not configured.", journalDraft: null };
@@ -228,7 +294,7 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot 
   try {
     const model = gemini.getGenerativeModel({
       model: agentCfg.model,
-      systemInstruction: buildSystemPrompt(agentCfg),
+      systemInstruction: buildSystemPrompt(agentCfg, journalMode),
     });
 
     const parts = buildGeminiParts({ userMessage, chartContext, screenshot });
@@ -253,9 +319,10 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot 
  * @param {string}   opts.userMessage
  * @param {string}   [opts.chartContext]
  * @param {string}   [opts.screenshot]  data URL or undefined
+ * @param {string}   [opts.journalMode] "live" or "post_trade"
  */
 async function runAgentsTurn(opts) {
-  const { agentIds, userMessage, chartContext = "", screenshot = null } = opts;
+  const { agentIds, userMessage, chartContext = "", screenshot = null, journalMode = "live" } = opts;
 
   const results = await Promise.all(
     agentIds.map(async (id) => {
@@ -269,7 +336,7 @@ async function runAgentsTurn(opts) {
       }
 
       try {
-        const payload = { userMessage, chartContext, screenshot };
+        const payload = { userMessage, chartContext, screenshot, journalMode };
         let llmResult;
 
         if (agentCfg.provider === "openai") {

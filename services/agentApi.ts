@@ -2,6 +2,8 @@
 
 export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_coach";
 
+export type JournalMode = "live" | "post_trade";
+
 export interface AgentJournalDraft {
   agentId: AgentId | string;
   agentName: string;
@@ -38,6 +40,7 @@ export async function fetchAgentInsights(params: {
   userMessage: string;
   chartContext?: string;
   screenshot?: string | null;
+  journalMode?: JournalMode;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/chat`, {
     method: "POST",
@@ -49,6 +52,7 @@ export async function fetchAgentInsights(params: {
       userMessage: params.userMessage,
       chartContext: params.chartContext || "",
       screenshot: params.screenshot || null,
+      journalMode: params.journalMode || "live",
     }),
   });
 

@@ -1,194 +1,137 @@
-
-import React from "react";
-import {
-  useJournal,
-  JournalEntry,
-  JournalSource,
-} from "../context/JournalContext";
-
-const formatDateTime = (iso: string) => {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString(undefined, {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-};
-
-const formatNumber = (value?: number, decimals: number = 2) => {
-  if (typeof value !== "number" || Number.isNaN(value)) return "";
-  return value.toFixed(decimals);
-};
-
-const shorten = (text?: string, maxLen: number = 80) => {
-  if (!text) return "";
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen - 3) + "...";
-};
-
-const getPnlClass = (pnl?: number) => {
-  if (typeof pnl !== "number") return "";
-  if (pnl > 0) return "pnl-positive";
-  if (pnl < 0) return "pnl-negative";
-  return "";
-};
-
-const getRClass = (r?: number) => {
-  if (typeof r !== "number") return "";
-  if (r >= 2) return "r-strong";
-  if (r > 0) return "r-positive";
-  if (r < 0) return "r-negative";
-  return "";
-};
-
-const getDirectionBadge = (entry: JournalEntry) => {
-  if (!entry.direction) return null;
-  return (
-    <span
-      className={
-        "direction-badge " +
-        (entry.direction === "long"
-          ? "direction-long"
-          : "direction-short")
-      }
-    >
-      {entry.direction === "long" ? "LONG" : "SHORT"}
-    </span>
-  );
-};
-
-const getAgentPillClass = (agentId?: string) => {
-  switch (agentId) {
-    case "quant-bot":
-      return "agent-pill agent-quant";
-    case "pattern-seer":
-      return "agent-pill agent-pattern";
-    case "risk-guardian":
-      return "agent-pill agent-risk";
-    case "macro-mind":
-      return "agent-pill agent-macro";
-    case "trade-coach":
-      return "agent-pill agent-coach";
-    case "quant":
-      return "agent-pill agent-quant";
-    case "pattern":
-      return "agent-pill agent-pattern";
-    case "risk":
-      return "agent-pill agent-risk";
-    case "macro":
-      return "agent-pill agent-macro";
-    case "coach":
-      return "agent-pill agent-coach";
-    default:
-      return "agent-pill";
-  }
-};
-
-const formatSource = (source: JournalSource) => {
-  if (source === "ai") return "AI";
-  if (source === "broker") return "BRK";
-  return "User";
-};
+import React, { useState } from "react";
+import { useJournal, JournalEntry } from "../context/JournalContext";
 
 const JournalPanel: React.FC = () => {
   const { entries } = useJournal();
+  const [showJournalCoachOnly, setShowJournalCoachOnly] = useState(false);
+
+  const filteredEntries = showJournalCoachOnly
+    ? entries.filter((e) => e.agentId === "journal_coach")
+    : entries;
+
+  const formatTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return "";
+    }
+  };
 
   return (
-    <div className="trading-journal-panel w-full flex flex-col bg-[#050711] border-t border-[#151822] p-3 h-64 font-sans text-xs">
-      <div className="journal-header flex justify-between items-baseline mb-2">
-        <div className="journal-header-left">
-          <h3 className="m-0 text-sm font-semibold text-gray-200">Trading Journal</h3>
-          <span className="journal-subtitle block text-[11px] text-gray-500">
-            AI agents + broker trades logged in one place
+    <div className="flex flex-col h-64 bg-[#050711] border-t border-[#151822] font-sans text-xs">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#151822]">
+        <div className="flex flex-col">
+          <span className="text-sm font-semibold text-gray-200">Trading Journal</span>
+          <span className="text-[11px] text-gray-500">
+            {filteredEntries.length} entries {showJournalCoachOnly ? "(filtered)" : ""}
           </span>
         </div>
-        <div className="journal-header-right">
-          <span className="journal-count text-[11px] text-gray-500">
-            {entries.length} entries
+
+        <div className="flex items-center gap-2 text-gray-400">
+          <span className="text-[10px] uppercase tracking-wide opacity-70">
+            Filter
           </span>
+          <button
+            type="button"
+            onClick={() => setShowJournalCoachOnly((v) => !v)}
+            className={[
+              "px-2 py-1 rounded-full border text-[10px] font-medium transition-colors",
+              showJournalCoachOnly
+                ? "border-amber-500/50 bg-amber-500/10 text-amber-300"
+                : "border-[#2a2e39] bg-[#131722] text-gray-400 hover:bg-[#1e222d]",
+            ].join(" ")}
+          >
+            {showJournalCoachOnly ? "Journal Coach • ON" : "Journal Coach Only"}
+          </button>
         </div>
       </div>
 
-      {entries.length === 0 ? (
-        <div className="journal-empty flex-1 flex items-center justify-center italic text-gray-600">
-          No journal entries yet. As you trade and talk to your AI team, structured logs will start showing up here.
-        </div>
-      ) : (
-        <div className="journal-table-wrapper flex-1 overflow-auto">
-          <table className="journal-table w-full border-collapse table-fixed">
-            <thead className="sticky top-0 z-10">
-              <tr>
-                <th className="w-24">Date</th>
-                <th className="w-16">Symbol</th>
-                <th className="w-12">TF</th>
-                <th className="w-16">Session</th>
-                <th className="w-16">Dir</th>
-                <th className="w-14">Size</th>
-                <th className="w-20">PnL</th>
-                <th className="w-12">R</th>
-                <th className="w-32">Playbook</th>
-                <th>Notes</th>
-                <th className="w-24">Agent</th>
-                <th className="w-12">Src</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.map((entry) => {
-                const pnlClass = getPnlClass(entry.netPnl);
-                const rClass = getRClass(entry.rMultiple);
+      {/* Table header */}
+      <div className="grid grid-cols-[70px_60px_1.5fr_0.7fr_0.5fr_0.5fr_2.2fr] px-3 py-1 text-[11px] font-semibold text-gray-500 border-b border-[#151822] bg-[#0b0e17]">
+        <div>Time</div>
+        <div>Src</div>
+        <div>Playbook</div>
+        <div>Symbol</div>
+        <div>Dir</div>
+        <div>Res</div>
+        <div>Notes</div>
+      </div>
 
-                const notes =
-                  entry.postTradeNotes ??
-                  entry.preTradePlan ??
-                  entry.note ??
-                  "";
+      {/* Rows */}
+      <div className="flex-1 overflow-y-auto">
+        {filteredEntries.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-[11px] text-gray-600 italic">
+            {showJournalCoachOnly
+              ? "No Journal Coach entries yet. Switch to Post-Trade mode and chat to generate one."
+              : "No journal entries yet."}
+          </div>
+        ) : (
+          filteredEntries.map((entry) => (
+            <div
+              key={entry.id}
+              className="grid grid-cols-[70px_60px_1.5fr_0.7fr_0.5fr_0.5fr_2.2fr] px-3 py-1.5 border-b border-[#151822] hover:bg-[#131722] items-center"
+            >
+              {/* Time */}
+              <div className="text-[11px] text-gray-500 truncate">
+                {formatTime(entry.timestamp)}
+              </div>
 
-                return (
-                  <tr key={entry.id}>
-                    <td>{formatDateTime(entry.timestamp)}</td>
-                    <td>{entry.symbol ?? entry.focusSymbol ?? ""}</td>
-                    <td>{entry.timeframe ?? ""}</td>
-                    <td>{entry.session ?? ""}</td>
-                    <td>{getDirectionBadge(entry)}</td>
-                    <td>{formatNumber(entry.size, 2)}</td>
-                    <td className={pnlClass}>
-                      {entry.netPnl != null
-                        ? `${formatNumber(entry.netPnl, 2)} ${
-                            entry.currency ?? ""
-                          }`
-                        : ""}
-                    </td>
-                    <td className={rClass}>
-                      {entry.rMultiple != null
-                        ? formatNumber(entry.rMultiple, 2)
-                        : ""}
-                    </td>
-                    <td>{entry.playbook ?? ""}</td>
-                    <td>{shorten(notes, 70)}</td>
-                    <td>
-                      {entry.agentName && (
-                        <span
-                          className={getAgentPillClass(entry.agentId)}
-                        >
-                          {entry.agentName}
-                        </span>
-                      )}
-                    </td>
-                    <td className="journal-source text-center">
-                      {formatSource(entry.source)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+              {/* Source (AI/manual) */}
+              <div className="text-[10px]">
+                {entry.source === "ai" ? (
+                  <span className="px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-300 border border-blue-500/30">
+                    AI
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 rounded-full bg-gray-700/50 text-gray-300 border border-gray-600/30">
+                    Manual
+                  </span>
+                )}
+              </div>
+
+              {/* Playbook */}
+              <div className="truncate text-gray-300" title={entry.playbook}>
+                {entry.playbook || "-"}
+              </div>
+
+              {/* Symbol */}
+              <div className="text-gray-200 truncate">{entry.symbol || entry.focusSymbol || "-"}</div>
+
+              {/* Direction */}
+              <div className="text-[11px]">
+                {entry.direction ? (
+                  <span
+                    className={`font-medium ${
+                      entry.direction === "long"
+                        ? "text-[#4ade80]"
+                        : "text-[#f97373]"
+                    }`}
+                  >
+                    {entry.direction === "long" ? "Long" : "Short"}
+                  </span>
+                ) : (
+                  <span className="text-gray-600">-</span>
+                )}
+              </div>
+
+              {/* Outcome */}
+              <div className={`text-[11px] font-medium truncate
+                  ${entry.outcome === 'Win' ? 'text-[#4ade80]' : 
+                    entry.outcome === 'Loss' ? 'text-[#f97373]' : 
+                    entry.outcome === 'BreakEven' ? 'text-yellow-400' : 'text-gray-400'
+                  }`}>
+                {entry.outcome || "Open"}
+              </div>
+
+              {/* Notes (summary) */}
+              <div className="truncate text-gray-400" title={entry.note}>
+                {entry.note || ""}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
+import { fetchAgentInsights, AgentId, AgentJournalDraft, JournalMode } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 import { inferTradeMetaFromText } from '../utils/journalInference';
 
@@ -42,6 +42,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [journalMode, setJournalMode] = useState<JournalMode>("live");
 
   // Vision / File State
   const [isVisionActive, setIsVisionActive] = useState(false);
@@ -176,7 +177,8 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         agentIds: ACTIVE_AGENT_IDS,
         userMessage: userText,
         chartContext,
-        screenshot
+        screenshot,
+        journalMode // Pass the mode
       });
 
       // 3. Update Chat with responses
@@ -224,7 +226,11 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           if (fallbackSymbol === 'Auto') { /* handle edge case if autoFocusSymbol is literally "Auto" */ }
           
           const sentiment = draft.sentiment || inferred.sentiment || "Neutral";
-          const outcome = draft.outcome || inferred.outcome || "Open";
+          
+          // Smart default outcome based on mode
+          const defaultOutcome = journalMode === 'post_trade' ? 'Win' : 'Open';
+          const outcome = draft.outcome || inferred.outcome || defaultOutcome;
+
           const direction = draft.direction || inferred.direction || undefined;
           
           const effectiveAgentId = (draft.agentId || insight.agentId) as string;
@@ -310,9 +316,23 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
           <div>
             <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
-            <p className="text-[10px] text-gray-400 font-medium">
-              QuantBot · TrendMaster · Coach
-            </p>
+            <div className="flex items-center gap-2 mt-0.5">
+               {/* Mode Switch */}
+               <div className="flex bg-gray-100 rounded p-0.5">
+                  <button 
+                    onClick={() => setJournalMode('live')}
+                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded transition-all ${journalMode === 'live' ? 'bg-white shadow text-green-600' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    Live
+                  </button>
+                  <button 
+                    onClick={() => setJournalMode('post_trade')}
+                    className={`px-1.5 py-0.5 text-[10px] font-semibold rounded transition-all ${journalMode === 'post_trade' ? 'bg-white shadow text-amber-600' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    Post-Trade
+                  </button>
+               </div>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-1">
