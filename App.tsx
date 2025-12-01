@@ -18,7 +18,9 @@ import {
   BrokerAccountInfo,
   TradeLockerAccountSummary,
   PlaybookReviewPayload,
-  BrokerEvent
+  BrokerEvent,
+  ChartConfig,
+  MarketTick
 } from './types';
 import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
 import {
@@ -95,10 +97,15 @@ const Dashboard: React.FC = () => {
   const [activeAccount, setActiveAccount] = useState<TradeLockerAccountSummary | null>(null);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   
+  // Real-time Data State
+  const [marketData, setMarketData] = useState<Record<string, MarketTick>>({});
+  const [charts, setCharts] = useState<ChartConfig[]>(MOCK_CHARTS);
+  const wsRef = useRef<WebSocket | null>(null);
+
   // Toasts
   const [toast, setToast] = useState<{msg: string, type: 'success'|'info'}|null>(null);
 
-  // Chart
+  // Chart State
   const [chartSymbol, setChartSymbol] = useState<string>('US30');
   const [chartTimeframe, setChartTimeframe] = useState<string>('15m');
   const [autoFocusSymbol, setAutoFocusSymbol] = useState<FocusSymbol>('Auto');
@@ -119,6 +126,68 @@ const Dashboard: React.FC = () => {
       return () => clearTimeout(t);
     }
   }, [toast]);
+
+  // WEBSOCKET: Real-time Data Feed
+  useEffect(() => {
+    // Only connect if not already connected
+    if (wsRef.current) return;
+
+    // Use localhost:4000 for backend WS
+    const wsUrl = `ws://localhost:4000/ws`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log('Connected to Real-time Market Data Feed');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'SNAPSHOT' || msg.type === 'UPDATE') {
+          const updates = msg.data as Record<string, MarketTick>;
+          
+          setMarketData(prev => ({ ...prev, ...updates }));
+
+          // Update Charts in real-time
+          setCharts(prevCharts => {
+            return prevCharts.map(chart => {
+              const tick = updates[chart.symbol];
+              if (!tick) return chart;
+
+              // Clone data array
+              const newData = [...chart.data];
+              const lastPoint = newData[newData.length - 1];
+              
+              // Update last candle or create new one logic (Simplified: just update last for demo)
+              const updatedPoint = {
+                ...lastPoint,
+                value: tick.price,
+                close: tick.price,
+                high: Math.max(lastPoint.high, tick.price),
+                low: Math.min(lastPoint.low, tick.price),
+                time: lastPoint.time // keep time for now
+              };
+              newData[newData.length - 1] = updatedPoint;
+
+              return { ...chart, data: newData };
+            });
+          });
+        }
+      } catch (err) {
+        console.error('WS parse error', err);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('Market Data Feed Disconnected');
+      wsRef.current = null;
+    };
+
+    return () => {
+      if (ws.readyState === 1) ws.close();
+    };
+  }, []);
 
   // POLL BROKER DATA & HANDLE EVENTS
   useEffect(() => {
@@ -243,14 +312,19 @@ const Dashboard: React.FC = () => {
     if (timeframe) setChartTimeframe(timeframe);
   };
 
+  // Build Rich AI Context with Real-Time Data
   const marketContext = useMemo(() => {
-    const baseContext = MOCK_CHARTS.map((c) => {
-      const last = c.data[c.data.length - 1];
-      const start = c.data[0];
-      const change = (((last.value - start.value) / start.value) * 100).toFixed(2);
-      return `${c.symbol}: ${last.value.toFixed(2)} (${change}%)`;
-    }).join(', ');
+    // 1. Live Market Data Context
+    const liveDataStr = Object.values(marketData)
+      .map(tick => 
+        `${tick.symbol}: ${tick.price.toFixed(2)} ` +
+        `(${tick.change >= 0 ? '+' : ''}${tick.changePercent.toFixed(2)}%) ` +
+        `| RSI(14): ${tick.rsi?.toFixed(1) || '-'} ` +
+        `| SMA(20): ${tick.sma?.toFixed(2) || '-'}`
+      )
+      .join('\n');
 
+    // 2. Broker Data Context
     if (brokerData && brokerData.isConnected) {
       const positionsStr = brokerData.positions
         .map((p) => `${p.side.toUpperCase()} ${p.size} ${p.symbol} @ ${p.entryPrice} (PnL: $${p.pnl})`)
@@ -262,12 +336,18 @@ const Dashboard: React.FC = () => {
         Equity: $${brokerData.equity.toFixed(2)}. Balance: $${brokerData.balance.toFixed(2)}.
         ${focusLine}
         Open Positions: [${positionsStr || 'None'}].
-        Market Prices (Reference): ${baseContext}
+        
+        LIVE MARKET FEED:
+        ${liveDataStr || 'Waiting for tick data...'}
       `;
     }
 
-    return `Market Prices (Reference): ${baseContext}`;
-  }, [brokerData, autoFocusSymbol]);
+    // 3. Simulated Context (No Broker)
+    return `
+      LIVE MARKET FEED (Simulated):
+      ${liveDataStr || 'Waiting for tick data...'}
+    `;
+  }, [brokerData, autoFocusSymbol, marketData]);
 
   const openPnl = brokerData && brokerData.isConnected ? brokerData.equity - brokerData.balance : 0;
 
@@ -356,8 +436,8 @@ const Dashboard: React.FC = () => {
             )}
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-1"></div>
             <div className="flex items-center gap-2 text-xs bg-[#2a2e39] py-1 px-2 rounded text-[#d1d4dc]">
-              <span className={`w-2 h-2 rounded-full ${brokerSessionId ? 'bg-green-500 animate-pulse' : 'bg-gray-500'}`}></span>
-              {brokerSessionId ? 'Live Data' : 'System Idle'}
+              <span className={`w-2 h-2 rounded-full ${wsRef.current ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+              {wsRef.current ? 'Live Feed' : 'Offline'}
             </div>
             <div className="w-8 h-8 rounded-full bg-[#2a2e39] flex items-center justify-center text-xs border border-[#2a2e39] hover:border-[#2962ff] cursor-pointer transition-colors">JD</div>
           </div>

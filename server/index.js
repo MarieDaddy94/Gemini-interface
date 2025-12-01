@@ -1,6 +1,6 @@
 
-
 const express = require('express');
+const http = require('http'); // Required for WS
 const cors = require('cors');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -11,10 +11,15 @@ const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
 // New Multi-Agent Router
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
+// Import Market Data Service
+const { setupMarketData } = require('./marketData');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
+
+// Create HTTP server explicitly to attach WS
+const server = http.createServer(app);
 
 // In-memory session store: sessionId -> TradeLocker session info + accounts
 const sessions = new Map();
@@ -646,7 +651,10 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, sessions: sessions.size });
 });
 
-app.listen(PORT, () => {
-  console.log(`TradeLocker proxy API & Playbook Logger listening on http://localhost:${PORT}`);
-  console.log(`Playbook log file: ${LOG_FILE}`);
+// Setup WebSocket for Real-time Market Data
+setupMarketData(server);
+
+// Start Server (using server.listen instead of app.listen for WS support)
+server.listen(PORT, () => {
+  console.log(`TradeLocker proxy API & Market Feed listening on http://localhost:${PORT}`);
 });

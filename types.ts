@@ -49,6 +49,16 @@ export interface ChartConfig {
   data: ChartDataPoint[];
 }
 
+export interface MarketTick {
+  symbol: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  rsi?: number;
+  sma?: number;
+  timestamp: string;
+}
+
 // --- TradeLocker / Broker Types ---
 
 export interface TradeLockerCredentials {
