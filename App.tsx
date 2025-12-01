@@ -1,5 +1,3 @@
-
-
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -7,6 +5,7 @@ import WebBrowser from './components/WebBrowser';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
+import AnalyticsPanel from './components/AnalyticsPanel';
 import { JournalProvider } from './context/JournalContext';
 import { TradeEventsProvider } from './context/TradeEventsContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
@@ -27,7 +26,7 @@ import {
   FocusSymbol
 } from './symbolMap';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'screeners';
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -91,7 +90,7 @@ const App: React.FC = () => {
     { id: 'terminal', label: 'Terminal' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
-    { id: 'screeners', label: 'Screeners' },
+    { id: 'analytics', label: 'Analytics' },
   ];
 
   // Broker State
@@ -449,9 +448,9 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {activeTab === 'screeners' && (
-            <div className="flex-1 min-h-0 flex items-center justify-center text-sm text-gray-400">
-              Screeners view coming soon.
+          {activeTab === 'analytics' && (
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <AnalyticsPanel />
             </div>
           )}
         </main>
