@@ -641,3 +641,9 @@ export interface AutopilotExecuteResponse {
   mode: AutopilotMode;
   result: AutopilotExecuteResult;
 }
+
+// -----------------------------------------
+// Autopilot / Risk Verdict
+// -----------------------------------------
+
+export type RiskVerdict = 'ALLOW' | 'ALLOW_WITH_CAUTION' | 'BLOCK' | 'UNKNOWN';

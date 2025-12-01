@@ -1,4 +1,5 @@
 
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -32,7 +33,8 @@ import {
   BrokerEvent,
   ChartConfig,
   MarketTick,
-  AutopilotCommand
+  AutopilotCommand,
+  RiskVerdict
 } from './types';
 import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
 import {
@@ -129,6 +131,8 @@ const Dashboard: React.FC = () => {
 
   // Autopilot Command State (Shared between RoundTable and Autopilot Panel)
   const [agentAutopilotCommand, setAgentAutopilotCommand] = useState<AutopilotCommand | null>(null);
+  const [agentRiskVerdict, setAgentRiskVerdict] = useState<RiskVerdict | null>(null);
+  const [agentRiskComment, setAgentRiskComment] = useState<string | null>(null);
 
   const effectiveJournalSessionId = brokerSessionId || journalSessionId;
   const chatOverlayRef = useRef<ChatOverlayHandle | null>(null);
@@ -450,7 +454,11 @@ const Dashboard: React.FC = () => {
           {/* Autopilot Tab - Updated for new Execution Panel */}
           {activeTab === 'autopilot' && (
             <div className="flex-1 min-h-0 h-full">
-               <AutopilotPanel agentProposedCommand={agentAutopilotCommand} />
+               <AutopilotPanel 
+                 agentProposedCommand={agentAutopilotCommand}
+                 agentRiskVerdict={agentRiskVerdict}
+                 agentRiskComment={agentRiskComment}
+               />
             </div>
           )}
           
@@ -467,8 +475,12 @@ const Dashboard: React.FC = () => {
                </div>
                <div className="flex-1 overflow-hidden flex flex-col">
                   <div className="flex-1 min-h-0 flex flex-col">
-                     <RoundTablePanel onCommandProposed={(cmd) => {
+                     <RoundTablePanel onCommandProposed={(cmd, risk) => {
                        setAgentAutopilotCommand(cmd);
+                       if (risk) {
+                         setAgentRiskVerdict(risk.verdict);
+                         setAgentRiskComment(risk.comment);
+                       }
                        if (cmd) setAutopilotHasNew(true);
                      }} />
                   </div>

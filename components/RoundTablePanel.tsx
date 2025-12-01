@@ -2,10 +2,13 @@
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
 import { useRoundTableAutopilotPlan } from '../hooks/useRoundTableAutopilotPlan';
-import { AutopilotCommand } from '../types';
+import { AutopilotCommand, RiskVerdict } from '../types';
 
 interface RoundTablePanelProps {
-  onCommandProposed?: (cmd: AutopilotCommand | null) => void;
+  onCommandProposed?: (
+    cmd: AutopilotCommand | null, 
+    risk?: { verdict: RiskVerdict; comment: string | null }
+  ) => void;
 }
 
 const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) => {
@@ -23,7 +26,7 @@ const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) 
       });
       
       if (onCommandProposed) {
-        onCommandProposed(response.autopilotCommand);
+        onCommandProposed(response.autopilotCommand, response.autopilotCommandRisk);
       }
     } catch (err) {
       // Error is handled by hook state

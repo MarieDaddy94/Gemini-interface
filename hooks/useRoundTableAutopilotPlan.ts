@@ -2,7 +2,7 @@
 // hooks/useRoundTableAutopilotPlan.ts
 
 import { useCallback, useState } from 'react';
-import { AutopilotCommand } from '../types';
+import { AutopilotCommand, RiskVerdict } from '../types';
 
 export interface RoundTableAgentMessage {
   id: string;
@@ -19,12 +19,21 @@ export interface RoundTableResult {
   executionNotes: string;
   riskNotes: string;
   agents: RoundTableAgentMessage[];
+  riskCommandComment?: string | null;
+  riskCommandVerdict?: RiskVerdict;
+}
+
+export interface AutopilotCommandRisk {
+  verdict: RiskVerdict;
+  comment: string | null;
+  summary: string | null;
 }
 
 export interface RoundTableAutopilotResponse {
   ok: boolean;
   roundTable: RoundTableResult;
   autopilotCommand: AutopilotCommand | null;
+  autopilotCommandRisk: AutopilotCommandRisk;
 }
 
 const API_BASE_URL =

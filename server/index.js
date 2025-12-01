@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -586,8 +587,15 @@ app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
         bias: result.bias,
         executionNotes: result.executionNotes,
         riskNotes: result.riskNotes,
+        riskCommandComment: result.riskCommandComment || null,
+        riskCommandVerdict: result.riskCommandVerdict || 'UNKNOWN',
       },
       autopilotCommand: result.autopilotCommand || null,
+      autopilotCommandRisk: {
+        verdict: result.riskCommandVerdict || 'UNKNOWN',
+        comment: result.riskCommandComment || null,
+        summary: result.autopilotCommandSummary || null,
+      },
     });
   } catch (err) {
     console.error('[API] /api/autopilot/plan-from-roundtable error:', err);

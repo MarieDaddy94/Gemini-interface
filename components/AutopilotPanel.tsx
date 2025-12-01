@@ -1,4 +1,6 @@
 
+// client/src/components/AutopilotPanel.tsx
+
 import React, { useMemo, useState } from 'react';
 import {
   AutopilotMode,
@@ -6,29 +8,36 @@ import {
   AutopilotExecuteResponse,
   BrokerSnapshot,
   OpenTradeCommand,
+  RiskVerdict,
 } from '../types';
 import { useAutopilotExecute, useBrokerSnapshot } from '../hooks/useAutopilot';
 
 type PanelTab = 'compose' | 'status';
 
 interface AutopilotPanelProps {
-  // Optional: if you later let an agent propose a command,
-  // you can pass it in here and it will appear as the "Proposed trade".
+  // Proposed command from the AI round-table (Execution Bot)
   agentProposedCommand?: AutopilotCommand | null;
+  // Risk Manager verdict on that command
+  agentRiskVerdict?: RiskVerdict | null;
+  // Full Risk Manager comment on that command
+  agentRiskComment?: string | null;
 }
 
-const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand }) => {
+const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
+  agentProposedCommand,
+  agentRiskVerdict,
+  agentRiskComment,
+}) => {
   const [mode, setMode] = useState<AutopilotMode>('confirm');
   const [activeTab, setActiveTab] = useState<PanelTab>('compose');
 
   const [manualCommand, setManualCommand] = useState<AutopilotCommand | null>(() => {
-    // Default: simple US30 market buy template
     const defaultOpen: OpenTradeCommand = {
       type: 'open',
       tradableInstrumentId: 0,
       symbol: 'US30',
       side: 'BUY',
-      qty: 0.1,
+      qty: 1.0,
       entryType: 'market',
       price: undefined,
       stopPrice: undefined,
@@ -40,10 +49,18 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
     return defaultOpen;
   });
 
-  const { snapshot, loading: snapshotLoading, error: snapshotError } = useBrokerSnapshot(10_000);
+  const { snapshot, loading: snapshotLoading, error: snapshotError } =
+    useBrokerSnapshot(10_000);
   const { execute, state } = useAutopilotExecute();
 
-  const [pendingCommandSource, setPendingCommandSource] = useState<'manual' | 'agent'>('manual');
+  const [pendingCommandSource, setPendingCommandSource] =
+    useState<'manual' | 'agent'>('manual');
+
+  const [requireRiskAllowForAuto, setRequireRiskAllowForAuto] =
+    useState<boolean>(true);
+  const [riskGateMessage, setRiskGateMessage] = useState<string | null>(
+    null,
+  );
 
   const pendingCommand: AutopilotCommand | null = useMemo(() => {
     if (pendingCommandSource === 'agent' && agentProposedCommand) {
@@ -56,7 +73,10 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
     setMode(newMode);
   };
 
-  const handleManualNumberChange = (field: keyof OpenTradeCommand, value: string) => {
+  const handleManualNumberChange = (
+    field: keyof OpenTradeCommand,
+    value: string,
+  ) => {
     if (!manualCommand || manualCommand.type !== 'open') return;
     const n = value === '' ? NaN : Number(value);
     const updated: OpenTradeCommand = {
@@ -66,7 +86,10 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
     setManualCommand(updated);
   };
 
-  const handleManualStringChange = (field: keyof OpenTradeCommand, value: string) => {
+  const handleManualStringChange = (
+    field: keyof OpenTradeCommand,
+    value: string,
+  ) => {
     if (!manualCommand || manualCommand.type !== 'open') return;
     const updated: OpenTradeCommand = {
       ...manualCommand,
@@ -75,8 +98,46 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
     setManualCommand(updated);
   };
 
+  const riskVerdict: RiskVerdict = agentRiskVerdict ?? 'UNKNOWN';
+  const riskVerdictLabelMap: Record<RiskVerdict, string> = {
+    ALLOW: 'ALLOW',
+    ALLOW_WITH_CAUTION: 'ALLOW WITH CAUTION',
+    BLOCK: 'BLOCK',
+    UNKNOWN: 'UNKNOWN',
+  };
+  let riskVerdictColor = '#9e9e9e';
+  if (riskVerdict === 'ALLOW') riskVerdictColor = '#4caf50';
+  else if (riskVerdict === 'ALLOW_WITH_CAUTION')
+    riskVerdictColor = '#ff9800';
+  else if (riskVerdict === 'BLOCK') riskVerdictColor = '#f44336';
+
+  const gateAutoIfRiskBlocks = (modeToUse: AutopilotMode): boolean => {
+    const wantsAuto = modeToUse === 'auto';
+    if (!wantsAuto || !requireRiskAllowForAuto) {
+      setRiskGateMessage(null);
+      return true;
+    }
+
+    if (riskVerdict === 'ALLOW') {
+      setRiskGateMessage(null);
+      return true;
+    }
+
+    const msg =
+      riskVerdict === 'BLOCK'
+        ? 'Risk Manager verdict is BLOCK. Autopilot auto-execution is disabled while "Require Risk ALLOW" is on.'
+        : 'Risk Manager did not return a clear ALLOW verdict. Switch to Confirm mode, adjust the plan, or disable the Risk gate if you still want to auto-execute.';
+    setRiskGateMessage(msg);
+    setActiveTab('status');
+    return false;
+  };
+
   const handleExecute = async () => {
     if (!pendingCommand) return;
+
+    if (!gateAutoIfRiskBlocks(mode)) {
+      return;
+    }
 
     await execute(mode, pendingCommand, pendingCommandSource);
     setActiveTab('status');
@@ -84,7 +145,17 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
 
   const handleApproveFromConfirm = async () => {
     if (!pendingCommand) return;
-    await execute('auto', pendingCommand, `${pendingCommandSource}-approved`);
+
+    const autoMode: AutopilotMode = 'auto';
+    if (!gateAutoIfRiskBlocks(autoMode)) {
+      return;
+    }
+
+    await execute(
+      'auto',
+      pendingCommand,
+      `${pendingCommandSource}-approved`,
+    );
     setActiveTab('status');
   };
 
@@ -101,30 +172,44 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
           </p>
         </div>
 
-        {/* Mode toggle */}
-        <div className="flex items-center gap-1 p-1 rounded-full bg-black/40 border border-gray-700">
-          <button
-            onClick={() => handleModeChange('confirm')}
-            className={`px-3 py-1 rounded-full text-[10px] font-medium transition-colors ${
-              mode === 'confirm' ? 'bg-[#2a2e39] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            Confirm
-          </button>
-          <button
-            onClick={() => handleModeChange('auto')}
-            className={`px-3 py-1 rounded-full text-[10px] font-medium transition-colors ${
-              mode === 'auto' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            Auto
-          </button>
+        {/* Mode + Risk gate */}
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 text-[11px] opacity-80 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={requireRiskAllowForAuto}
+              onChange={(e) =>
+                setRequireRiskAllowForAuto(e.target.checked)
+              }
+              className="accent-[#2962ff]"
+            />
+            Require Risk &quot;ALLOW&quot; for auto
+          </label>
+
+          <div className="flex items-center gap-1 p-1 rounded-full bg-black/40 border border-gray-700">
+            <button
+              onClick={() => handleModeChange('confirm')}
+              className={`px-3 py-1 rounded-full text-[10px] font-medium transition-colors ${
+                mode === 'confirm' ? 'bg-[#2a2e39] text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              Confirm
+            </button>
+            <button
+              onClick={() => handleModeChange('auto')}
+              className={`px-3 py-1 rounded-full text-[10px] font-medium transition-colors ${
+                mode === 'auto' ? 'bg-red-500/20 text-red-400 border border-red-500/30' : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              Auto
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Top row: Account snapshot summary */}
       <div className="px-4">
-        <div className="flex gap-4 p-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] shadow-sm">
+        <div className="flex gap-4 p-3 rounded-lg border border-[#2a2e39] bg-[#1e222d] shadow-sm text-xs">
           <div className="flex-1 min-w-0">
             <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Account</div>
             {snapshotLoading && <div className="text-gray-500 italic">Loading snapshot...</div>}
@@ -379,14 +464,38 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ agentProposedCommand })
                   Guardrails outcome for the most recent request.
                 </div>
               </div>
-              {last && (
-                 <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase border ${
-                    last.result.executed 
-                       ? 'bg-green-500/10 border-green-500/30 text-green-400' 
-                       : 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
-                 }`}>
-                    {last.result.executed ? 'Executed' : 'Pending / Blocked'}
-                 </span>
+            </div>
+
+            {riskGateMessage && (
+              <div className="mb-4 p-2 rounded bg-red-500/10 border border-red-500/40 text-red-200 text-xs flex items-center gap-2">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                 {riskGateMessage}
+              </div>
+            )}
+
+            {/* Risk Manager verdict (command-level) */}
+            <div className="mb-4 bg-black/20 p-3 rounded border border-gray-800">
+              <div className="text-[10px] text-gray-500 uppercase font-bold mb-2">Risk Manager Verdict</div>
+              <div className="flex items-center gap-3">
+                <span
+                  style={{ backgroundColor: riskVerdictColor }}
+                  className="px-2 py-0.5 rounded-full text-[10px] font-bold text-black"
+                >
+                  {riskVerdictLabelMap[riskVerdict]}
+                </span>
+                {agentRiskComment && (
+                  <span className="text-gray-300 text-xs opacity-90 truncate max-w-md">
+                    {agentRiskComment.split('\n').find((l) => l.trim().length > 0) ?? agentRiskComment}
+                  </span>
+                )}
+              </div>
+              {agentRiskComment && (
+                <details className="mt-2 group">
+                  <summary className="cursor-pointer text-[10px] text-blue-400 hover:text-blue-300">Show Full Comment</summary>
+                  <pre className="mt-2 text-[10px] text-gray-400 font-mono whitespace-pre-wrap bg-black/40 p-2 rounded">
+                    {agentRiskComment}
+                  </pre>
+                </details>
               )}
             </div>
 

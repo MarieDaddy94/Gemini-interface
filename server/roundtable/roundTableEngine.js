@@ -13,9 +13,11 @@
 //
 // Output includes:
 // - finalSummary (moderated gameplan)
-// - agents[] (per-agent messages)
+// - agents[] (per-agent messages, including a second Risk note on the command)
 // - autopilotCommand (normalized JSON for the Autopilot layer, or null)
+// - autopilotCommandSummary (one-line summary of that command)
 // - riskCommandComment (Risk Manager’s commentary on that command, if any)
+// - riskCommandVerdict ("ALLOW" | "ALLOW_WITH_CAUTION" | "BLOCK" | "UNKNOWN")
 
 const { callAgentLLM } = require('../llmRouter');
 const { getAgentById } = require('../agents/agents');
@@ -34,11 +36,6 @@ const {
 
 /**
  * Build a textual context from session state + recent history + visual summary + broker snapshot.
- *
- * @param {object} sessionState
- * @param {Array<object>} recentJournal
- * @param {string|null} visualSummary
- * @param {object|null} brokerSnapshot
  */
 function buildContextText(
   sessionState,
@@ -109,10 +106,6 @@ function buildContextText(
 /**
  * Build the user message content for a specific agent,
  * including its personal memory.
- *
- * @param {string} baseContextText
- * @param {string} userQuestion
- * @param {Array<object>} agentMemoryRecords
  */
 function buildAgentUserPrompt(
   baseContextText,
@@ -220,13 +213,27 @@ function summarizeAutopilotCommand(cmd) {
 }
 
 /**
+ * Parse the Risk Manager (command-level) comment and extract a verdict.
+ * Expected first line to contain "ALLOW", "ALLOW WITH CAUTION", or "BLOCK".
+ */
+function extractRiskVerdict(riskComment) {
+  if (!riskComment) return 'UNKNOWN';
+
+  const firstLine =
+    riskComment
+      .split('\n')
+      .find((l) => l.trim().length > 0) || '';
+  const upper = firstLine.toUpperCase();
+
+  if (upper.includes('ALLOW WITH CAUTION')) return 'ALLOW_WITH_CAUTION';
+  if (upper.includes('ALLOW')) return 'ALLOW';
+  if (upper.includes('BLOCK')) return 'BLOCK';
+
+  return 'UNKNOWN';
+}
+
+/**
  * Run the multi-agent trading round-table.
- *
- * @param {Object} params
- * @param {Object} params.sessionState
- * @param {string} params.userQuestion
- * @param {Array<Object>} params.recentJournal
- * @param {string|null} params.visualSummary
  */
 async function runTradingRoundTable({
   sessionState,
@@ -518,13 +525,14 @@ ${userQuestion || '(none)'}
     autopilotCommand = extractAutopilotCommandFromText(executionText);
   }
 
-  // Optional: short textual summary of the autopilot command for prompts/UI.
   const autopilotCommandSummary = summarizeAutopilotCommand(
     autopilotCommand,
   );
 
   // ----- 5) Risk Manager second pass: comment on the exact command -----
   let riskCommandComment = '';
+  let riskCommandVerdict = 'UNKNOWN';
+
   if (riskManager && autopilotCommand) {
     const riskOnCommandSystemPrompt = `
 You are the Risk Manager commenting on a PROPOSED TRADE COMMAND that will be
@@ -584,6 +592,8 @@ ${contextText}
       topic: 'roundtable-risk-on-command',
       content: riskCommandComment,
     });
+
+    riskCommandVerdict = extractRiskVerdict(riskCommandComment);
   }
 
   // ----- 6) Final synthesis by Strategist -----
@@ -700,9 +710,10 @@ ${riskCommandComment || '(no command-level comment)'}
     executionNotes: '',
     riskNotes: '',
     agents,
-    autopilotCommand, // <--- NEW: this is what AutopilotPanel will eventually use
+    autopilotCommand,
     autopilotCommandSummary,
     riskCommandComment,
+    riskCommandVerdict,
   };
 }
 
