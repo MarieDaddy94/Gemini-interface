@@ -464,3 +464,63 @@ export interface TradingSessionState {
   isNewsHighImpactNow: boolean;
   isVisionActive: boolean;
 }
+
+// ----- Broker / Sim account types -----
+
+export type OrderSide = 'buy' | 'sell';
+
+export interface SimPosition {
+  id: string;
+  instrumentSymbol: string;
+  direction: TradeDirection;
+  side: OrderSide;
+  sizeUnits: number;
+  entryPrice: number;
+  stopPrice?: number;
+  openedAt: string;
+  closedAt?: string;
+  closePrice?: number;
+  pnl?: number;
+  status: 'open' | 'closed';
+}
+
+export interface SimAccountInfo {
+  accountId: string;
+  accountName: string;
+  equity: number;
+  balance: number;
+  currency: string;
+}
+
+// ----- Autopilot journal types -----
+
+export type AutopilotExecutionStatus =
+  | 'not_executed'
+  | 'executed'
+  | 'cancelled';
+
+export interface AutopilotJournalEntry {
+  id: string;
+  createdAt: string;
+
+  instrumentSymbol: string;
+  direction: TradeDirection;
+  riskPercent: number;
+
+  environment: TradingEnvironment;
+  autopilotMode: AutopilotMode;
+
+  planSummary: string;
+  allowed: boolean;
+  recommended: boolean;
+
+  riskReasons: string[];
+  riskWarnings: string[];
+
+  source: 'risk-panel' | 'voice' | 'chat' | 'other';
+
+  executionStatus: AutopilotExecutionStatus;
+  executionPrice?: number;
+  closePrice?: number;
+  pnl?: number;
+}

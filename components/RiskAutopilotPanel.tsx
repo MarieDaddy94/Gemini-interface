@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
+import { useAutopilotJournal } from '../context/AutopilotJournalContext';
 import {
   AutopilotMode,
   RiskConfig,
@@ -28,6 +29,8 @@ const RiskAutopilotPanel: React.FC = () => {
     setAutopilotConfig,
     addMessage,
   } = useTradingSession();
+
+  const { addEntry } = useAutopilotJournal();
 
   const [proposedDirection, setProposedDirection] =
     useState<TradeDirection>('long');
@@ -150,6 +153,23 @@ const RiskAutopilotPanel: React.FC = () => {
       });
 
       setAutopilotPlan(plan);
+
+      // Log to Autopilot journal
+      addEntry({
+        instrumentSymbol:
+          state.instrument.symbol || state.instrument.displayName,
+        direction: proposedDirection,
+        riskPercent,
+        environment: state.environment,
+        autopilotMode: state.autopilotMode,
+        planSummary: plan.planSummary,
+        allowed: plan.allowed,
+        recommended: plan.recommended,
+        riskReasons: plan.riskReasons || [],
+        riskWarnings: plan.riskWarnings || [],
+        source: 'risk-panel',
+        executionStatus: 'not_executed',
+      });
 
       if (sendPlanToChat) {
         const instrumentLabel =

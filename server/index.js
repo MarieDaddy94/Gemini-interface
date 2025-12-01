@@ -1,6 +1,8 @@
 
 
 
+
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -26,6 +28,13 @@ const {
   handleAutopilotProposedTrade,
   handleAutopilotExecutionPlan 
 } = require('./risk/autopilotController');
+
+const {
+  executeAutopilotTradeSim,
+  getSimAccount,
+  getSimPositions,
+  closeSimPosition,
+} = require('./autopilot/simExecutor');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -259,6 +268,90 @@ app.post('/api/autopilot/plan-trade', async (req, res) => {
     console.error('Error in /api/autopilot/plan-trade:', err);
     res.status(500).json({
       error: 'Autopilot planning error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// ------------------------------
+// Sim broker API
+// ------------------------------
+
+// GET /api/broker/sim/account
+app.get('/api/broker/sim/account', (_req, res) => {
+  try {
+    const account = getSimAccount();
+    res.json(account);
+  } catch (err) {
+    console.error('Error in /api/broker/sim/account:', err);
+    res.status(500).json({
+      error: 'Sim account error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// GET /api/broker/sim/positions
+app.get('/api/broker/sim/positions', (_req, res) => {
+  try {
+    const positions = getSimPositions();
+    res.json(positions);
+  } catch (err) {
+    console.error('Error in /api/broker/sim/positions:', err);
+    res.status(500).json({
+      error: 'Sim positions error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// POST /api/broker/sim/close-position
+// Body: { positionId: string, closePrice: number }
+app.post('/api/broker/sim/close-position', (req, res) => {
+  try {
+    const { positionId, closePrice } = req.body || {};
+    if (!positionId || typeof closePrice !== 'number') {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'positionId and closePrice are required.',
+      });
+    }
+    const pos = closeSimPosition(positionId, closePrice);
+    res.json(pos);
+  } catch (err) {
+    console.error('Error in /api/broker/sim/close-position:', err);
+    res.status(500).json({
+      error: 'Sim close position error',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// ------------------------------
+// Autopilot Sim Execution
+// ------------------------------
+//
+// POST /api/autopilot/execute-plan-sim
+// Body:
+// {
+//   sessionState: TradingSessionState,
+//   tradeRequest: { direction: 'long'|'short', riskPercent: number, notes?: string },
+//   executionParams: { entryPrice: number, stopPrice?: number, executeIfRecommended?: boolean }
+// }
+
+app.post('/api/autopilot/execute-plan-sim', async (req, res) => {
+  try {
+    const { sessionState, tradeRequest, executionParams } = req.body || {};
+    const result = await executeAutopilotTradeSim(
+      sessionState,
+      tradeRequest,
+      executionParams
+    );
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /api/autopilot/execute-plan-sim:', err);
+    res.status(500).json({
+      error: 'Autopilot sim exec error',
       message: err.message || 'Unknown error',
     });
   }
