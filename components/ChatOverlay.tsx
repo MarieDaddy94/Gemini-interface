@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, AgentId, AgentJournalDraft } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
@@ -59,7 +60,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const { addEntry } = useJournal(); 
+  const { addEntry, entries } = useJournal(); 
 
   // Handle journal drafts from AI response
   const processJournalDraft = (draft: AgentJournalDraft, agentId: string, agentName: string) => {
@@ -273,10 +274,33 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
       }
       setPendingFileImage(null); 
 
+      // Prepare Contexts
+      const journalContextPayload = entries.slice(0, 10).map((e) => ({
+        id: e.id,
+        symbol: e.symbol,
+        outcome: e.outcome,
+        playbook: e.playbook,
+        note: e.note,
+        agentId: e.agentId,
+        agentName: e.agentName,
+        timestamp: e.timestamp,
+      }));
+
+      // NOTE: chartContext prop is currently string, API now accepts object
+      // We wrap it if it's a string, or structure it better later
+      // For now, let's treat the existing string as a 'summary' field in a new object 
+      // OR pass it as is if backend handles string vs object flexible (which it does via stringify in prompt)
+      const chartContextPayload = {
+        summary: chartContext,
+        symbol: autoFocusSymbol || 'US30',
+        timeframe: '15m' // Placeholder, would ideally come from props or context
+      };
+
       const insights = await fetchAgentInsights({
         agentIds: ACTIVE_AGENT_IDS,
         userMessage: userText,
-        chartContext,
+        chartContext: chartContextPayload,
+        journalContext: journalContextPayload,
         screenshot
       });
 

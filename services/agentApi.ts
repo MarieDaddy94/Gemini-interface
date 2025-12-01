@@ -4,6 +4,18 @@ export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_co
 
 export type JournalMode = "live" | "post_trade";
 
+export interface TradeMeta {
+  symbol?: string;
+  timeframe?: string;
+  direction?: "long" | "short";
+  rr?: number;              // risk:reward ratio
+  entryComment?: string;
+  stopLoss?: number;        // price level
+  takeProfit1?: number;     // price level
+  takeProfit2?: number;     // price level
+  confidence?: number;      // 0-100 (%)
+}
+
 export interface AgentJournalDraft {
   agentId: AgentId | string;
   agentName: string;
@@ -23,6 +35,7 @@ export interface AgentInsight {
   text?: string;
   error?: string;
   journalDraft?: AgentJournalDraft | null;
+  tradeMeta?: TradeMeta;
 }
 
 // Safely resolve API URL for Vite/ESM environments
@@ -38,7 +51,8 @@ const API_BASE_URL =
 export async function fetchAgentInsights(params: {
   agentIds: AgentId[];
   userMessage: string;
-  chartContext?: string;
+  chartContext?: any; // Changed from string to any to support object payload
+  journalContext?: any[]; // New field
   screenshot?: string | null;
   journalMode?: JournalMode;
 }): Promise<AgentInsight[]> {
@@ -50,7 +64,8 @@ export async function fetchAgentInsights(params: {
     body: JSON.stringify({
       agentIds: params.agentIds,
       userMessage: params.userMessage,
-      chartContext: params.chartContext || "",
+      chartContext: params.chartContext || {},
+      journalContext: params.journalContext || [],
       screenshot: params.screenshot || null,
       journalMode: params.journalMode || "live",
     }),
@@ -72,5 +87,6 @@ export async function fetchAgentInsights(params: {
     text: a.text,
     error: a.error,
     journalDraft: a.journalDraft || null,
+    tradeMeta: a.tradeMeta || null,
   }));
 }

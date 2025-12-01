@@ -43,168 +43,88 @@ async function getGemini() {
   return geminiClient;
 }
 
-/**
- * Extract JOURNAL_JSON {...} from an LLM answer.
- * The model is instructed to end with a line starting with JOURNAL_JSON: and a JSON object.
- */
-function extractJournalFromText(rawText, agentCfg) {
-  if (!rawText) return { cleanText: "", journalDraft: null };
+const JSON_RESPONSE_INSTRUCTION = `
+You MUST respond with pure JSON (no markdown, no backticks).
 
-  const marker = "JOURNAL_JSON:";
-  const idx = rawText.indexOf(marker);
-  if (idx === -1) {
-    return { cleanText: rawText.trim(), journalDraft: null };
-  }
-
-  const main = rawText.slice(0, idx).trim();
-  const after = rawText.slice(idx + marker.length).trim();
-
-  // Try to grab a well-formed JSON object by matching braces.
-  let jsonStr = after;
-  let depth = 0;
-  let endIdx = -1;
-  for (let i = 0; i < after.length; i++) {
-    const ch = after[i];
-    if (ch === "{") depth++;
-    if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        endIdx = i;
-        break;
-      }
-    }
-  }
-  if (endIdx >= 0) {
-    jsonStr = after.slice(0, endIdx + 1);
-  }
-
-  try {
-    const obj = JSON.parse(jsonStr);
-    const draft = {
-      agentId: agentCfg.id,
-      agentName: agentCfg.name,
-      title: String(obj.title || "").slice(0, 140),
-      summary: String(obj.summary || "").slice(0, 2000),
-      sentiment: obj.sentiment || "neutral",
-      tags: Array.isArray(obj.tags) ? obj.tags.map(String) : [],
-      // Optional mapping fields
-      symbol: obj.symbol,
-      direction: obj.direction,
-      outcome: obj.outcome
-    };
-    return { cleanText: main, journalDraft: draft };
-  } catch (err) {
-    console.warn(
-      `[llmRouter] Failed to parse JOURNAL_JSON from ${agentCfg.id}:`,
-      err.message
-    );
-    return { cleanText: rawText.trim(), journalDraft: null };
+Expected structure:
+{
+  "answer": "Your natural language response here...",
+  "journalDraft": {
+    "title": "Short setup name",
+    "summary": "Detailed reasoning",
+    "tags": ["Tag1", "Tag2"],
+    "sentiment": "Bullish" | "Bearish" | "Neutral",
+    "symbol": "US30",
+    "direction": "long" | "short",
+    "outcome": "Open" | "Win" | "Loss" | "BE"
+  },
+  "tradeMeta": {
+    "symbol": "US30",
+    "timeframe": "15m",
+    "direction": "long" | "short",
+    "rr": 2.5,
+    "entryComment": "Entry reasoning",
+    "stopLoss": 12345.5,
+    "takeProfit1": 12355.5,
+    "takeProfit2": 12365.5,
+    "confidence": 85
   }
 }
+Note: "journalDraft" and "tradeMeta" are optional. Only include them if you have a specific trade idea or lesson.
+`;
 
 /**
  * Build the instruction the model sees (system-style).
  */
-function buildSystemPrompt(agentCfg, journalMode) {
-  // Special handling for Journal Coach based on mode
+function buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext) {
+  const contextBlock = [
+    `CONTEXT:`,
+    `- Journal mode: ${journalMode}`,
+    `- Chart / market context (JSON): ${JSON.stringify(chartContext || {}).slice(0, 3000)}`,
+    `- Recent journal context (JSON, truncated): ${JSON.stringify(journalContext || []).slice(0, 3000)}`,
+    `- Other agents' notes this round (JSON): ${JSON.stringify(squadContext || []).slice(0, 3000)}`
+  ].join("\n");
+
+  // Specific logic for Journal Coach to enforce mode behavior
+  let modeInstruction = "";
   if (agentCfg.id === 'journal_coach') {
-    const modeInstruction =
-      journalMode === "post_trade"
-        ? `
-MODE: POST-TRADE REVIEW
-- The trade ALREADY HAPPENED.
-- Focus on what actually happened, execution quality, risk, management, and specific lessons.
-- You MUST set "outcome" to "Win", "Loss", or "BE" (never "Open").
-- Highlight concrete rules the trader should KEEP doing or STOP doing next time.
-`
-        : `
-MODE: LIVE / PRE-TRADE
-- The trade may be planned or in progress.
-- "outcome" can be "Open" if the result is not known yet.
-- Focus on scenario planning, if/then rules, and what would make this a valid or invalid setup.
-`;
-    
-    // Override the generic journal style with the mode specific one for the coach
-    return [
-      `You are Journal Coach, a trading psychologist + journaling assistant.`,
-      `GOAL:\nTurn the user's message and chart context into a clean, structured TRADING JOURNAL ENTRY.`,
-      modeInstruction,
-      `
-GLOBAL RULES (IMPORTANT):
-- Do NOT talk about emotions or feelings. No mentions of fear, confidence, tilt, frustration, etc.
-- Focus ONLY on structure, execution, risk, edge, and specific lessons.
-- Use short, powerful tags that help later filtering.
-- If it is unclear, make your best reasonable guess from the message.
-
-Direction logic:
-- Long/buy bias → "long"
-- Short/sell bias → "short"
-- If truly unclear → null
-
-Sentiment logic:
-- Upside / long bias → "Bullish"
-- Downside / short bias → "Bearish"
-- Otherwise → "Neutral"
-      `,
-      `
-At the very end of your answer, output exactly one line starting with:
-JOURNAL_JSON: { ... }
-
-The JSON object MUST contain:
-- "title": short string
-- "summary": string
-- "sentiment": one of ["bullish","bearish","neutral","mixed"]
-- "tags": array of strings
-- "symbol": string (e.g. "US30")
-- "direction": "long" | "short" | null
-- "outcome": "Open" | "Win" | "Loss" | "BE"
-
-Do NOT explain the JSON. Do NOT put it in a code block.
-      `.trim()
-    ].join("\n\n");
+     modeInstruction = journalMode === "post_trade"
+        ? `MODE: POST-TRADE REVIEW. The trade ALREADY HAPPENED. Set "outcome" to Win/Loss/BE.`
+        : `MODE: LIVE / PRE-TRADE. "outcome" can be "Open".`;
   }
 
-  // Default logic for other agents
   return [
     GLOBAL_ANALYST_SYSTEM_PROMPT,
-    `You are the "${agentCfg.name}" agent. Your specialization:`,
-    agentCfg.journalStyle,
-    `
-At the very end of your answer, output exactly one line starting with:
-JOURNAL_JSON: { ... }
-
-The JSON object MUST contain:
-- "title": short string
-- "summary": string
-- "sentiment": one of ["bullish","bearish","neutral","mixed"]
-- "tags": array of strings
-- "symbol": string (optional)
-- "direction": "long" | "short" (optional)
-- "outcome": string (optional)
-
-Do NOT explain the JSON. Do NOT put it in a code block.
-    `.trim(),
+    `You are "${agentCfg.name}".`,
+    `ROLE: ${agentCfg.journalStyle}`, // Using journalStyle as the role/description slot
+    modeInstruction,
+    contextBlock,
+    JSON_RESPONSE_INSTRUCTION
   ].join("\n\n");
 }
 
+function safeJsonParse(text) {
+  try {
+    // Attempt to clean markdown code blocks if present
+    const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    return JSON.parse(clean);
+  } catch (e) {
+    return null;
+  }
+}
+
 /**
- * Build user message text that combines the raw question + chart context.
+ * Build user message text.
  */
-function buildUserText({ userMessage, chartContext }) {
-  const base = [
-    `User prompt: ${userMessage}`,
-    chartContext
-      ? `Chart context / notes:\n${chartContext}`
-      : `Chart context: (none provided)`,
-  ].join("\n\n");
-  return base;
+function buildUserText({ userMessage }) {
+  return `User prompt: ${userMessage}`;
 }
 
 /**
  * For OpenAI: build a multi-modal user message (text + optional image).
  */
-function buildOpenAIUserMessage({ userMessage, chartContext, screenshot }) {
-  const text = buildUserText({ userMessage, chartContext });
+function buildOpenAIUserMessage({ userMessage, screenshot }) {
+  const text = buildUserText({ userMessage });
   const hasImage = screenshot && screenshot.trim().length > 0;
 
   if (!hasImage) {
@@ -218,7 +138,6 @@ function buildOpenAIUserMessage({ userMessage, chartContext, screenshot }) {
       {
         type: "image_url",
         image_url: {
-          // e.g. "data:image/png;base64,...."
           url: screenshot,
         },
       },
@@ -227,42 +146,40 @@ function buildOpenAIUserMessage({ userMessage, chartContext, screenshot }) {
 }
 
 /**
- * For Gemini: build multi-modal content parts (text + optional inlineData image).
+ * For Gemini: build multi-modal content parts.
  */
-function buildGeminiContents({ userMessage, chartContext, screenshot }) {
-  const text = buildUserText({ userMessage, chartContext });
+function buildGeminiContents({ userMessage, screenshot }) {
+  const text = buildUserText({ userMessage });
   const parts = [{ text }];
 
   if (screenshot && screenshot.startsWith("data:")) {
-    // Strip "data:image/png;base64," prefix for inlineData
     const base64 = screenshot.split(",")[1] || "";
     if (base64) {
       parts.push({
         inlineData: {
-          mimeType: "image/png",
+          mimeType: "image/png", // Assuming PNG or JPEG, API is flexible usually
           data: base64,
         },
       });
     }
   }
 
-  return parts; // For generateContent { contents: [{ parts }] } or just pass as content if simplified
+  return parts;
 }
 
 /**
  * Run one agent using OpenAI.
  */
-async function runOpenAIAgent(agentCfg, { userMessage, chartContext, screenshot, journalMode }) {
+async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode }) {
   const openai = await getOpenAI();
   if (!openai) {
-    // Return a dummy response if no key, to prevent crash
     return { text: "Error: OpenAI API key is not configured.", journalDraft: null };
   }
 
-  const systemPrompt = buildSystemPrompt(agentCfg, journalMode);
+  const systemPrompt = buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext);
   const messages = [
     { role: "system", content: systemPrompt },
-    buildOpenAIUserMessage({ userMessage, chartContext, screenshot }),
+    buildOpenAIUserMessage({ userMessage, screenshot }),
   ];
 
   try {
@@ -270,35 +187,40 @@ async function runOpenAIAgent(agentCfg, { userMessage, chartContext, screenshot,
       model: agentCfg.model,
       messages,
       temperature: agentCfg.temperature ?? 0.6,
+      response_format: { type: "json_object" } // Force JSON
     });
 
     const choice = completion.choices[0];
     const content = choice.message?.content || "";
-    const { cleanText, journalDraft } = extractJournalFromText(
-      typeof content === "string" ? content : String(content),
-      agentCfg
-    );
+    const parsed = safeJsonParse(content);
 
-    return { text: cleanText, journalDraft };
+    if (parsed) {
+        return {
+            text: parsed.answer || JSON.stringify(parsed),
+            journalDraft: parsed.journalDraft || null,
+            tradeMeta: parsed.tradeMeta || null
+        };
+    }
+
+    return { text: content, journalDraft: null, tradeMeta: null };
   } catch (err) {
-    return { text: `Error calling OpenAI: ${err.message}`, journalDraft: null };
+    return { text: `Error calling OpenAI: ${err.message}`, journalDraft: null, tradeMeta: null };
   }
 }
 
 /**
  * Run one agent using Gemini.
  */
-async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot, journalMode }) {
+async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode }) {
   const ai = await getGemini();
   if (!ai) {
     return { text: "Error: Gemini API key is not configured.", journalDraft: null };
   }
 
   try {
-    const parts = buildGeminiContents({ userMessage, chartContext, screenshot });
-    const systemPrompt = buildSystemPrompt(agentCfg, journalMode);
+    const parts = buildGeminiContents({ userMessage, screenshot });
+    const systemPrompt = buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext);
 
-    // Using stateless generateContent with explicit config for system instructions
     const result = await ai.models.generateContent({
       model: agentCfg.model || 'gemini-2.5-flash',
       contents: {
@@ -308,70 +230,99 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, screenshot,
       config: {
         systemInstruction: systemPrompt,
         temperature: agentCfg.temperature ?? 0.6,
+        responseMimeType: "application/json" // Force JSON
       }
     });
 
     const text = result.text || "";
-    const { cleanText, journalDraft } = extractJournalFromText(text, agentCfg);
-    return { text: cleanText, journalDraft };
+    const parsed = safeJsonParse(text);
+
+    if (parsed) {
+        return {
+            text: parsed.answer || JSON.stringify(parsed),
+            journalDraft: parsed.journalDraft || null,
+            tradeMeta: parsed.tradeMeta || null
+        };
+    }
+
+    return { text: text, journalDraft: null, tradeMeta: null };
   } catch (err) {
     console.error("Gemini Error:", err);
-    return { text: `Error calling Gemini: ${err.message}`, journalDraft: null };
+    return { text: `Error calling Gemini: ${err.message}`, journalDraft: null, tradeMeta: null };
   }
 }
 
 /**
- * Main entry point: run a turn for multiple agents in parallel.
- *
- * @param {Object} opts
- * @param {string[]} opts.agentIds  e.g. ["quant_bot","trend_master","pattern_gpt"]
- * @param {string}   opts.userMessage
- * @param {string}   [opts.chartContext]
- * @param {string}   [opts.screenshot]  data URL or undefined
- * @param {string}   [opts.journalMode] "live" or "post_trade"
+ * Main entry point: run a turn for multiple agents in SEQUENTIAL order so they can see squadContext.
  */
 async function runAgentsTurn(opts) {
-  const { agentIds, userMessage, chartContext = "", screenshot = null, journalMode = "live" } = opts;
+  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live" } = opts;
 
-  const results = await Promise.all(
-    agentIds.map(async (id) => {
+  const results = [];
+  
+  // We run agents one by one
+  for (const id of agentIds) {
       const agentCfg = agentsById[id];
       if (!agentCfg) {
-        return {
-          agentId: id,
-          agentName: id,
-          error: `Unknown agentId: ${id}`,
-        };
+          results.push({
+              agentId: id,
+              agentName: id,
+              error: `Unknown agentId: ${id}`
+          });
+          continue;
       }
 
-      try {
-        const payload = { userMessage, chartContext, screenshot, journalMode };
-        let llmResult;
+      // Squad Context is what previous agents have said
+      const squadContext = results.map(r => ({
+          agentId: r.agentId,
+          agentName: r.agentName,
+          message: r.text,
+          tradeMeta: r.tradeMeta
+      }));
 
+      try {
+        const payload = { 
+            userMessage, 
+            chartContext, 
+            journalContext, 
+            squadContext, 
+            screenshot, 
+            journalMode 
+        };
+        
+        let llmResult;
         if (agentCfg.provider === "openai") {
           llmResult = await runOpenAIAgent(agentCfg, payload);
         } else if (agentCfg.provider === "gemini") {
           llmResult = await runGeminiAgent(agentCfg, payload);
         } else {
-          throw new Error(`Unsupported provider: ${agentCfg.provider}`);
+          // Fallback or error
+           llmResult = { text: "Error: Unsupported provider", journalDraft: null };
         }
 
-        return {
+        // Add journalDraft agent info mapping here if needed, or in the UI
+        if (llmResult.journalDraft) {
+            llmResult.journalDraft.agentId = agentCfg.id;
+            llmResult.journalDraft.agentName = agentCfg.name;
+        }
+
+        results.push({
           agentId: agentCfg.id,
           agentName: agentCfg.name,
           text: llmResult.text,
           journalDraft: llmResult.journalDraft,
-        };
+          tradeMeta: llmResult.tradeMeta
+        });
+
       } catch (err) {
         console.error(`[llmRouter] Error in agent ${id}:`, err);
-        return {
+        results.push({
           agentId: agentCfg.id,
           agentName: agentCfg.name,
           error: err.message,
-        };
+        });
       }
-    })
-  );
+  }
 
   return results;
 }

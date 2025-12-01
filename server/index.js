@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -38,7 +39,7 @@ app.use(createAgentsRouter(sessions, journalBySession));
 // --- NEW Multi-agent AI chat endpoint (GPT-5.1 + Gemini) ---
 app.post("/api/agents/chat", async (req, res) => {
   try {
-    const { agentIds, userMessage, chartContext, screenshot, journalMode } = req.body || {};
+    const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode } = req.body || {};
 
     if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
       return res.status(400).json({
@@ -49,7 +50,8 @@ app.post("/api/agents/chat", async (req, res) => {
     const results = await runAgentsTurn({
       agentIds,
       userMessage,
-      chartContext: chartContext || "",
+      chartContext: chartContext || {},
+      journalContext: journalContext || [],
       screenshot: screenshot || null,
       journalMode: journalMode || "live"
     });
