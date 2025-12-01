@@ -19,6 +19,7 @@ const { setupMarketData, getPrice } = require('./marketData');
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
+const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123'; // Default code if not set in env
 
 const server = http.createServer(app);
 
@@ -43,6 +44,50 @@ app.use(
 );
 
 app.use(express.json({ limit: '10mb' }));
+
+// --- AUTH ROUTE ---
+app.post('/api/auth/verify', (req, res) => {
+  const { code } = req.body;
+  if (code === ACCESS_CODE) {
+    res.json({ ok: true });
+  } else {
+    res.status(401).json({ error: 'Invalid access code' });
+  }
+});
+
+// --- WEB PROXY ROUTE (Bypass X-Frame-Options) ---
+app.get('/api/proxy', async (req, res) => {
+  const targetUrl = req.query.url;
+  if (!targetUrl) return res.status(400).send('Missing url param');
+
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+
+    // Copy important headers but strip blocking ones
+    const contentType = response.headers.get('content-type');
+    if (contentType) res.setHeader('Content-Type', contentType);
+
+    // If it's HTML, we need to inject <base> tag for relative links to work
+    if (contentType && contentType.includes('text/html')) {
+      let html = await response.text();
+      // Inject base tag right after head
+      const baseTag = `<base href="${targetUrl}">`;
+      html = html.replace('<head>', `<head>${baseTag}`);
+      res.send(html);
+    } else {
+      // For images/css/js, just pipe the buffer
+      const buffer = await response.arrayBuffer();
+      res.send(Buffer.from(buffer));
+    }
+  } catch (err) {
+    console.error('Proxy Error:', err.message);
+    res.status(502).send(`Proxy Error: ${err.message}`);
+  }
+});
 
 // Mount Agents router - PASS DB INSTANCE
 app.use(createAgentsRouter(db));
@@ -708,5 +753,5 @@ if (fs.existsSync(clientDistPath)) {
 setupMarketData(server);
 
 server.listen(PORT, () => {
-  console.log(`AI Trading Analyst Backend (Production Ready with SQLite) listening on port ${PORT}`);
+  console.log(`AI Trading Analyst Backend (Protected) listening on port ${PORT}`);
 });

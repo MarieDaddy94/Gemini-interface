@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, memo } from 'react';
 
 declare global {
@@ -10,16 +11,17 @@ const TradingViewWidget: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Check if script is already present to avoid duplicates
-    if (document.getElementById('tradingview-widget-script')) return;
+    // Function to initialize widget
+    const initWidget = () => {
+      if (window.TradingView && containerRef.current) {
+         // Clear previous content if any (though usually clean on mount)
+         containerRef.current.innerHTML = ''; 
+         const div = document.createElement('div');
+         div.id = 'tradingview_widget';
+         div.className = 'w-full h-full';
+         containerRef.current.appendChild(div);
 
-    const script = document.createElement('script');
-    script.id = 'tradingview-widget-script';
-    script.src = 'https://s3.tradingview.com/tv.js';
-    script.async = true;
-    script.onload = () => {
-      if (window.TradingView) {
-        new window.TradingView.widget({
+         new window.TradingView.widget({
           autosize: true,
           symbol: "BINANCE:BTCUSDT",
           interval: "60",
@@ -40,14 +42,23 @@ const TradingViewWidget: React.FC = () => {
       }
     };
 
-    if (containerRef.current) {
-      containerRef.current.appendChild(script);
+    // Check if script is already present
+    if (!document.getElementById('tradingview-widget-script')) {
+      const script = document.createElement('script');
+      script.id = 'tradingview-widget-script';
+      script.src = 'https://s3.tradingview.com/tv.js';
+      script.async = true;
+      script.onload = initWidget;
+      document.body.appendChild(script);
+    } else {
+      // Script exists, just init
+      initWidget();
     }
   }, []);
 
   return (
     <div className="tradingview-widget-container w-full h-full relative bg-[#131722]" ref={containerRef}>
-      <div id="tradingview_widget" className="w-full h-full" />
+      {/* Widget will be injected here */}
     </div>
   );
 };

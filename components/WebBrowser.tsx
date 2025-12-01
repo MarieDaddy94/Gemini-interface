@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import TradingViewWidget from './TradingViewWidget';
 
 interface WebBrowserProps {
@@ -8,10 +8,13 @@ interface WebBrowserProps {
 
 const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
   // Default to internal identifier for the widget to keep the initial load fast and clean
-  const [url, setUrl] = useState('https://www.tradingview.com/chart/');
+  const [url, setUrl] = useState('https://www.tradingview.com/');
   const [activeSrc, setActiveSrc] = useState<string | null>(null); // If null, render the Widget component
   const [isLoading, setIsLoading] = useState(false);
+  const [useProxy, setUseProxy] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
   const handleNavigate = (nextUrl: string) => {
     setUrl(nextUrl);
@@ -20,52 +23,77 @@ const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
     }
   };
 
-  const handleGo = (e?: React.FormEvent) => {
-    e?.preventDefault();
-    let target = url.trim();
-    if (!target) return;
-    
-    // Auto-prepend https if missing
+  const processUrl = (raw: string) => {
+    let target = raw.trim();
+    if (!target) return '';
     if (!target.startsWith('http://') && !target.startsWith('https://')) {
       target = 'https://' + target;
     }
     
-    setIsLoading(true);
-
-    // Check if user wants to go back to "home" (TradingView Widget)
-    if (target.includes('tradingview.com/chart') && !target.includes('?')) {
-        // Simple heuristic to revert to widget for better performance/UX on default URL
-        setActiveSrc(null);
-        setIsLoading(false);
-    } else {
-        setActiveSrc(target);
+    // YouTube Watch -> Embed Conversion (Better performance than proxy)
+    if (target.includes('youtube.com/watch') || target.includes('youtu.be/')) {
+        try {
+            const urlObj = new URL(target);
+            const v = urlObj.searchParams.get('v');
+            if (v) {
+                return `https://www.youtube.com/embed/${v}?autoplay=1`;
+            } else if (target.includes('youtu.be/')) {
+                const id = target.split('youtu.be/')[1].split('?')[0];
+                return `https://www.youtube.com/embed/${id}?autoplay=1`;
+            }
+        } catch (e) {
+            console.error("Failed to parse YouTube URL", e);
+        }
     }
-    // Update local state AND notify parent
-    handleNavigate(target);
+    
+    return target;
+  };
+
+  const handleGo = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const finalUrl = processUrl(url);
+    if (!finalUrl) return;
+
+    setIsLoading(true);
+    
+    // If Proxy is enabled, wrap the URL
+    if (useProxy && !finalUrl.includes(API_BASE) && !finalUrl.includes('youtube.com/embed')) {
+        setActiveSrc(`${API_BASE}/api/proxy?url=${encodeURIComponent(finalUrl)}`);
+    } else {
+        setActiveSrc(finalUrl);
+    }
+    
+    handleNavigate(finalUrl);
   };
   
-  const handleHome = () => {
+  const handleShowWidget = () => {
     setActiveSrc(null);
-    const homeUrl = 'https://www.tradingview.com/chart/';
-    handleNavigate(homeUrl);
+    setUrl('https://www.tradingview.com/');
     setIsLoading(false);
   };
 
   const handleRefresh = () => {
     if (activeSrc) {
         setIsLoading(true);
-        // Force iframe reload
         const current = activeSrc;
         setActiveSrc(''); 
-        setTimeout(() => setActiveSrc(current), 50);
+        setTimeout(() => {
+          setActiveSrc(current);
+          setIsLoading(false); 
+        }, 100);
     }
   };
 
   const handleOpenExternal = () => {
     if (activeSrc) {
-      window.open(activeSrc, '_blank', 'noopener,noreferrer');
+        // Unwrap proxy if present for the external link
+        let target = activeSrc;
+        if (target.includes('/api/proxy?url=')) {
+            target = decodeURIComponent(target.split('url=')[1]);
+        }
+        window.open(target, '_blank', 'noopener,noreferrer');
     } else {
-      window.open('https://www.tradingview.com/chart/', '_blank', 'noopener,noreferrer');
+        window.open('https://www.tradingview.com/', '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -73,17 +101,24 @@ const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
     setIsLoading(false);
   };
 
+  // Re-run navigation if proxy toggle changes while viewing a page
+  useEffect(() => {
+     if (activeSrc) {
+        handleGo();
+     }
+  }, [useProxy]);
+
   return (
     <div className="flex flex-col w-full h-full bg-[#131722]">
       {/* Browser Toolbar */}
       <div className="h-12 bg-[#1e222d] border-b border-[#2a2e39] flex items-center px-4 gap-3 shrink-0 z-10">
         <div className="flex gap-1">
            <button 
-             className="text-gray-400 hover:text-white p-2 rounded hover:bg-[#2a2e39] transition-colors" 
-             title="Home (Default Chart)" 
-             onClick={handleHome}
+             onClick={handleShowWidget}
+             className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${!activeSrc ? 'bg-[#2962ff] text-white' : 'text-gray-400 hover:text-white hover:bg-[#2a2e39]'}`}
+             title="Use Internal Chart Widget"
            >
-             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+             Widget
            </button>
            <button 
              className="text-gray-400 hover:text-white p-2 rounded hover:bg-[#2a2e39] transition-colors" 
@@ -94,7 +129,7 @@ const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
            </button>
         </div>
         
-        <form className="flex-1 flex" onSubmit={handleGo}>
+        <form className="flex-1 flex gap-2" onSubmit={handleGo}>
           <div className="relative w-full flex items-center group">
              <div className="absolute left-3 text-gray-500 group-focus-within:text-[#2962ff] transition-colors">
                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -104,24 +139,37 @@ const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
                value={url}
                onChange={(e) => setUrl(e.target.value)}
                className="w-full bg-[#131722] text-[#d1d4dc] text-sm py-2 pl-9 pr-4 rounded-full border border-[#2a2e39] focus:outline-none focus:border-[#2962ff] focus:ring-1 focus:ring-[#2962ff] transition-all placeholder-gray-600"
-               placeholder="Enter website URL (e.g. https://wikipedia.org)"
+               placeholder="Enter URL (e.g. youtube.com)"
              />
           </div>
+          
+          <button 
+             type="button"
+             onClick={() => setUseProxy(!useProxy)}
+             className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase transition-all border ${
+                 useProxy 
+                   ? 'bg-purple-500/20 text-purple-400 border-purple-500/50' 
+                   : 'bg-[#2a2e39] text-gray-500 border-transparent hover:text-gray-300'
+             }`}
+             title={useProxy ? "Proxy Enabled (Bypasses Restrictions)" : "Proxy Disabled"}
+          >
+             {useProxy ? 'Proxy ON' : 'Proxy OFF'}
+          </button>
+          
+          <button 
+            onClick={handleGo}
+            className="bg-[#2962ff] hover:bg-[#1e53e5] text-white px-4 py-2 rounded-full text-xs font-medium transition-colors shadow-sm"
+          >
+            Go
+          </button>
         </form>
-
-        <button 
-          onClick={handleGo}
-          className="bg-[#2962ff] hover:bg-[#1e53e5] text-white px-4 py-2 rounded-full text-xs font-medium transition-colors shadow-sm"
-        >
-          Go
-        </button>
 
         <div className="w-[1px] h-6 bg-[#2a2e39] mx-1"></div>
 
         <button 
           onClick={handleOpenExternal}
           className="text-gray-400 hover:text-white p-2 rounded hover:bg-[#2a2e39] transition-colors"
-          title="Open in New Tab (Fix for blocked sites)"
+          title="Open in New Tab"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         </button>
@@ -149,8 +197,8 @@ const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
             className="w-full h-full border-0 bg-white"
             title="Web Browser"
             onLoad={handleIframeLoad}
-            // Strict sandbox with necessary permissions
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-presentation allow-top-navigation-by-user-activation"
+            // Strict sandbox allows most browsing but blocks top-level navigation hijacks
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-presentation allow-downloads"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           />
         )}
@@ -160,18 +208,13 @@ const WebBrowser: React.FC<WebBrowserProps> = ({ onUrlChange }) => {
       {activeSrc && (
         <div className="bg-[#1e222d] border-t border-[#2a2e39] flex items-center justify-between px-4 py-2 shrink-0">
            <div className="flex items-center gap-2">
-             <div className="bg-yellow-500/10 p-1 rounded">
-               <svg className="text-yellow-500" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+             <div className="bg-blue-500/10 p-1 rounded">
+               <svg className="text-blue-500" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
              </div>
              <span className="text-[10px] text-gray-400">
-               If the screen is white or says "Refused to connect", the website blocks embedding.
+               If you see a blank screen, try enabling <strong>Proxy Mode</strong> in the toolbar above, or use "Open in New Tab".
              </span>
            </div>
-           <button 
-             onClick={handleOpenExternal}
-             className="text-[10px] bg-[#2a2e39] hover:bg-[#363a45] text-white px-2 py-1 rounded transition-colors"
-           >
-           </button>
         </div>
       )}
     </div>
