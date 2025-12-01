@@ -1,30 +1,34 @@
+
 // server/roundtable/roundTableEngine.js
 //
 // Multi-agent "trading squad" round-table.
-// Takes session state + user question + optional recent history,
-// and has the core agents collaborate on a structured plan.
+// Now uses a MarketSnapshot so the squad reasons from actual price structure.
 
 const { callLLM } = require('../llmRouter');
 const { getAgentById } = require('../agents/agents');
+const {
+  getMarketSnapshotForSession,
+  formatMarketSnapshotForPrompt,
+} = require('../market/marketSnapshot');
 
 /**
  * @typedef {Object} RoundTableRequest
- * @property {any} sessionState              // TradingSessionState
- * @property {string} userQuestion          // What Anthony asked the squad
- * @property {Array<any>} [recentJournal]   // Optional: last N journal entries
- * @property {Array<any>} [recentEvents]    // Optional: last N console/autopilot events
+ * @property {any} sessionState
+ * @property {string} userQuestion
+ * @property {Array<any>} [recentJournal]
+ * @property {Array<any>} [recentEvents]
  */
 
 /**
  * @typedef {Object} RoundTableFinalPlan
- * @property {string} bias        // "long" | "short" | "neutral"
- * @property {string} timeframe   // main execution timeframe
- * @property {number} confidence  // 0-100
- * @property {string} narrative   // 2–4 sentence story of the setup
- * @property {string} entryPlan   // how to enter
- * @property {string} riskPlan    // SL / partials / invalidation
- * @property {string} management  // management rules
- * @property {string} checklist   // short checklist bullets
+ * @property {string} bias
+ * @property {string} timeframe
+ * @property {number} confidence
+ * @property {string} narrative
+ * @property {string} entryPlan
+ * @property {string} riskPlan
+ * @property {string} management
+ * @property {string} checklist
  */
 
 /**
@@ -55,9 +59,6 @@ async function runTradingRoundTable(input) {
   const autopilotMode = sessionState?.autopilotMode || 'off';
   const riskConfig = sessionState?.riskConfig || {};
 
-  // Use Strategist as the "host" model (you can change this later if needed)
-  const strategist = getAgentById('strategist-main') || getAgentById('strategist');
-
   const instrumentLabel =
     instrument.displayName || instrument.symbol || 'Unknown instrument';
 
@@ -68,6 +69,15 @@ async function runTradingRoundTable(input) {
     `Autopilot mode: ${autopilotMode.toUpperCase()}`,
     `Risk config: maxRiskPerTrade=${riskConfig.maxRiskPerTradePercent ?? 'n/a'}% / maxDailyLoss=${riskConfig.maxDailyLossPercent ?? 'n/a'}%`,
   ];
+
+  // ---- Market snapshot integration (Step B) ----
+  let marketSnapshotText = '(no market snapshot available)';
+  try {
+    const snapshot = await getMarketSnapshotForSession(sessionState);
+    marketSnapshotText = formatMarketSnapshotForPrompt(snapshot);
+  } catch (err) {
+    console.error('Failed to build market snapshot:', err);
+  }
 
   const journalSummary =
     recentJournal && recentJournal.length > 0
@@ -102,6 +112,9 @@ async function runTradingRoundTable(input) {
           .join('\n')
       : '(none provided)';
 
+  // Use Strategist as the "host" model
+  const strategist = getAgentById('strategist-main') || getAgentById('strategist');
+
   const systemPrompt = `
 You are orchestrating a TRADING SQUAD round-table for Anthony.
 
@@ -120,6 +133,9 @@ You are given:
 SESSION STATE
 ${sessionSummaryLines.join('\n')}
 
+MARKET SNAPSHOT (multi-timeframe OHLC, most recent first within each series)
+${marketSnapshotText}
+
 RECENT AUTOPILOT JOURNAL (most recent first)
 ${journalSummary}
 
@@ -135,7 +151,7 @@ Your output MUST be a single JSON object, with NO extra commentary, in this exac
   "finalPlan": {
     "bias": "long" | "short" | "neutral",
     "timeframe": "string",
-    "confidence": number,  // 0-100
+    "confidence": number,
     "narrative": "string",
     "entryPlan": "string",
     "riskPlan": "string",
@@ -155,6 +171,7 @@ Your output MUST be a single JSON object, with NO extra commentary, in this exac
 
 Rules:
 - "transcript" should contain 5-15 turns, mostly between these named roles.
+- They MUST reason directly from the MARKET SNAPSHOT structure (recent closes, trend, volatility).
 - "riskFlags" should highlight any reasons to reduce size, stand aside, or be extra cautious.
 - "notesForJournal" should be ready-to-paste bullet notes Anthony could save in his trading journal.
 
@@ -185,8 +202,7 @@ Do NOT wrap the JSON in backticks or markdown.
 
   let parsed;
   try {
-    const clean = llmText.replace(/```json/g, "").replace(/```/g, "").trim();
-    parsed = JSON.parse(clean);
+    parsed = JSON.parse(llmText);
   } catch (err) {
     console.error(
       'Failed to parse round-table JSON. Raw output:',
@@ -195,14 +211,13 @@ Do NOT wrap the JSON in backticks or markdown.
     throw new Error('Round-table JSON parse failed.');
   }
 
-  // Basic sanity defaults
   const finalPlan = parsed.finalPlan || {};
   const bias =
     finalPlan.bias === 'short' || finalPlan.bias === 'neutral'
       ? finalPlan.bias
       : 'long';
 
-  const response = {
+  return {
     finalPlan: {
       bias,
       timeframe: finalPlan.timeframe || (tf.currentTimeframe || 'n/a'),
@@ -222,8 +237,6 @@ Do NOT wrap the JSON in backticks or markdown.
       ? parsed.notesForJournal
       : [],
   };
-
-  return response;
 }
 
 module.exports = {

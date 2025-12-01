@@ -524,3 +524,30 @@ export interface AutopilotJournalEntry {
   closePrice?: number;
   pnl?: number;
 }
+
+// ----- Market data / snapshot types -----
+
+export interface OhlcCandle {
+  time: number;      // Unix ms
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+}
+
+export interface MarketSnapshot {
+  symbol: string;
+  primaryTimeframe: string;
+  lastPrice: number;
+
+  m1?: OhlcCandle[];
+  m5?: OhlcCandle[];
+  m15?: OhlcCandle[];
+  h1?: OhlcCandle[];
+  h4?: OhlcCandle[];
+  d1?: OhlcCandle[];
+
+  trendSummary?: string;
+  volatilitySummary?: string;
+}
