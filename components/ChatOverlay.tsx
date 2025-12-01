@@ -1,5 +1,6 @@
 
 
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, fetchAgentDebrief, AgentId, AgentJournalDraft, AgentInsight, TradeMeta } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
@@ -92,6 +93,10 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         stopPrice: undefined,
         targetPrice: undefined,
         size: undefined,
+
+        // NEW FIELDS
+        rr: draft.rr ?? null,
+        pnl: draft.pnl ?? null,
       });
       console.log(`[ChatOverlay] Added journal draft from ${agentName}`);
   };

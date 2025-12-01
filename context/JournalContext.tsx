@@ -57,6 +57,10 @@ export interface JournalEntry {
   entryType?: string;
   sessionId?: string;
   confidence?: number;
+
+  // Analytics fields
+  rr?: number | null;   // Risk:Reward for the trade (e.g. 1.5, 2.0, -1.0)
+  pnl?: number | null;  // Realized PnL (e.g. +120.5, -80.0) in your chosen units
 }
 
 export interface ToolResult {
@@ -167,7 +171,11 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
       focusSymbol: args.symbol,
       note: args.postTradeNotes || args.preTradePlan || args.note,
       bias: args.direction === 'long' ? 'Bullish' : args.direction === 'short' ? 'Bearish' : 'Neutral',
-      outcome: 'Open'
+      outcome: 'Open',
+
+      // Analytics
+      rr: typeof args.rr === 'number' ? args.rr : (typeof args.rMultiple === 'number' ? args.rMultiple : null),
+      pnl: typeof args.pnl === 'number' ? args.pnl : (typeof args.netPnl === 'number' ? args.netPnl : null),
     };
 
     setEntries((prev) => [entry, ...prev]);

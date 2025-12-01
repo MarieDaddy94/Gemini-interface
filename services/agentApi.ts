@@ -27,6 +27,8 @@ export interface AgentJournalDraft {
   symbol?: string;
   direction?: "long" | "short";
   outcome?: "Open" | "Win" | "Loss" | "BE" | string;
+  rr?: number;
+  pnl?: number;
 }
 
 export interface AgentInsight {
