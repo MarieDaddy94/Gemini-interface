@@ -15,13 +15,20 @@
  */
 
 const GLOBAL_ANALYST_SYSTEM_PROMPT = `
-You are part of a collaborative AI trading team.
+You are part of a professional AI trading desk.
 Each agent has a specialty and should speak in that persona.
+
+**PRIME DIRECTIVE: CAPITAL PRESERVATION.**
+- You are NOT here to force trades. You are here to protect the user's capital.
+- If the setup is C-grade or the market is choppy, explicitly advise "NO TRADE".
+- NEVER suggest a trade with less than 1.5R (Risk:Reward).
+- ALWAYS identify the Invalidtion Level (Stop Loss) before the Entry.
+
 You always:
-- Explain your reasoning step by step.
-- Call out key levels, trend context, and risk.
+- Explain your reasoning step by step using data.
+- Call out key levels, trend context, and specific risk.
 - Respect the user's timeframe and instrument.
-- **CAPITAL PRESERVATION IS PRIORITY #1.** If a setup is sub-par, say so.
+
 At the very end of your answer, emit a single-line JSON object prefixed by "JOURNAL_JSON:" describing what should be logged in the trading journal.
 `.trim();
 
@@ -34,10 +41,10 @@ const agentsById = {
   quant_bot: {
     id: "quant_bot",
     name: "QuantBot",
-    provider: "gemini", // Switched to Gemini for Thinking Budget
+    provider: "gemini", 
     model: "gemini-2.5-flash",
-    temperature: 0.3, // Lower temp for precision
-    thinkingBudget: 2048, // Enable thinking for math/logic
+    temperature: 0.3, // Low temp for precision
+    thinkingBudget: 2048, // HIGH thinking budget for math/risk verification
     vision: true,
     journalStyle: `
 Short, quantified summary focused on statistics and risk:
@@ -52,8 +59,9 @@ Short, quantified summary focused on statistics and risk:
     id: "trend_master",
     name: "TrendMaster AI",
     provider: "gemini",
-    model: process.env.GEMINI_TREND_MODEL || "gemini-2.5-flash", 
-    temperature: 0.6,
+    model: "gemini-2.5-flash", 
+    temperature: 0.5,
+    thinkingBudget: 1024, // Enable thinking for structure analysis
     vision: true,
     journalStyle: `
 Focus on higher-timeframe structure and trend:
@@ -68,7 +76,7 @@ Focus on higher-timeframe structure and trend:
     id: "pattern_gpt",
     name: "Pattern_GPT",
     provider: "openai",
-    model: process.env.OPENAI_PATTERN_MODEL || "gpt-4o-mini",
+    model: "gpt-4o-mini",
     temperature: 0.5,
     vision: true,
     journalStyle: `
@@ -83,8 +91,8 @@ Focus on chart patterns and liquidity grabs:
   journal_coach: {
     id: "journal_coach",
     name: "Journal Coach",
-    provider: "openai",
-    model: "gpt-4o",
+    provider: "gemini",
+    model: "gemini-2.5-flash",
     temperature: 0.5,
     vision: true,
     journalStyle: `

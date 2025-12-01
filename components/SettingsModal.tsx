@@ -10,46 +10,16 @@ interface SettingsModalProps {
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const { exportJournal, importJournal, entries } = useJournal();
   
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [geminiKey, setGeminiKey] = useState('');
-  const [showKeys, setShowKeys] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importStatus, setImportStatus] = useState<string>('');
 
   useEffect(() => {
     if (isOpen) {
-      setOpenaiKey(localStorage.getItem('openai_api_key') || '');
-      setGeminiKey(localStorage.getItem('gemini_api_key') || '');
       setImportStatus('');
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (openaiKey.trim()) {
-      localStorage.setItem('openai_api_key', openaiKey.trim());
-    } else {
-      localStorage.removeItem('openai_api_key');
-    }
-
-    if (geminiKey.trim()) {
-      localStorage.setItem('gemini_api_key', geminiKey.trim());
-    } else {
-      localStorage.removeItem('gemini_api_key');
-    }
-    onClose();
-  };
-
-  const handleClear = () => {
-    if (window.confirm("Are you sure you want to clear your saved API keys?")) {
-      localStorage.removeItem('openai_api_key');
-      localStorage.removeItem('gemini_api_key');
-      setOpenaiKey('');
-      setGeminiKey('');
-    }
-  };
 
   const handleImportClick = () => {
     fileInputRef.current?.click();
@@ -85,9 +55,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
         </div>
 
         {/* Body */}
-        <form onSubmit={handleSave} className="p-6 space-y-5">
+        <div className="p-6 space-y-5">
           {/* DATA MANAGEMENT SECTION */}
-          <div className="space-y-2 pb-4 border-b border-[#2a2e39]">
+          <div className="space-y-2 pb-4">
             <label className="block text-xs font-medium text-gray-400 uppercase mb-1">
               Data Management
             </label>
@@ -127,75 +97,27 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                  </div>
                )}
                <p className="text-[10px] text-gray-500 leading-snug">
-                 <strong>Tip:</strong> Since this app runs without a database, save backups regularly to avoid losing your journal data if you clear your browser cache.
+                 <strong>Important:</strong> This app runs in your browser. Regularly back up your trading journal to avoid data loss if you clear your cache.
                </p>
             </div>
           </div>
 
           <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200">
-            <p className="font-semibold mb-1">Bring Your Own Keys (BYOK)</p>
+            <p className="font-semibold mb-1">Live Trading Mode</p>
             <p className="opacity-80">
-              Keys are stored securely in your browser's LocalStorage and sent directly to the backend proxy for each request.
+              API keys are securely managed by the server environment. Ensure your backend is configured with <code>process.env.API_KEY</code>.
             </p>
           </div>
 
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-400 uppercase mb-1">
-                OpenAI API Key
-              </label>
-              <input
-                type={showKeys ? "text" : "password"}
-                value={openaiKey}
-                onChange={(e) => setOpenaiKey(e.target.value)}
-                placeholder="sk-..."
-                className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
-              />
-              <p className="text-[10px] text-gray-500 mt-1">Required for Pattern_GPT</p>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-gray-400 uppercase mb-1">
-                Google Gemini API Key
-              </label>
-              <input
-                type={showKeys ? "text" : "password"}
-                value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
-                placeholder="AIza..."
-                className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
-              />
-              <p className="text-[10px] text-gray-500 mt-1">Required for QuantBot & Coach</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <input 
-              type="checkbox" 
-              id="showKeys" 
-              checked={showKeys} 
-              onChange={(e) => setShowKeys(e.target.checked)} 
-              className="rounded bg-[#131722] border-[#2a2e39]"
-            />
-            <label htmlFor="showKeys" className="text-xs text-gray-400 cursor-pointer select-none">Show API Keys</label>
-          </div>
-
-          <div className="pt-2 flex gap-3">
+          <div className="pt-2 flex justify-end">
             <button
-              type="button"
-              onClick={handleClear}
-              className="px-4 py-2 rounded text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-400/10 transition-colors"
+              onClick={onClose}
+              className="px-4 py-2 bg-[#2962ff] hover:bg-[#1e53e5] text-white font-medium rounded transition-colors shadow-lg shadow-blue-500/20 text-sm"
             >
-              Clear Keys
-            </button>
-            <button
-              type="submit"
-              className="flex-1 bg-[#2962ff] hover:bg-[#1e53e5] text-white font-medium py-2 rounded transition-colors shadow-lg shadow-blue-500/20"
-            >
-              Save Settings
+              Done
             </button>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );

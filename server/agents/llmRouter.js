@@ -15,20 +15,13 @@ function getOpenAiApiKey() {
 }
 
 function getGeminiApiKey() {
-  return process.env.GEMINI_API_KEY || process.env.API_KEY;
+  return process.env.API_KEY; // Strictly use process.env.API_KEY for Gemini
 }
 
 /**
  * Get OpenAI client.
- * If apiKey is provided (BYOK), return a fresh instance.
- * If not, use the singleton instance initialized with env vars.
  */
-async function getOpenAI(apiKey) {
-  if (apiKey) {
-    const OpenAI = (await import("openai")).default;
-    return new OpenAI({ apiKey });
-  }
-
+async function getOpenAI() {
   const key = getOpenAiApiKey();
   if (!key) return null;
   if (!openaiClient) {
@@ -42,15 +35,9 @@ async function getOpenAI(apiKey) {
 
 /**
  * Get Gemini client.
- * If apiKey is provided (BYOK), return a fresh instance.
- * If not, use the singleton instance initialized with env vars.
+ * Strictly uses process.env.API_KEY via named parameter initialization.
  */
-async function getGemini(apiKey) {
-  if (apiKey) {
-    const { GoogleGenAI } = await import("@google/genai");
-    return new GoogleGenAI({ apiKey });
-  }
-
+async function getGemini() {
   const key = getGeminiApiKey();
   if (!key) return null;
   if (!geminiClient) {
@@ -189,10 +176,10 @@ function buildGeminiContents({ userMessage, screenshot }) {
 /**
  * Run one agent using OpenAI.
  */
-async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode, apiKey }) {
-  const openai = await getOpenAI(apiKey);
+async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode }) {
+  const openai = await getOpenAI();
   if (!openai) {
-    return { text: "Error: OpenAI API key is not configured.", journalDraft: null };
+    return { text: "Error: OpenAI API key is not configured on server.", journalDraft: null };
   }
 
   const systemPrompt = buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext);
@@ -230,17 +217,18 @@ async function runOpenAIAgent(agentCfg, { userMessage, chartContext, journalCont
 /**
  * Run one agent using Gemini.
  */
-async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode, apiKey }) {
-  const ai = await getGemini(apiKey);
+async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalContext, squadContext, screenshot, journalMode }) {
+  const ai = await getGemini();
   if (!ai) {
-    return { text: "Error: Gemini API key is not configured.", journalDraft: null };
+    return { text: "Error: Gemini API key is not configured on server.", journalDraft: null };
   }
 
   try {
     const parts = buildGeminiContents({ userMessage, screenshot });
     const systemPrompt = buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext);
 
-    // Apply Thinking Config if defined in agentConfig (e.g., QuantBot)
+    // Apply Thinking Config if defined in agentConfig
+    // Crucial for Live Trading Reasoning
     let thinkingConfig = undefined;
     if (agentCfg.thinkingBudget) {
       thinkingConfig = { thinkingBudget: agentCfg.thinkingBudget };
@@ -282,7 +270,7 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalCont
  * Main entry point: run a turn for multiple agents in SEQUENTIAL order so they can see squadContext.
  */
 async function runAgentsTurn(opts) {
-  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live", apiKeys } = opts;
+  const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode = "live" } = opts;
 
   const results = [];
   
@@ -313,8 +301,7 @@ async function runAgentsTurn(opts) {
             journalContext, 
             squadContext, 
             screenshot, 
-            journalMode,
-            apiKey: agentCfg.provider === 'openai' ? apiKeys?.openai : apiKeys?.gemini
+            journalMode
         };
         
         let llmResult;
@@ -358,7 +345,7 @@ async function runAgentsTurn(opts) {
  * Run a debrief round where agents react to previous insights.
  */
 async function runAgentsDebrief(opts) {
-  const { previousInsights, chartContext, journalContext, apiKeys } = opts;
+  const { previousInsights, chartContext, journalContext } = opts;
   const results = [];
 
   // We want active agents from the previous round or a standard set. 
@@ -401,7 +388,6 @@ Remember: respond in the same JSON format (AgentResponse) as before.
           squadContext,
           screenshot: null,
           journalMode: "live", // default for debrief
-          apiKey: agentCfg.provider === 'openai' ? apiKeys?.openai : apiKeys?.gemini
         };
 
         let llmResult;
