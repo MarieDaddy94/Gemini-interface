@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useRef } from "react";
 import { useTradeEvents } from "../context/TradeEventsContext";
 import { useJournal } from "../context/JournalContext";
@@ -10,10 +11,15 @@ const TradeEventsToJournal: React.FC = () => {
 
   useEffect(() => {
     events.forEach((event) => {
-      // Only log trades that are closed
+      // 1. Only log trades that are closed
       if (!event.closedAt) return;
 
-      // Ensure we only log once per trade id
+      // 2. Prevent duplication: 
+      //    If the source is 'broker', the server already auto-logged it (Ghost Trade logic).
+      //    We only want to capture client-side simulations, paper trades, or backtests here.
+      if (event.source === 'broker') return;
+
+      // 3. Ensure we only log once per trade id
       if (loggedIds.current.has(event.id)) return;
       loggedIds.current.add(event.id);
 
@@ -45,7 +51,7 @@ const TradeEventsToJournal: React.FC = () => {
         agentId: event.agentId,
         agentName: event.agentName,
 
-        source: "broker",
+        source: "broker", // Keep source as broker if it was simulated as such, or 'paper'
         raw: event,
       });
     });

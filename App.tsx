@@ -1,4 +1,5 @@
 
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -9,7 +10,7 @@ import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
 import { JournalProvider, useJournal } from './context/JournalContext';
-import { TradeEventsProvider } from './context/TradeEventsContext';
+import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
 import { AgentConfigProvider } from './context/AgentConfigContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
@@ -107,6 +108,9 @@ const Dashboard: React.FC = () => {
   
   // Access journal context to force refresh
   const { setEntries } = useJournal();
+  
+  // Access TradeEvents context to dispatch live events
+  const { addEvent } = useTradeEvents();
 
   // Clear toast timer
   useEffect(() => {
@@ -137,6 +141,25 @@ const Dashboard: React.FC = () => {
                   msg: `Trade Closed: ${evt.data.symbol} (${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)})`,
                   type: pnl >= 0 ? 'success' : 'info'
                 });
+                
+                // Dispatch to TradeEventsContext for system-wide reactivity
+                // NOTE: TradeEventsToJournal will skip this via `source: 'broker'` check to avoid duplication
+                addEvent({
+                  id: evt.data.id,
+                  symbol: evt.data.symbol,
+                  side: evt.data.side === 'buy' ? 'long' : 'short',
+                  openedAt: new Date().toISOString(), // approximation if missing
+                  closedAt: new Date().toISOString(),
+                  entryPrice: evt.data.entryPrice || 0,
+                  exitPrice: evt.data.exitPrice || 0,
+                  size: evt.data.size || 0,
+                  pnl: pnl,
+                  currency: 'USD',
+                  source: 'broker',
+                  agentId: 'system',
+                  agentName: 'Broker'
+                });
+
                 needsJournalRefresh = true;
               } else if (evt.type === 'ORDER_FILLED') {
                 setToast({
@@ -167,7 +190,7 @@ const Dashboard: React.FC = () => {
     return () => {
       if (interval !== undefined) window.clearInterval(interval);
     };
-  }, [brokerSessionId, effectiveJournalSessionId, setEntries]);
+  }, [brokerSessionId, effectiveJournalSessionId, setEntries, addEvent]);
 
   useEffect(() => {
     if (brokerData && brokerData.isConnected) {

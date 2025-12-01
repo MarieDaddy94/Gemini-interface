@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -426,7 +427,9 @@ app.get('/api/tradelocker/overview', async (req, res) => {
             id: pos.id,
             symbol: pos.symbol,
             side: pos.side,
-            pnl: 0
+            pnl: 0,
+            size: pos.size,
+            entryPrice: pos.entryPrice
           }
         });
       }
@@ -502,6 +505,10 @@ app.get('/api/tradelocker/overview', async (req, res) => {
           data: {
             id: closedId,
             symbol: prev.symbol,
+            side: prev.side,
+            size: prev.size,
+            entryPrice: prev.entryPrice,
+            exitPrice: prev.currentPrice,
             pnl: finalPnl,
             reason: 'Closed on Broker'
           }

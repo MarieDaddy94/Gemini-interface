@@ -89,6 +89,9 @@ export interface BrokerEvent {
     pnl?: number;
     side?: string;
     reason?: string;
+    size?: number;
+    entryPrice?: number;
+    exitPrice?: number;
   };
 }
 
