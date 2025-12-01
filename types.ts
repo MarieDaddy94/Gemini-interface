@@ -254,3 +254,21 @@ export interface AgentConfig {
   avatar: string;
   color: string;
 }
+
+// --- Playbook Review Types ---
+
+export type PlayDirection = 'long' | 'short';
+
+export interface PlaybookLesson {
+  id: string;
+  playbook: string;
+  note: string;
+  outcome: string;         // 'Win' | 'Loss' | 'BreakEven' | 'Open' | etc.
+  symbol: string;
+  direction?: PlayDirection;
+}
+
+export type PlaybookReviewPayload = {
+  mode: 'lessons';
+  entries: PlaybookLesson[];
+};

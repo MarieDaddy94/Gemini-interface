@@ -1,9 +1,9 @@
+
 import React, { useMemo, useState } from "react";
 import { useJournal } from "../context/JournalContext";
+import { PlaybookReviewPayload, PlaybookLesson, PlayDirection } from "../types";
 
 type ViewMode = "journal" | "playbooks";
-
-type PlayDirection = "long" | "short";
 
 type PlaybookRow = {
   playbook: string;
@@ -15,20 +15,6 @@ type PlaybookRow = {
   be: number;
 };
 
-export type PlaybookReviewPayload = {
-  filter: "journal_coach_only" | "all_entries";
-  topPlaybooks: {
-    playbook: string;
-    symbol: string;
-    direction?: PlayDirection;
-    total: number;
-    wins: number;
-    losses: number;
-    be: number;
-    winRate: number;
-  }[];
-};
-
 interface JournalPanelProps {
   /**
    * Optional callback so the parent (or Chat overlay) can
@@ -36,47 +22,6 @@ interface JournalPanelProps {
    */
   onRequestPlaybookReview?: (payload: PlaybookReviewPayload) => void;
 }
-
-const buildPlaybookReviewPrompt = (payload: PlaybookReviewPayload): string => {
-  const { filter, topPlaybooks } = payload;
-
-  const lines: string[] = [];
-  lines.push(
-    "You are my trading journal coach. Using the stats below, analyze my top playbooks and tell me:"
-  );
-  lines.push(
-    "1) Which setups are my true edge, 2) Which ones are leaks I should avoid or refine, and 3) Concrete rules to turn the best ones into repeatable playbooks."
-  );
-  lines.push("");
-  lines.push(
-    `Filter applied: ${
-      filter === "journal_coach_only" ? "Journal Coach entries only" : "All entries"
-    }`
-  );
-  lines.push("");
-  lines.push("Top playbooks by trade count:");
-  lines.push("");
-
-  topPlaybooks.forEach((p, i) => {
-    lines.push(
-      `${i + 1}. Playbook: ${p.playbook} | Symbol: ${p.symbol} | Direction: ${
-        p.direction ? (p.direction === "long" ? "Long" : "Short") : "Mixed/NA"
-      }`
-    );
-    lines.push(
-      `   Stats -> Total: ${p.total}, Wins: ${p.wins}, Losses: ${p.losses}, BE: ${p.be}, Win Rate: ${p.winRate.toFixed(
-        1
-      )}%`
-    );
-    lines.push("");
-  });
-
-  lines.push(
-    "Based on this, please: (a) rank these from strongest to weakest edge, (b) suggest what conditions I should require before taking each play, and (c) recommend what I should stop doing or de-emphasize."
-  );
-
-  return lines.join("\n");
-};
 
 const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) => {
   const { entries } = useJournal();
@@ -214,40 +159,25 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
   };
 
   const handleRequestReview = () => {
-    if (playbookRows.length === 0) return;
-
-    const top = playbookRows.slice(0, 3).map((row) => {
-      const winRate = row.total > 0 ? (row.wins / row.total) * 100 : 0;
-      return {
-        playbook: row.playbook,
-        symbol: row.symbol,
-        direction: row.direction,
-        total: row.total,
-        wins: row.wins,
-        losses: row.losses,
-        be: row.be,
-        winRate,
-      };
-    });
+    if (!onRequestPlaybookReview) return;
+    
+    // Take the top 3 most recent entries from the current filtered list
+    // This allows the user to filter by Journal Coach entries if they want, or use all.
+    const topThreeEntries = baseEntries.slice(0, 3);
 
     const payload: PlaybookReviewPayload = {
-      filter: showJournalCoachOnly ? "journal_coach_only" : "all_entries",
-      topPlaybooks: top,
+      mode: 'lessons',
+      entries: topThreeEntries.map((e) => ({
+        id: e.id,
+        playbook: e.playbook || 'Unknown Setup',
+        note: e.note || e.postTradeNotes || '',
+        outcome: e.outcome || 'Open',
+        symbol: e.symbol || 'US30',
+        direction: e.direction,
+      })),
     };
 
-    if (onRequestPlaybookReview) {
-      onRequestPlaybookReview(payload);
-    } else {
-      // Fallback: log + copy a ready-to-paste prompt
-      console.log("[JournalPanel] AI review requested:", payload);
-      const prompt = buildPlaybookReviewPrompt(payload);
-
-      if (navigator.clipboard) {
-        navigator.clipboard.writeText(prompt).catch(() => {
-          // ignore clipboard errors
-        });
-      }
-    }
+    onRequestPlaybookReview(payload);
   };
 
   return (
@@ -353,10 +283,10 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
             <button
               type="button"
               onClick={handleRequestReview}
-              disabled={playbookRows.length === 0}
+              disabled={baseEntries.length === 0}
               className={[
                 "px-2 py-1 rounded-md border text-[11px] font-medium transition",
-                playbookRows.length === 0
+                baseEntries.length === 0
                   ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
                   : "border-amber-400/70 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20",
               ].join(" ")}

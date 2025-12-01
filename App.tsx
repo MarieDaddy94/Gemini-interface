@@ -1,8 +1,7 @@
 
-
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
-import ChatOverlay from './components/ChatOverlay';
+import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
 import WebBrowser from './components/WebBrowser';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
 import JournalPanel from './components/JournalPanel';
@@ -13,8 +12,10 @@ import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
-  TradeLockerAccountSummary
+  TradeLockerAccountSummary,
+  PlaybookReviewPayload
 } from './types';
+import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
 import {
   connectToTradeLocker,
   fetchBrokerData,
@@ -61,6 +62,9 @@ const App: React.FC = () => {
   // - If connected to TradeLocker, use backend session id (enables auto-outcome logic)
   // - Otherwise, use local persistent session id for offline journaling
   const effectiveJournalSessionId = brokerSessionId || journalSessionId;
+
+  // Refs for Imperative Actions
+  const chatOverlayRef = useRef<ChatOverlayHandle | null>(null);
 
   // Poll Broker Data when connected
   useEffect(() => {
@@ -136,6 +140,17 @@ const App: React.FC = () => {
     } catch (err) {
       console.error('Failed to switch TradeLocker account', err);
     }
+  };
+  
+  // Handler for Playbook Review Request from JournalPanel
+  const handleRequestPlaybookReview = (payload: PlaybookReviewPayload) => {
+    const prompt = buildPlaybookReviewPrompt(payload);
+    
+    // Send directly to the Journal Coach via the Chat Overlay
+    chatOverlayRef.current?.sendSystemMessageToAgent({
+      prompt,
+      agentId: 'journal_coach', // Matches the ID in AGENT_UI_META and ACTIVE_AGENT_IDS
+    });
   };
 
   // Merge Mock Market Data with Real Broker Data for the AI Context
@@ -362,7 +377,7 @@ const App: React.FC = () => {
               <div className="flex-1 min-h-0">
                 <WebBrowser />
               </div>
-              <JournalPanel />
+              <JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} />
             </>
           )}
 
@@ -382,6 +397,7 @@ const App: React.FC = () => {
 
       {/* AI Analyst Sidebar */}
       <ChatOverlay
+        ref={chatOverlayRef}
         chartContext={marketContext}
         isBrokerConnected={!!brokerSessionId}
         sessionId={effectiveJournalSessionId}

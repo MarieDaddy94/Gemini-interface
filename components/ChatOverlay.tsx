@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { fetchAgentInsights, AgentId, AgentJournalDraft, JournalMode } from '../services/agentApi';
 import { useJournal } from '../context/JournalContext';
 import { inferTradeMetaFromText } from '../utils/journalInference';
@@ -17,12 +18,22 @@ const ACTIVE_AGENT_IDS: AgentId[] = ["quant_bot", "trend_master", "pattern_gpt",
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   author?: string; // "You", "QuantBot", etc.
   agentId?: string; // for color mapping
   text: string;
   isError?: boolean;
 }
+
+export type ChatOverlayHandle = {
+  /**
+   * Inject a “system-style” message into the chat pipeline for a specific agent.
+   */
+  sendSystemMessageToAgent: (options: {
+    prompt: string;
+    agentId?: string; 
+  }) => void;
+};
 
 interface ChatOverlayProps {
   chartContext: string;
@@ -32,11 +43,11 @@ interface ChatOverlayProps {
   brokerSessionId?: string | null;
 }
 
-const ChatOverlay: React.FC<ChatOverlayProps> = ({ 
+const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>(({ 
   chartContext,
   isBrokerConnected,
   autoFocusSymbol
-}) => {
+}, ref) => {
   // UI State
   const [isOpen, setIsOpen] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -142,40 +153,59 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
   };
 
   // SEND HANDLER
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() && !pendingFileImage && !isVisionActive) return;
+  const handleSendMessage = async (
+    overrideText?: string,
+    options?: { agentId?: string; isSystem?: boolean }
+  ) => {
+    const textToSend = overrideText || inputValue;
+    if (!textToSend.trim() && !pendingFileImage && !isVisionActive) return;
     if (isSending) return;
 
-    const userText = inputValue;
+    const isSystem = !!options?.isSystem;
+    
+    // Add message to local UI
     const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      author: 'You',
-      text: userText
+      id: `msg-${Date.now()}`,
+      role: isSystem ? 'system' : 'user',
+      author: isSystem ? 'System' : 'You',
+      text: textToSend
     };
     setMessages(prev => [...prev, userMsg]);
-    setInputValue('');
+    
+    // Clear input only if we used it
+    if (!overrideText) {
+      setInputValue('');
+    }
+    
     setIsSending(true);
 
     try {
       // 1. Prepare Screenshot
       let screenshot: string | null = null;
-      if (pendingFileImage) {
+      if (pendingFileImage && !isSystem) {
         // Reconstruct Data URL for API
         screenshot = `data:${pendingFileImage.mimeType};base64,${pendingFileImage.data}`;
-      } else if (isVisionActive) {
+      } else if (isVisionActive && !isSystem) {
         const frame = captureFrame();
         if (frame) {
           // captureFrame returns base64 string, backend expects Data URL
           screenshot = `data:image/jpeg;base64,${frame}`;
         }
       }
-      setPendingFileImage(null); 
+      if (!isSystem) {
+        setPendingFileImage(null); 
+      }
 
       // 2. Call Multi-Agent API
+      // If system targeted a specific agent, just ask that one + maybe others if needed
+      // For now, if agentId is provided, we send [agentId], otherwise ACTIVE_AGENT_IDS
+      const targetIds = options?.agentId 
+        ? [options.agentId as AgentId] 
+        : ACTIVE_AGENT_IDS;
+
       const insights = await fetchAgentInsights({
-        agentIds: ACTIVE_AGENT_IDS,
-        userMessage: userText,
+        agentIds: targetIds,
+        userMessage: textToSend,
         chartContext,
         screenshot,
         journalMode // Pass the mode
@@ -280,6 +310,20 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
     }
   };
 
+  // Expose methods to parent
+  useImperativeHandle(ref, () => ({
+    sendSystemMessageToAgent: ({ prompt, agentId }) => {
+      // Open the chat if it's closed
+      setIsOpen(true);
+      
+      // Delegate to handleSendMessage
+      handleSendMessage(prompt, {
+        agentId,
+        isSystem: true
+      });
+    },
+  }));
+
   // --- RENDER ---
 
   // Collapsed View
@@ -379,28 +423,38 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
         )}
 
         {messages.map((msg, idx) => {
+          // If message role is 'system', display it distinctly or like user but different
           const isUser = msg.role === 'user';
+          const isSystem = msg.role === 'system';
+
           // Style config for agent
           const uiMeta = (msg.agentId && AGENT_UI_META[msg.agentId]) 
             ? AGENT_UI_META[msg.agentId] 
             : AGENT_UI_META.default;
 
           return (
-            <div key={idx} className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-sm flex-shrink-0 ${isUser ? 'bg-[#131722] text-white' : 'bg-white border border-gray-100'}`}>
-                {isUser ? '👤' : uiMeta.avatar}
+            <div key={idx} className={`flex gap-3 ${(isUser || isSystem) ? 'flex-row-reverse' : 'flex-row'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-sm flex-shrink-0 ${isUser ? 'bg-[#131722] text-white' : isSystem ? 'bg-amber-100 text-amber-800' : 'bg-white border border-gray-100'}`}>
+                {isUser ? '👤' : isSystem ? '⚙️' : uiMeta.avatar}
               </div>
               
-              <div className={`flex flex-col max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
-                 {!isUser && msg.author && (
+              <div className={`flex flex-col max-w-[85%] ${(isUser || isSystem) ? 'items-end' : 'items-start'}`}>
+                 {(!isUser && !isSystem) && msg.author && (
                    <span className="text-[10px] font-bold text-gray-500 mb-1 ml-1 uppercase tracking-wider">
                      {msg.author}
+                   </span>
+                 )}
+                 {isSystem && (
+                   <span className="text-[10px] font-bold text-gray-400 mb-1 mr-1 uppercase tracking-wider">
+                     System Prompt
                    </span>
                  )}
                  <div className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
                    isUser 
                      ? 'bg-[#2962ff] text-white rounded-tr-none' 
-                     : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
+                     : isSystem 
+                       ? 'bg-amber-50 text-amber-900 border border-amber-200 rounded-tr-none'
+                       : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
                  }`}>
                    {msg.text}
                  </div>
@@ -452,7 +506,7 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
           </button>
 
           <button 
-            onClick={handleSendMessage}
+            onClick={() => handleSendMessage()}
             disabled={(!inputValue.trim() && !pendingFileImage && !isVisionActive) || isSending}
             className="absolute right-2 top-2 p-1.5 bg-[#2962ff] text-white rounded-xl hover:bg-[#1e53e5] disabled:opacity-50 transition-colors shadow-sm"
           >
@@ -481,6 +535,6 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({
       </div>
     </div>
   );
-};
+});
 
 export default ChatOverlay;
