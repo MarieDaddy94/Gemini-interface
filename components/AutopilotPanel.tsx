@@ -13,6 +13,7 @@ interface LogEntry {
   timestamp: string;
   agentId: string;
   message: string;
+  details?: any; // Structured data for expandable view
   type: 'thought' | 'action' | 'error' | 'system';
 }
 
@@ -30,12 +31,16 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
   const [inputCommand, setInputCommand] = useState("");
   const [isListening, setIsListening] = useState(false);
   
+  // UI State for Logs
+  const [logFilter, setLogFilter] = useState<'ALL' | 'ACTION' | 'THOUGHT' | 'ERROR'>('ALL');
+  const [expandedLogIds, setExpandedLogIds] = useState<Set<string>>(new Set());
+
   // Configuration State
   const [activeAgents, setActiveAgents] = useState<Record<AgentId, boolean>>({
     trend_master: true,
     pattern_gpt: true,
-    quant_bot: true, // Execution agent
-    journal_coach: false // Usually off for pure execution loops
+    quant_bot: true, 
+    journal_coach: false 
   });
 
   // Loop & Ref State
@@ -55,7 +60,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs]);
+  }, [logs, logFilter, expandedLogIds]);
 
   // Voice Recognition Initialization
   useEffect(() => {
@@ -85,7 +90,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
   }, []);
 
   const handleVoiceCommand = (text: string) => {
-    // 1. Check Presets / Macros
+    // 1. Check Presets
     if (text.includes("scalp")) {
         setPreset('SCALP', PRESETS.SCALP);
         addLog('Operator', `Voice Command: Switch to SCALP`, 'system');
@@ -114,20 +119,16 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
         return;
     }
 
-    // 3. Custom Mandate (Natural Language Processing)
+    // 3. Custom Mandate
     let cleanText = text;
-    // Remove common prefixes
     ["update mandate to", "set mandate to", "change to", "tell the ai to"].forEach(prefix => {
         if (cleanText.startsWith(prefix)) {
             cleanText = cleanText.replace(prefix, "").trim();
         }
     });
-    
-    // Capitalize for display
     cleanText = cleanText.charAt(0).toUpperCase() + cleanText.slice(1);
 
     setInputCommand(cleanText);
-    // Don't auto-submit custom text to let user verify, unless it was a keyword command
     addLog('System', `Voice input captured: "${cleanText}"`, 'system');
   };
 
@@ -147,14 +148,15 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
     }
   };
 
-  const addLog = (agentId: string, message: string, type: LogEntry['type'] = 'thought') => {
+  const addLog = (agentId: string, message: string, type: LogEntry['type'] = 'thought', details?: any) => {
     setLogs(prev => [...prev, {
       id: Math.random().toString(36).slice(2),
       timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' }),
       agentId,
       message,
-      type
-    }].slice(-200)); // Buffer limit
+      type,
+      details
+    }].slice(-300)); // Increase buffer
   };
 
   const handleCommandSubmit = (e: React.FormEvent) => {
@@ -174,6 +176,15 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
   const setPreset = (name: string, text: string) => {
     setMandate(text);
     addLog('System', `Mode switched to ${name}`, 'system');
+  };
+
+  const toggleLogDetails = (id: string) => {
+    setExpandedLogIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   // --- THE AUTOPILOT LOOP ---
@@ -198,7 +209,6 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
 
         addLog('System', `Ping... Analyzing ${symbol} context...`, 'system');
 
-        // Construct the Dynamic System Prompt
         const currentMandate = mandateRef.current;
         const prompt = `
 [AUTOPILOT SYSTEM TICK]
@@ -227,7 +237,7 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
           journalMode: 'live'
         });
 
-        // Process results
+        // Process results with DETAILED logging
         insights.forEach(insight => {
            if (insight.error) {
              addLog(insight.agentName, insight.error, 'error');
@@ -237,14 +247,20 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
              }
              if (insight.toolCalls && insight.toolCalls.length > 0) {
                insight.toolCalls.forEach(tc => {
-                 if (tc.toolName === 'execute_order') {
-                    addLog(insight.agentName, `EXECUTING: ${tc.args.side?.toUpperCase()} ${tc.args.size} ${tc.args.symbol}`, 'action');
-                    if (tc.result) {
-                        addLog('Broker', `Order Result: ${typeof tc.result === 'object' ? JSON.stringify(tc.result) : tc.result}`, 'action');
-                    }
-                 } else if (tc.toolName === 'append_journal_entry') {
-                    addLog(insight.agentName, `Journaling: ${tc.args.title}`, 'action');
-                 }
+                 const isExec = tc.toolName === 'execute_order';
+                 const isJournal = tc.toolName === 'append_journal_entry';
+                 
+                 let msg = `Tool Call: ${tc.toolName}`;
+                 if (isExec) msg = `EXECUTING: ${tc.args.side?.toUpperCase()} ${tc.args.size} ${tc.args.symbol}`;
+                 if (isJournal) msg = `Journaling: ${tc.args.title}`;
+
+                 // Capture full details
+                 addLog(
+                    insight.agentName, 
+                    msg, 
+                    'action', 
+                    { args: tc.args, result: tc.result }
+                 );
                });
              }
            }
@@ -280,6 +296,14 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
   const toggleRunning = () => {
     setIsRunning(prev => !prev);
   };
+
+  const filteredLogs = logs.filter(l => {
+     if (logFilter === 'ALL') return true;
+     if (logFilter === 'ACTION') return l.type === 'action';
+     if (logFilter === 'THOUGHT') return l.type === 'thought';
+     if (logFilter === 'ERROR') return l.type === 'error';
+     return true;
+  });
 
   return (
     <div className="flex flex-col h-full bg-[#050505] text-gray-300 font-mono text-xs overflow-hidden">
@@ -320,40 +344,89 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
            {/* Scanline / CRT Effect Overlay */}
            <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.03),rgba(0,255,0,0.01),rgba(0,0,255,0.03))] z-0 bg-[length:100%_4px,6px_100%]"></div>
            
-           <div className="flex-1 overflow-y-auto p-4 space-y-3 z-10 scrollbar-thin">
-              {logs.length === 0 && (
+           {/* Log Filter Toolbar */}
+           <div className="flex items-center gap-1 p-2 border-b border-[#2a2e39] bg-[#0d1117] z-10">
+              {(['ALL', 'ACTION', 'THOUGHT', 'ERROR'] as const).map(f => (
+                <button
+                   key={f}
+                   onClick={() => setLogFilter(f)}
+                   className={`px-2 py-0.5 text-[9px] font-bold rounded uppercase transition-colors ${
+                      logFilter === f 
+                        ? 'bg-[#2962ff] text-white' 
+                        : 'bg-[#1c2128] text-gray-500 hover:text-gray-300'
+                   }`}
+                >
+                   {f}
+                </button>
+              ))}
+              <div className="flex-1"></div>
+              <span className="text-[9px] text-gray-600 font-mono">
+                 {logs.length} events
+              </span>
+           </div>
+
+           {/* LOG FEED */}
+           <div className="flex-1 overflow-y-auto p-4 space-y-2 z-10 scrollbar-thin">
+              {filteredLogs.length === 0 && (
                  <div className="h-full flex flex-col items-center justify-center text-gray-600 opacity-30 space-y-2">
                     <svg className="w-16 h-16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-                    <p className="tracking-widest uppercase">Awaiting Command...</p>
+                    <p className="tracking-widest uppercase">Awaiting Data...</p>
                  </div>
               )}
               
-              {logs.map((log) => (
-                <div key={log.id} className="flex gap-3 animate-fade-in group hover:bg-[#131722] p-1 -mx-1 rounded transition-colors">
-                   <div className="w-16 shrink-0 text-[9px] text-gray-600 font-mono pt-0.5">{log.timestamp}</div>
-                   <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-0.5">
-                         <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                            log.agentId === 'System' || log.agentId === 'Operator' ? 'text-gray-400' :
-                            log.agentId === 'QuantBot' ? 'text-blue-400' :
-                            log.agentId === 'TrendMaster AI' ? 'text-purple-400' :
-                            log.agentId === 'Broker' ? 'text-yellow-400' :
-                            'text-emerald-400'
-                         }`}>
-                           {log.agentId}
-                         </span>
-                         {log.type === 'action' && <span className="bg-green-500 text-black text-[9px] font-bold px-1 rounded-sm">EXEC</span>}
-                         {log.type === 'error' && <span className="bg-red-500 text-white text-[9px] font-bold px-1 rounded-sm">ERR</span>}
-                         {log.type === 'system' && <span className="text-gray-500 text-[9px]">INFO</span>}
-                      </div>
-                      <div className={`leading-relaxed break-words text-[11px] font-mono ${
-                        log.type === 'action' ? 'text-green-300' : 
-                        log.type === 'error' ? 'text-red-300' :
-                        log.type === 'system' ? 'text-gray-500 italic' :
-                        'text-gray-300'
-                      }`}>
-                        {log.message}
-                      </div>
+              {filteredLogs.map((log) => (
+                <div key={log.id} className="animate-fade-in group">
+                   <div className="flex gap-3 p-1 -mx-1 rounded hover:bg-[#131722] transition-colors items-start">
+                     <div className="w-16 shrink-0 text-[9px] text-gray-600 font-mono pt-0.5 opacity-70">{log.timestamp}</div>
+                     <div className="flex-1 min-w-0">
+                        {/* Header Line */}
+                        <div className="flex items-center gap-2 mb-0.5">
+                           <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                              log.agentId === 'System' || log.agentId === 'Operator' ? 'text-gray-400' :
+                              log.agentId === 'QuantBot' ? 'text-blue-400' :
+                              log.agentId === 'TrendMaster AI' ? 'text-purple-400' :
+                              log.agentId === 'Broker' ? 'text-yellow-400' :
+                              'text-emerald-400'
+                           }`}>
+                             {log.agentId}
+                           </span>
+                           
+                           {log.type === 'action' && <span className="bg-green-500/20 text-green-400 border border-green-500/40 text-[9px] font-bold px-1 rounded-sm">EXEC</span>}
+                           {log.type === 'error' && <span className="bg-red-500/20 text-red-400 border border-red-500/40 text-[9px] font-bold px-1 rounded-sm">ERR</span>}
+                           {log.type === 'system' && <span className="text-gray-500 border border-gray-700 text-[9px] px-1 rounded-sm">INFO</span>}
+                        </div>
+                        
+                        {/* Message Body */}
+                        <div className={`leading-relaxed break-words text-[11px] font-mono ${
+                          log.type === 'action' ? 'text-green-300 font-bold' : 
+                          log.type === 'error' ? 'text-red-300' :
+                          log.type === 'system' ? 'text-gray-500 italic' :
+                          'text-gray-300'
+                        }`}>
+                          {log.message}
+                        </div>
+
+                        {/* Expandable Details */}
+                        {log.details && (
+                           <div className="mt-1">
+                              <button 
+                                onClick={() => toggleLogDetails(log.id)}
+                                className="flex items-center gap-1 text-[9px] text-gray-500 hover:text-white transition-colors"
+                              >
+                                 <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`transition-transform ${expandedLogIds.has(log.id) ? 'rotate-90' : ''}`}><polyline points="9 18 15 12 9 6"></polyline></svg>
+                                 {expandedLogIds.has(log.id) ? 'Hide Details' : 'View Details'}
+                              </button>
+                              
+                              {expandedLogIds.has(log.id) && (
+                                <div className="mt-1 bg-[#050505] border border-[#2a2e39] rounded p-2 overflow-x-auto">
+                                   <pre className="text-[9px] text-gray-400 font-mono">
+                                      {JSON.stringify(log.details, null, 2)}
+                                   </pre>
+                                </div>
+                              )}
+                           </div>
+                        )}
+                     </div>
                    </div>
                 </div>
               ))}
