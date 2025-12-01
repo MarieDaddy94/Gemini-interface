@@ -30,6 +30,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [mandate, setMandate] = useState<string>(PRESETS.SCALP);
   const [inputCommand, setInputCommand] = useState("");
+  const [isListening, setIsListening] = useState(false);
   
   // Configuration
   const [activeAgents, setActiveAgents] = useState<Record<AgentId, boolean>>({
@@ -44,6 +45,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
   const isRunningRef = useRef(false);
   const mandateRef = useRef(mandate);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Sync ref
   useEffect(() => {
@@ -56,6 +58,97 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [logs]);
+
+  // Voice Recognition Setup
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onerror = (event: any) => {
+          console.error("Speech Recognition Error:", event.error);
+          setIsListening(false);
+        };
+        
+        // We bind the result handler here, but it needs access to refs for current state
+        recognition.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript.toLowerCase();
+          handleVoiceCommand(transcript);
+        };
+
+        recognitionRef.current = recognition;
+      }
+    }
+  }, []); // Run once on mount
+
+  const handleVoiceCommand = (text: string) => {
+    // 1. Check Presets
+    if (text.includes("scalp")) {
+        setPreset('SCALP', PRESETS.SCALP);
+        addLog('Operator', `Voice Command: Switch to SCALP`, 'system');
+        return;
+    }
+    if (text.includes("swing")) {
+        setPreset('SWING', PRESETS.SWING);
+        addLog('Operator', `Voice Command: Switch to SWING`, 'system');
+        return;
+    }
+    if (text.includes("defensive") || text.includes("preservation")) {
+        setPreset('DEFENSIVE', PRESETS.DEFENSIVE);
+        addLog('Operator', `Voice Command: Switch to DEFENSIVE`, 'system');
+        return;
+    }
+
+    // 2. Check System Toggle
+    if (text.includes("start") || text.includes("activate") || text.includes("initiate")) {
+        if (!isRunningRef.current) toggleRunning();
+        addLog('Operator', `Voice Command: START SYSTEM`, 'system');
+        return;
+    }
+    if (text.includes("stop") || text.includes("terminate") || text.includes("shutdown")) {
+        if (isRunningRef.current) toggleRunning();
+        addLog('Operator', `Voice Command: STOP SYSTEM`, 'system');
+        return;
+    }
+
+    // 3. Custom Mandate (Fallthrough)
+    // Clean up common prefixes for natural language
+    let cleanText = text;
+    const prefixes = ["update mandate to", "set mandate to", "change to", "tell the ai to"];
+    prefixes.forEach(prefix => {
+        if (cleanText.startsWith(prefix)) {
+            cleanText = cleanText.replace(prefix, "").trim();
+        }
+    });
+    
+    // Capitalize first letter
+    cleanText = cleanText.charAt(0).toUpperCase() + cleanText.slice(1);
+
+    setInputCommand(cleanText);
+    addLog('System', 'Voice input captured. Review and send.', 'system');
+  };
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+        addLog('System', 'Voice input not supported in this browser.', 'error');
+        return;
+    }
+    if (isListening) {
+        recognitionRef.current.stop();
+    } else {
+        try {
+            recognitionRef.current.start();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+  };
 
   const addLog = (agentId: string, message: string, type: 'thought' | 'action' | 'error' | 'system' = 'thought') => {
     setLogs(prev => [...prev, {
@@ -73,7 +166,6 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({ chartContext, brokerSes
 
     const cmd = inputCommand.trim();
     
-    // Check for "slash commands" logic if we wanted, for now just update mandate
     setMandate(cmd);
     addLog('Operator', `UPDATED ORDERS: "${cmd}"`, 'system');
     setInputCommand("");
@@ -201,7 +293,7 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
 
   // Clean toggle
   const toggleRunning = () => {
-    setIsRunning(!isRunning);
+    setIsRunning(prev => !prev);
   };
 
   return (
@@ -285,15 +377,30 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
 
            {/* Input Command Line */}
            <div className="p-2 border-t border-[#2a2e39] bg-[#0d1117] z-20">
-              <form onSubmit={handleCommandSubmit} className="flex gap-2 items-center bg-[#1c2128] border border-[#30363d] rounded p-1 pl-3 focus-within:border-[#2962ff] transition-colors">
+              <form onSubmit={handleCommandSubmit} className="flex gap-2 items-center bg-[#1c2128] border border-[#30363d] rounded p-1 pl-3 focus-within:border-[#2962ff] transition-colors relative">
                   <span className="text-green-500 font-bold">{`>`}</span>
                   <input 
                     type="text" 
                     value={inputCommand}
                     onChange={(e) => setInputCommand(e.target.value)}
-                    placeholder="Enter command or update mandate..."
+                    placeholder="Enter command or speak..."
                     className="flex-1 bg-transparent border-none focus:ring-0 text-gray-200 placeholder-gray-600 h-8 text-xs font-mono"
                   />
+                  
+                  {/* Voice Button */}
+                  <button 
+                    type="button"
+                    onClick={toggleListening}
+                    className={`p-1.5 rounded transition-colors mr-1 ${
+                        isListening 
+                          ? 'text-red-500 bg-red-500/10 animate-pulse' 
+                          : 'text-gray-500 hover:text-white hover:bg-white/10'
+                    }`}
+                    title={isListening ? "Listening..." : "Voice Command"}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                  </button>
+
                   <button 
                     type="submit"
                     className="bg-[#2962ff] hover:bg-[#1e53e5] text-white px-3 py-1 rounded text-[10px] font-bold uppercase tracking-wide transition-colors"
@@ -301,6 +408,12 @@ If no trade aligns with the Mandate, output: "HOLDing. Waiting for [specific con
                     Send
                   </button>
               </form>
+              {isListening && (
+                  <div className="absolute bottom-12 left-4 text-[10px] text-green-400 bg-black/80 px-2 py-1 rounded border border-green-500/30 animate-fade-in flex items-center gap-2">
+                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                     Listening... Try "Switch to Scalp" or "Stop System"
+                  </div>
+              )}
            </div>
         </div>
 
