@@ -27,11 +27,22 @@ const {
   deleteAgent
 } = require('./agents/agents');
 
-// Broker State Store
+// Broker State Store & TradeLocker Client
 const {
   setBrokerSnapshot,
-  getBrokerSnapshot
+  getBrokerSnapshot,
+  brokerStateStore
 } = require('./broker/brokerStateStore');
+
+const {
+  fetchTradeLockerSnapshot,
+  placeOrder,
+  closePosition,
+  modifyPosition,
+} = require('./broker/tradelockerClient');
+
+// NEW: Poller
+const { startTradeLockerPolling } = require('./broker/tradelockerPoller');
 
 // Phase 4: Autopilot
 const { 
@@ -45,6 +56,9 @@ const {
   getSimPositions,
   closeSimPosition,
 } = require('./autopilot/simExecutor');
+
+// Phase 4.5: Autopilot Execution
+const { executeTradeCommand } = require('./autopilot/executionEngine');
 
 // Phase 5: Round-table & History
 const { runTradingRoundTable } = require('./roundtable/roundTableEngine');
@@ -135,19 +149,29 @@ app.get('/api/proxy', async (req, res) => {
 });
 
 // ------------------------------
-// Broker / account snapshot
+// Broker snapshot API (Updated)
 // ------------------------------
-// GET /api/broker/snapshot
-// POST /api/broker/snapshot
+//
+// Returns the latest snapshot cached by the TradeLocker poller.
+// If none is cached yet, it fetches one on-demand.
 
-app.get('/api/broker/snapshot', (req, res) => {
+app.get('/api/broker/snapshot', async (req, res) => {
   try {
-    // For now, single-user "default"
-    const snapshot = getBrokerSnapshot('default');
-    res.json(snapshot);
+    let snapshot = brokerStateStore.getSnapshot();
+
+    if (!snapshot) {
+      snapshot = await fetchTradeLockerSnapshot();
+      brokerStateStore.updateSnapshot(snapshot);
+    }
+
+    res.json({
+      ok: true,
+      snapshot,
+    });
   } catch (err) {
-    console.error('Error in GET /api/broker/snapshot:', err);
+    console.error('[API] /api/broker/snapshot error:', err);
     res.status(500).json({
+      ok: false,
       error: 'BrokerSnapshotError',
       message: err.message || 'Unknown error',
     });
@@ -169,11 +193,109 @@ app.post('/api/broker/snapshot', (req, res) => {
 });
 
 // ------------------------------
-// Agent settings / model routing
+// Broker controls API
 // ------------------------------
 //
-// GET /api/agents   -> list all agents and their config
-// POST /api/agents/:id  -> update provider/model for a single agent
+// POST /api/broker/controls
+// Body: { action: string, payload: object }
+//
+// Supported actions:
+// - "place-order"
+// - "close-position"
+// - "modify-position"
+//
+// This is the "execution bus" your AI team will hit.
+
+app.post('/api/broker/controls', async (req, res) => {
+  const { action, payload } = req.body || {};
+
+  if (!action) {
+    return res.status(400).json({
+      ok: false,
+      error: 'MissingAction',
+      message: 'Body must include "action".',
+    });
+  }
+
+  try {
+    let result = null;
+
+    switch (action) {
+      case 'place-order': {
+        result = await placeOrder(payload || {});
+        break;
+      }
+
+      case 'close-position': {
+        const { positionId, qty } = payload || {};
+        if (!positionId && positionId !== 0) {
+          throw new Error(
+            'close-position requires payload.positionId',
+          );
+        }
+        const q =
+          qty === undefined || qty === null ? 0 : Number(qty);
+        result = await closePosition(positionId, q);
+        break;
+      }
+
+      case 'modify-position': {
+        const { positionId, slPrice, tpPrice } = payload || {};
+        if (!positionId && positionId !== 0) {
+          throw new Error(
+            'modify-position requires payload.positionId',
+          );
+        }
+        const params = {};
+        if ('slPrice' in (payload || {})) {
+          params.slPrice =
+            slPrice === null ? null : Number(slPrice);
+        }
+        if ('tpPrice' in (payload || {})) {
+          params.tpPrice =
+            tpPrice === null ? null : Number(tpPrice);
+        }
+        result = await modifyPosition(positionId, params);
+        break;
+      }
+
+      default:
+        return res.status(400).json({
+          ok: false,
+          error: 'UnknownAction',
+          message: `Unsupported action "${action}".`,
+        });
+    }
+
+    try {
+      const snapshot = await fetchTradeLockerSnapshot();
+      brokerStateStore.updateSnapshot(snapshot);
+    } catch (snapErr) {
+      console.warn(
+        '[API] /api/broker/controls – failed to refresh snapshot:',
+        snapErr.message,
+      );
+    }
+
+    res.json({
+      ok: true,
+      action,
+      result,
+    });
+  } catch (err) {
+    console.error('[API] /api/broker/controls error:', err);
+    res.status(500).json({
+      ok: false,
+      action,
+      error: 'BrokerControlError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+// ------------------------------
+// Agent settings / model routing
+// ------------------------------
 
 app.get('/api/agents', (req, res) => {
   try {
@@ -204,7 +326,6 @@ app.post('/api/agents/:id', (req, res) => {
       });
     }
 
-    // Optional: basic validation
     if (provider && !['openai', 'gemini'].includes(provider)) {
       return res.status(400).json({
         error: 'BadRequest',
@@ -229,10 +350,6 @@ app.post('/api/agents/:id', (req, res) => {
     });
   }
 });
-
-// ------------------------------
-// Agent builder: create & delete
-// ------------------------------
 
 app.post('/api/agents', (req, res) => {
   try {
@@ -445,6 +562,46 @@ app.post('/api/autopilot/voice-parse', async (req, res) => {
   }
 });
 
+// ------------------------------
+// Autopilot execution endpoint
+// ------------------------------
+app.post('/api/autopilot/execute', async (req, res) => {
+  try {
+    const { mode, source, command } = req.body || {};
+
+    if (!command || !command.type) {
+      return res.status(400).json({
+        ok: false,
+        error: 'MissingCommand',
+        message:
+          'Body must include "command" with a valid "type" field.',
+      });
+    }
+
+    const useMode =
+      mode === 'auto' || mode === 'confirm' ? mode : 'confirm';
+
+    const result = await executeTradeCommand({
+      mode: useMode,
+      command,
+      source: source || 'api',
+    });
+
+    res.json({
+      ok: true,
+      mode: useMode,
+      result,
+    });
+  } catch (err) {
+    console.error('[API] /api/autopilot/execute error:', err);
+    res.status(500).json({
+      ok: false,
+      error: 'AutopilotExecuteError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
 // --- ROUND TABLE ---
 app.post('/api/roundtable/plan', async (req, res) => {
   try {
@@ -618,7 +775,7 @@ app.get('/api/playbooks', (req, res) => {
   res.json(entries);
 });
 
-// --- TRADELOCKER PROXY ---
+// --- TRADELOCKER PROXY (LEGACY / INTERACTIVE) ---
 function getBaseUrl(isDemo) {
   return isDemo
     ? 'https://demo.tradelocker.com/backend-api'
@@ -1021,6 +1178,9 @@ if (fs.existsSync(clientDistPath)) {
 }
 
 setupMarketData(server);
+
+// Start TradeLocker polling if configured (no Socket.io broadcasting yet as requested)
+startTradeLockerPolling(null);
 
 server.listen(PORT, () => {
   console.log(`AI Trading Analyst Backend (Protected) listening on port ${PORT}`);

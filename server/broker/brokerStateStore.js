@@ -1,158 +1,64 @@
 
 // server/broker/brokerStateStore.js
-//
-// JSON-backed broker/account snapshot store.
-// Single-user for now (keyed by "default") but easily extendable to multi-user.
-// This lets the AI see: balance, equity, daily PnL, and open positions.
 
-const fs = require('fs');
-const path = require('path');
+class BrokerStateStore {
+  constructor() {
+    this.currentSnapshot = null;
+    this.lastUpdated = null;
+    this.subscribers = new Set();
+  }
 
-const DATA_DIR = path.join(__dirname, '..', '..', 'data');
-const BROKER_FILE = path.join(DATA_DIR, 'brokerSnapshot.json');
+  /**
+   * Update the in-memory broker snapshot and notify listeners.
+   * @param {any} snapshot
+   */
+  updateSnapshot(snapshot) {
+    this.currentSnapshot = snapshot;
+    this.lastUpdated = new Date();
+    for (const fn of this.subscribers) {
+      try {
+        fn(snapshot);
+      } catch (err) {
+        console.error('[BrokerStateStore] subscriber error:', err);
+      }
+    }
+  }
 
-const DEFAULT_USER_ID = 'default';
+  /**
+   * Get the latest snapshot (or null if not yet fetched).
+   */
+  getSnapshot() {
+    return this.currentSnapshot;
+  }
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  /**
+   * Subscribe to snapshot updates. Returns an unsubscribe function.
+   */
+  onUpdate(fn) {
+    this.subscribers.add(fn);
+    return () => this.subscribers.delete(fn);
   }
 }
 
-function loadAllSnapshots() {
-  ensureDataDir();
-  if (!fs.existsSync(BROKER_FILE)) {
-    return {};
-  }
-  try {
-    const raw = fs.readFileSync(BROKER_FILE, 'utf8');
-    if (!raw.trim()) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch (err) {
-    console.error('[BrokerState] Failed to load brokerSnapshot.json:', err);
-    return {};
-  }
-}
+const brokerStateStore = new BrokerStateStore();
 
-function saveAllSnapshots(map) {
-  ensureDataDir();
-  try {
-    fs.writeFileSync(BROKER_FILE, JSON.stringify(map, null, 2), 'utf8');
-  } catch (err) {
-    console.error('[BrokerState] Failed to save brokerSnapshot.json:', err);
-  }
-}
+// --- ADAPTERS FOR LEGACY CODE COMPATIBILITY ---
 
 /**
- * Normalize incoming snapshot payload into a clean object.
- *
- * Shape:
- * {
- *   accountId: string | null,
- *   broker: string | null,
- *   currency: string | null,
- *   balance: number | null,
- *   equity: number | null,
- *   freeMargin: number | null,
- *   marginUsed: number | null,
- *   dailyPnl: number | null,
- *   dailyDrawdown: number | null,
- *   openPositions: [
- *     {
- *       ticket: string,
- *       symbol: string,
- *       direction: "buy" | "sell",
- *       volume: number,
- *       entryPrice: number,
- *       stopLoss: number | null,
- *       takeProfit: number | null,
- *       unrealizedPnl: number | null,
- *       openedAt: number | null
- *     }
- *   ]
- * }
- */
-function normalizeSnapshot(input) {
-  const src = input || {};
-
-  const toNum = (val) =>
-    typeof val === 'number'
-      ? val
-      : typeof val === 'string'
-      ? Number(val)
-      : null;
-
-  const snapshot = {
-    accountId:
-      typeof src.accountId === 'string' ? src.accountId : null,
-    broker: typeof src.broker === 'string' ? src.broker : null,
-    currency:
-      typeof src.currency === 'string' ? src.currency : null,
-    balance: toNum(src.balance),
-    equity: toNum(src.equity),
-    freeMargin: toNum(src.freeMargin),
-    marginUsed: toNum(src.marginUsed),
-    dailyPnl: toNum(src.dailyPnl),
-    dailyDrawdown: toNum(src.dailyDrawdown),
-    openPositions: [],
-    updatedAt: Date.now(),
-  };
-
-  if (Array.isArray(src.openPositions)) {
-    snapshot.openPositions = src.openPositions.map((p) => ({
-      ticket:
-        typeof p.ticket === 'string' ? p.ticket : '',
-      symbol:
-        typeof p.symbol === 'string' ? p.symbol : '',
-      direction:
-        p.direction === 'buy' || p.direction === 'sell'
-          ? p.direction
-          : '',
-      volume: toNum(p.volume) || 0,
-      entryPrice: toNum(p.entryPrice),
-      stopLoss: toNum(p.stopLoss),
-      takeProfit: toNum(p.takeProfit),
-      unrealizedPnl: toNum(p.unrealizedPnl),
-      openedAt:
-        typeof p.openedAt === 'number'
-          ? p.openedAt
-          : typeof p.openedAt === 'string'
-          ? Date.parse(p.openedAt) || null
-          : null,
-    }));
-  }
-
-  return snapshot;
-}
-
-/**
- * Store broker snapshot for a given user.
- *
- * @param {string} userId
- * @param {object} payload
+ * Legacy adapter: set snapshot for a user.
+ * In this version, we map it to the singleton store.
  */
 function setBrokerSnapshot(userId, payload) {
-  const id = userId || DEFAULT_USER_ID;
-  const all = loadAllSnapshots();
-  const normalized = normalizeSnapshot(payload);
-  all[id] = normalized;
-  saveAllSnapshots(all);
-  return normalized;
+  brokerStateStore.updateSnapshot(payload);
+  return payload;
 }
 
 /**
- * Get broker snapshot for a given user. If none, returns a neutral snapshot.
- *
- * @param {string} userId
+ * Legacy adapter: get snapshot for a user.
+ * Returns the singleton snapshot.
  */
 function getBrokerSnapshot(userId) {
-  const id = userId || DEFAULT_USER_ID;
-  const all = loadAllSnapshots();
-  const snap = all[id];
-  if (snap) return snap;
-
-  return {
+  return brokerStateStore.getSnapshot() || {
     accountId: null,
     broker: null,
     currency: null,
@@ -169,8 +75,7 @@ function getBrokerSnapshot(userId) {
 
 /**
  * Build a compact text summary of broker state for prompts.
- *
- * @param {object} snapshot
+ * Updated to handle the normalized format from tradelockerClient.
  */
 function formatBrokerSnapshotForPrompt(snapshot) {
   if (!snapshot) {
@@ -191,7 +96,9 @@ function formatBrokerSnapshotForPrompt(snapshot) {
       ? snapshot.equity.toFixed(2)
       : 'n/a';
   const freeMargin =
-    typeof snapshot.freeMargin === 'number'
+    typeof snapshot.marginAvailable === 'number'
+      ? snapshot.marginAvailable.toFixed(2)
+      : typeof snapshot.freeMargin === 'number'
       ? snapshot.freeMargin.toFixed(2)
       : 'n/a';
   const usedMargin =
@@ -216,28 +123,24 @@ function formatBrokerSnapshotForPrompt(snapshot) {
   if (Array.isArray(snapshot.openPositions) && snapshot.openPositions.length) {
     parts.push('', 'Open positions:');
     snapshot.openPositions.forEach((p, idx) => {
-      const side =
-        p.direction === 'buy'
-          ? 'LONG'
-          : p.direction === 'sell'
-          ? 'SHORT'
-          : 'UNKNOWN';
-      const vol =
-        typeof p.volume === 'number' ? p.volume.toFixed(2) : 'n/a';
-      const ep =
-        typeof p.entryPrice === 'number'
-          ? p.entryPrice.toFixed(2)
-          : 'n/a';
-      const upnl =
-        typeof p.unrealizedPnl === 'number'
-          ? p.unrealizedPnl.toFixed(2)
-          : 'n/a';
+      // Handle normalized 'side' (LONG/SHORT) or raw 'direction'
+      let side = 'UNKNOWN';
+      if (p.side) side = p.side;
+      else if (p.direction === 'buy') side = 'LONG';
+      else if (p.direction === 'sell') side = 'SHORT';
+
+      const vol = (typeof p.size === 'number' ? p.size : p.volume) || 0;
+      const ep = (typeof p.entryPrice === 'number' ? p.entryPrice : 0).toFixed(2);
+      
+      const upnlVal = typeof p.unrealizedPnl === 'number' ? p.unrealizedPnl : 0;
+      const upnl = upnlVal.toFixed(2);
+      
       const symbol = p.symbol || 'UNKNOWN';
+      const sl = typeof p.stopLoss === 'number' ? p.stopLoss.toFixed(2) : 'n/a';
+      const tp = typeof p.takeProfit === 'number' ? p.takeProfit.toFixed(2) : 'n/a';
 
       parts.push(
-        `${idx + 1}. ${symbol} ${side} ${vol} @ ${ep}, uPnL=${upnl}, SL=${
-          p.stopLoss ?? 'n/a'
-        }, TP=${p.takeProfit ?? 'n/a'}`
+        `${idx + 1}. ${symbol} ${side} ${vol} @ ${ep}, uPnL=${upnl}, SL=${sl}, TP=${tp}`
       );
     });
   } else {
@@ -248,7 +151,8 @@ function formatBrokerSnapshotForPrompt(snapshot) {
 }
 
 module.exports = {
+  brokerStateStore,
   setBrokerSnapshot,
   getBrokerSnapshot,
-  formatBrokerSnapshotForPrompt,
+  formatBrokerSnapshotForPrompt
 };
