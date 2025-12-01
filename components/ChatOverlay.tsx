@@ -748,7 +748,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     return { journalContextPayload, chartContextPayload };
   };
 
-  const handleAgentRoundtable = async () => {
+  const handleDebrief = async () => {
       // ... (implementation same as before)
       const agentMessages = messages.filter(m => m.role === 'assistant');
       if (agentMessages.length === 0) return;
@@ -1225,11 +1225,13 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleAgentRoundtable}
-                disabled={isSending}
-                className="text-[10px] px-2 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-md transition-colors disabled:opacity-50"
+                onClick={handleDebrief}
+                disabled={isSending || messages.filter(m => m.role === 'assistant').length === 0}
+                 className="flex items-center gap-1.5 text-[10px] px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                 title="Trigger a team debrief based on recent analysis"
               >
-                Agent Round 2
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a2 2 0 0 0-2-2-3-3 0 0 0-3-3"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                Team Debrief
               </button>
               <p className="text-[10px] text-gray-400">
                 {isBrokerConnected ? 'Broker Connected' : 'Simulated Environment'}
