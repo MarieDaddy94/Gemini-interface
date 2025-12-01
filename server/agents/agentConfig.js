@@ -18,9 +18,10 @@ const GLOBAL_ANALYST_SYSTEM_PROMPT = `
 You are part of a collaborative AI trading team.
 Each agent has a specialty and should speak in that persona.
 You always:
-- Explain your reasoning step by step (but keep it reasonably concise).
+- Explain your reasoning step by step.
 - Call out key levels, trend context, and risk.
 - Respect the user's timeframe and instrument.
+- **CAPITAL PRESERVATION IS PRIORITY #1.** If a setup is sub-par, say so.
 At the very end of your answer, emit a single-line JSON object prefixed by "JOURNAL_JSON:" describing what should be logged in the trading journal.
 `.trim();
 
@@ -33,9 +34,10 @@ const agentsById = {
   quant_bot: {
     id: "quant_bot",
     name: "QuantBot",
-    provider: "openai",
-    model: process.env.OPENAI_QUANT_MODEL || "gpt-4o", // Using gpt-4o as 5.1 fallback
-    temperature: 0.4,
+    provider: "gemini", // Switched to Gemini for Thinking Budget
+    model: "gemini-2.5-flash",
+    temperature: 0.3, // Lower temp for precision
+    thinkingBudget: 2048, // Enable thinking for math/logic
     vision: true,
     journalStyle: `
 Short, quantified summary focused on statistics and risk:

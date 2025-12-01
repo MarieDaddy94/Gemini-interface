@@ -75,6 +75,8 @@ interface JournalContextValue {
   addEntryFromToolResult: (toolResult: ToolResult) => void;
   setEntries: (entries: JournalEntry[]) => void;
   clearJournal: () => void;
+  exportJournal: () => void;
+  importJournal: (file: File) => Promise<void>;
 }
 
 const JournalContext = createContext<JournalContextValue | undefined>(
@@ -184,7 +186,6 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const clearJournal = () => {
     setEntries([]);
-    // Best effort cleanup of local storage
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
         const keysToRemove: string[] = [];
@@ -201,13 +202,50 @@ export const JournalProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
+  // --- Backup Functions ---
+  const exportJournal = () => {
+    const dataStr = JSON.stringify(entries, null, 2);
+    const blob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trading_journal_backup_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const importJournal = (file: File): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const result = e.target?.result as string;
+          const parsed = JSON.parse(result);
+          if (Array.isArray(parsed)) {
+            setEntries(parsed);
+            resolve();
+          } else {
+            reject(new Error("Invalid JSON: Expected an array of entries."));
+          }
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsText(file);
+    });
+  };
+
   const value = useMemo(
     () => ({
       entries,
       addEntry,
       addEntryFromToolResult,
       setEntries,
-      clearJournal
+      clearJournal,
+      exportJournal,
+      importJournal
     }),
     [entries]
   );

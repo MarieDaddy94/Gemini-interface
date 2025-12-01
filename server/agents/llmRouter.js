@@ -1,6 +1,4 @@
 
-
-
 // server/agents/llmRouter.js
 
 const {
@@ -242,6 +240,12 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalCont
     const parts = buildGeminiContents({ userMessage, screenshot });
     const systemPrompt = buildSystemPrompt(agentCfg, journalMode, chartContext, journalContext, squadContext);
 
+    // Apply Thinking Config if defined in agentConfig (e.g., QuantBot)
+    let thinkingConfig = undefined;
+    if (agentCfg.thinkingBudget) {
+      thinkingConfig = { thinkingBudget: agentCfg.thinkingBudget };
+    }
+
     const result = await ai.models.generateContent({
       model: agentCfg.model || 'gemini-2.5-flash',
       contents: {
@@ -251,7 +255,8 @@ async function runGeminiAgent(agentCfg, { userMessage, chartContext, journalCont
       config: {
         systemInstruction: systemPrompt,
         temperature: agentCfg.temperature ?? 0.6,
-        responseMimeType: "application/json" // Force JSON
+        responseMimeType: "application/json", // Force JSON
+        thinkingConfig: thinkingConfig,
       }
     });
 
@@ -357,10 +362,6 @@ async function runAgentsDebrief(opts) {
   const results = [];
 
   // We want active agents from the previous round or a standard set. 
-  // Let's iterate over the agents that participated previously to let them respond.
-  // Or better, let all configured agents have a chance to chime in. 
-  // For now, let's stick to the main active agents defined in agentConfig or implied by previousInsights.
-  
   const activeAgentIds = ["quant_bot", "trend_master", "pattern_gpt", "journal_coach"];
 
   const baseMessage = `

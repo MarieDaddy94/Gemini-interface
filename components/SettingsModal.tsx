@@ -1,5 +1,6 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useJournal } from '../context/JournalContext';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -7,14 +8,19 @@ interface SettingsModalProps {
 }
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+  const { exportJournal, importJournal, entries } = useJournal();
+  
   const [openaiKey, setOpenaiKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
   const [showKeys, setShowKeys] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importStatus, setImportStatus] = useState<string>('');
 
   useEffect(() => {
     if (isOpen) {
       setOpenaiKey(localStorage.getItem('openai_api_key') || '');
       setGeminiKey(localStorage.getItem('gemini_api_key') || '');
+      setImportStatus('');
     }
   }, [isOpen]);
 
@@ -45,6 +51,23 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      await importJournal(file);
+      setImportStatus('Success: Journal loaded!');
+      e.target.value = ''; // reset
+    } catch (err: any) {
+      setImportStatus(`Error: ${err.message}`);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
       <div className="bg-[#1e222d] border border-[#2a2e39] rounded-lg shadow-2xl w-full max-w-md overflow-hidden">
@@ -63,10 +86,56 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
         {/* Body */}
         <form onSubmit={handleSave} className="p-6 space-y-5">
+          {/* DATA MANAGEMENT SECTION */}
+          <div className="space-y-2 pb-4 border-b border-[#2a2e39]">
+            <label className="block text-xs font-medium text-gray-400 uppercase mb-1">
+              Data Management
+            </label>
+            <div className="bg-[#131722] p-3 rounded border border-[#2a2e39] space-y-3">
+               <div className="flex items-center justify-between">
+                 <div className="text-xs text-gray-300">
+                   <span className="font-semibold">{entries.length}</span> journal entries in memory.
+                 </div>
+                 <div className="flex gap-2">
+                    <input 
+                      type="file" 
+                      accept=".json" 
+                      ref={fileInputRef} 
+                      className="hidden" 
+                      onChange={handleFileChange} 
+                    />
+                    <button
+                      type="button"
+                      onClick={handleImportClick}
+                      className="text-[10px] bg-[#2a2e39] hover:bg-[#363a45] text-white px-3 py-1.5 rounded transition-colors border border-gray-600"
+                    >
+                      Import
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportJournal}
+                      disabled={entries.length === 0}
+                      className="text-[10px] bg-[#2962ff] hover:bg-[#1e53e5] text-white px-3 py-1.5 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Backup
+                    </button>
+                 </div>
+               </div>
+               {importStatus && (
+                 <div className={`text-[10px] ${importStatus.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                   {importStatus}
+                 </div>
+               )}
+               <p className="text-[10px] text-gray-500 leading-snug">
+                 <strong>Tip:</strong> Since this app runs without a database, save backups regularly to avoid losing your journal data if you clear your browser cache.
+               </p>
+            </div>
+          </div>
+
           <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3 text-xs text-blue-200">
             <p className="font-semibold mb-1">Bring Your Own Keys (BYOK)</p>
             <p className="opacity-80">
-              Keys are stored securely in your browser's LocalStorage and sent directly to the backend proxy for each request. They are never saved on the server.
+              Keys are stored securely in your browser's LocalStorage and sent directly to the backend proxy for each request.
             </p>
           </div>
 
@@ -82,7 +151,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 placeholder="sk-..."
                 className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
               />
-              <p className="text-[10px] text-gray-500 mt-1">Required for QuantBot & Pattern_GPT</p>
+              <p className="text-[10px] text-gray-500 mt-1">Required for Pattern_GPT</p>
             </div>
 
             <div>
@@ -96,7 +165,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                 placeholder="AIza..."
                 className="w-full bg-[#131722] border border-[#2a2e39] rounded px-3 py-2 text-white focus:outline-none focus:border-[#2962ff] text-sm"
               />
-              <p className="text-[10px] text-gray-500 mt-1">Required for TrendMaster & Coach</p>
+              <p className="text-[10px] text-gray-500 mt-1">Required for QuantBot & Coach</p>
             </div>
           </div>
 
