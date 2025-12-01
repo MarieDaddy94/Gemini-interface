@@ -1,5 +1,8 @@
 
-
+import {
+  TradingSessionState,
+  AgentMessage,
+} from '../types';
 
 export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_coach";
 
@@ -170,4 +173,44 @@ export async function fetchAgentDebrief(params: {
     tradeMeta: a.tradeMeta || null,
     toolCalls: a.toolCalls || []
   }));
+}
+
+// -----------------------------------------------------
+// Phase 2: Orchestrator Helper
+// -----------------------------------------------------
+
+export interface AgentRouterRequest {
+  agentId?: string;
+  userMessage: string;
+  sessionState: TradingSessionState;
+  history?: AgentMessage[];
+}
+
+export interface AgentRouterResponse {
+  agentId: string;
+  content: string;
+}
+
+/**
+ * Call the backend agent router.
+ * This is what your ChatOverlay (or future voice controller) will use.
+ */
+export async function callAgentRouter(
+  payload: AgentRouterRequest
+): Promise<AgentRouterResponse> {
+  const resp = await fetch(`${API_BASE_URL}/api/agent-router`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(
+      `Agent router request failed (${resp.status}): ${resp.statusText} - ${text}`
+    );
+  }
+
+  const json = (await resp.json()) as AgentRouterResponse;
+  return json;
 }

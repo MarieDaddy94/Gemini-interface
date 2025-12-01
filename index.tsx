@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import { TradingSessionProvider } from './context/TradingSessionContext';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -11,8 +12,10 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
+    <TradingSessionProvider>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </TradingSessionProvider>
   </React.StrictMode>
 );

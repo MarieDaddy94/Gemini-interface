@@ -16,6 +16,9 @@ const createAgentsRouter = require('./routes/agents');
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
 const { setupMarketData, getPrice } = require('./marketData');
 
+// Phase 2: Import new Orchestrator
+const { handleAgentRequest } = require('./agents/orchestrator');
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
@@ -34,6 +37,7 @@ const aiLimiter = rateLimit({
 
 app.use('/api/agents/', aiLimiter);
 app.use('/api/ai/', aiLimiter);
+app.use('/api/agent-router', aiLimiter); // Limit the new router too
 
 app.use(
   cors({
@@ -181,6 +185,28 @@ app.post('/api/ai/route', async (req, res) => {
     res.status(500).json({ 
       error: err.message || 'Internal AI Error',
       message: { role: 'assistant', content: 'I encountered an error processing your request.' }
+    });
+  }
+});
+
+// --- PHASE 2: AGENT ROUTER ENDPOINT ---
+app.post('/api/agent-router', async (req, res) => {
+  try {
+    const { agentId, userMessage, sessionState, history } = req.body || {};
+
+    const result = await handleAgentRequest({
+      agentId,
+      userMessage,
+      sessionState,
+      history,
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error('Error in /api/agent-router:', err);
+    res.status(500).json({
+      error: 'Agent router error',
+      message: err.message || 'Unknown error',
     });
   }
 });

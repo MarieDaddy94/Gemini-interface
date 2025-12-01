@@ -345,3 +345,81 @@ export interface AnalystHistoryItem {
   text: string;
   isUser: boolean;
 }
+
+// ===============================
+// Trading Session & Agent Types
+// ===============================
+
+export type AutopilotMode = 'off' | 'advisor' | 'semi' | 'full';
+
+export type TradingEnvironment = 'sim' | 'live';
+
+export interface TradingInstrument {
+  symbol: string;          // e.g. "US30", "NAS100", "XAUUSD"
+  displayName: string;     // e.g. "US30 (Dow Jones)"
+  brokerSymbol?: string;   // e.g. "US30.r" or "U30USD" for FunderPro/TradeLocker
+}
+
+export interface TimeframeState {
+  currentTimeframe: string;    // e.g. "1m", "5m", "15m", "1h"
+  higherTimeframes: string[];  // e.g. ["15m", "1h", "4h", "1D"]
+}
+
+export interface AccountState {
+  accountId?: string;         // broker account identifier when connected
+  accountName?: string;       // human readable label
+  equity?: number;            // current equity if known
+  balance?: number;           // current balance if known
+  currency?: string;          // e.g. "USD"
+  isFundedAccount: boolean;   // true for 100K / 200K prop, false for personal/demo
+  fundedSize?: number;        // e.g. 200000 for a 200K account
+}
+
+export type AgentRole =
+  | 'strategist'
+  | 'risk'
+  | 'quant'
+  | 'execution'
+  | 'journal';
+
+export interface AgentDefinition {
+  id: string;           // stable ID, e.g. "strategist-main"
+  name: string;         // display name, e.g. "Strategist"
+  role: AgentRole;
+  description: string;  // short description for UI
+  modelHint?: string;   // e.g. "gpt-5.1", "gemini-1.5-pro", "gemini-vision"
+  isEnabled: boolean;
+}
+
+export type AgentMessageSender = 'user' | 'agent';
+
+export interface AgentMessage {
+  id: string;
+  agentId?: string;           // which agent produced this, if any
+  sender: AgentMessageSender;
+  content: string;
+  createdAt: string;          // ISO timestamp
+  metadata?: Record<string, unknown>;
+}
+
+export interface TradingSessionState {
+  // Core session info
+  environment: TradingEnvironment;
+  autopilotMode: AutopilotMode;
+
+  // Instrument & timeframe
+  instrument: TradingInstrument;
+  timeframe: TimeframeState;
+
+  // Account context
+  account: AccountState;
+
+  // Agent roster & conversation
+  agents: AgentDefinition[];
+  messages: AgentMessage[];
+
+  // Flags we’ll use later (risk, connectivity, etc.)
+  isBrokerConnected: boolean;
+  isNewsHighImpactNow: boolean;
+  isVisionActive: boolean;
+}
