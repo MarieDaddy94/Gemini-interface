@@ -1,5 +1,6 @@
 
 // server/tool-runner.js
+const { getPrice } = require('./marketData');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -58,6 +59,40 @@ function createRuntimeContext(sessions, journals, reqContext) {
       
       if (filtered.length === 0) return "No open positions.";
       return filtered;
+    },
+
+    executeOrder: async (args) => {
+      const { symbol, side, size, stopLoss, takeProfit } = args;
+      const session = getSession(null); // use context brokerSessionId
+      if (!session) return "Error: No active broker session to execute trade.";
+
+      try {
+        const entryPrice = getPrice(symbol) || 0;
+        if (entryPrice === 0) return "Error: Market data unavailable for symbol.";
+
+        const positionId = `auto-${Date.now()}`;
+        const newPosition = {
+          id: positionId,
+          symbol,
+          side,
+          size: Number(size),
+          entryPrice,
+          currentPrice: entryPrice,
+          pnl: 0,
+          openTime: new Date().toISOString(),
+          sl: stopLoss,
+          tp: takeProfit,
+          isSimulated: true // Flag as simulated/autopilot
+        };
+
+        if (!session.simulatedPositions) session.simulatedPositions = [];
+        session.simulatedPositions.push(newPosition);
+
+        console.log(`[Autopilot] Executed ${side} ${size} ${symbol} @ ${entryPrice}`);
+        return `SUCCESS: Order executed. ID: ${positionId}. Entry: ${entryPrice}`;
+      } catch (e) {
+        return `Error executing order: ${e.message}`;
+      }
     },
 
     getRecentTrades: async ({ limit }) => {

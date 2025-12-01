@@ -12,6 +12,7 @@
  *  - temperature: creativity level
  *  - journalStyle: guidance for journaling JSON
  *  - vision: whether this agent cares about screenshots
+ *  - tools: explicit list of allowed tools (optional, otherwise uses default set)
  */
 
 const GLOBAL_ANALYST_SYSTEM_PROMPT = `
@@ -51,6 +52,7 @@ Short, quantified summary focused on statistics and risk:
 - sentiment: one of ["bullish","bearish","neutral","mixed"]
 - tags: array like ["US30","scalp","NY","1m","news-avoid"]
     `.trim(),
+    tools: ["get_broker_overview", "get_open_positions", "get_recent_trades", "append_journal_entry", "execute_order"]
   },
 
   trend_master: {
@@ -68,6 +70,7 @@ Focus on higher-timeframe structure and trend:
 - sentiment: "bullish","bearish","neutral","mixed"
 - tags: include timeframe tags like ["4h","1h","structure"]
     `.trim(),
+    tools: ["get_recent_trades", "get_playbooks"]
   },
 
   pattern_gpt: {
@@ -84,6 +87,7 @@ Focus on chart patterns and liquidity grabs:
 - sentiment: "bullish","bearish","neutral","mixed"
 - tags: include pattern tags like ["FVG","orderblock","liquidity","1m"]
     `.trim(),
+    tools: ["get_recent_trades", "get_playbooks"]
   },
 
   journal_coach: {
@@ -118,6 +122,7 @@ Logic:
 - Planning buys -> "direction": "long"
 - Planning sells -> "direction": "short"
     `.trim(),
+    tools: ["get_recent_trades", "append_journal_entry"]
   },
 };
 

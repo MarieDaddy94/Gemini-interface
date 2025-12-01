@@ -8,6 +8,7 @@ import SettingsModal from './components/SettingsModal';
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
+import AutopilotPanel from './components/AutopilotPanel';
 import { JournalProvider, useJournal } from './context/JournalContext';
 import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
 import { AgentConfigProvider } from './context/AgentConfigContext';
@@ -33,7 +34,7 @@ import {
 } from './symbolMap';
 import { fetchJournalEntries } from './services/journalService';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics';
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -71,6 +72,7 @@ const Dashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<MainTab>('terminal');
   const tabs: { id: MainTab; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
+    { id: 'autopilot', label: 'Autopilot' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
@@ -444,6 +446,7 @@ const Dashboard: React.FC = () => {
 
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
+          {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} /></div>}
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {activeTab === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}

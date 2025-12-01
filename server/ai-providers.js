@@ -398,6 +398,26 @@ const brokerAndJournalTools = [
     },
   },
   {
+    name: "execute_order",
+    description: "Execute a market order on the broker. Use cautiously.",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string" },
+        side: { type: "string", enum: ["buy", "sell"] },
+        size: { type: "number" },
+        stopLoss: { type: "number" },
+        takeProfit: { type: "number" },
+        reason: { type: "string", description: "Why is this trade being taken? Justification is required." }
+      },
+      required: ["symbol", "side", "size", "reason"]
+    },
+    handler: async (args, ctx) => {
+      if (!ctx.executeOrder) throw new Error("Missing executeOrder ctx");
+      return ctx.executeOrder(args);
+    }
+  },
+  {
     name: "get_recent_trades",
     description: "Return the last N closed trades from the trading journal/history.",
     parameters: {
