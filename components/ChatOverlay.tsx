@@ -43,6 +43,191 @@ interface ChatOverlayProps {
   openPositions?: BrokerPosition[];
 }
 
+// --- Annotation Modal Helper ---
+
+interface AnnotationModalProps {
+  imageSrc: string;
+  onConfirm: (base64NoPrefix: string) => void;
+  onCancel: () => void;
+}
+
+const AnnotationModal: React.FC<AnnotationModalProps> = ({ imageSrc, onConfirm, onCancel }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [tool, setTool] = useState<'rect' | 'pen'>('rect');
+  const [color, setColor] = useState('#f23645'); // Default Red
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
+  const [snapshot, setSnapshot] = useState<ImageData | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.src = imageSrc;
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+    };
+  }, [imageSrc]);
+
+  const getPos = (e: React.MouseEvent | React.TouchEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    
+    let clientX, clientY;
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = (e as React.MouseEvent).clientX;
+      clientY = (e as React.MouseEvent).clientY;
+    }
+    
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY
+    };
+  };
+
+  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    const pos = getPos(e);
+    setStartPos(pos);
+    setIsDrawing(true);
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (ctx && canvas) {
+      setSnapshot(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      
+      if (tool === 'pen') {
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+      }
+    }
+  };
+
+  const draw = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!ctx || !canvas || !snapshot) return;
+
+    const currentPos = getPos(e);
+
+    if (tool === 'rect') {
+      ctx.putImageData(snapshot, 0, 0);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(startPos.x, startPos.y, currentPos.x - startPos.x, currentPos.y - startPos.y);
+    } else if (tool === 'pen') {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineTo(currentPos.x, currentPos.y);
+      ctx.stroke();
+    }
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const handleDone = () => {
+    if (canvasRef.current) {
+      const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.9);
+      onConfirm(dataUrl.split(',')[1]);
+    }
+  };
+
+  const handleReset = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const img = new Image();
+    img.src = imageSrc;
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-black/90 backdrop-blur-sm animate-fade-in select-none">
+      <div className="flex items-center justify-between px-6 py-4 bg-[#1e222d] border-b border-[#2a2e39]">
+        <div className="flex items-center gap-4">
+          <h3 className="text-white font-medium">Annotate Image</h3>
+          <div className="h-6 w-[1px] bg-[#2a2e39]"></div>
+          
+          <div className="flex bg-[#131722] rounded-md p-1 border border-[#2a2e39]">
+            <button 
+              onClick={() => setTool('rect')} 
+              className={`p-1.5 rounded ${tool === 'rect' ? 'bg-[#2962ff] text-white' : 'text-gray-400 hover:text-white'}`}
+              title="Draw Box"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+            </button>
+            <button 
+              onClick={() => setTool('pen')} 
+              className={`p-1.5 rounded ${tool === 'pen' ? 'bg-[#2962ff] text-white' : 'text-gray-400 hover:text-white'}`}
+              title="Freehand Pen"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"></path><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path><path d="M2 2l7.586 7.586"></path><circle cx="11" cy="11" r="2"></circle></svg>
+            </button>
+          </div>
+          
+          <div className="flex gap-2">
+            {['#f23645', '#089981', '#2962ff', '#e0b0ff', '#ffffff'].map(c => (
+              <button 
+                key={c} 
+                onClick={() => setColor(c)}
+                className={`w-6 h-6 rounded-full border-2 ${color === c ? 'border-white scale-110' : 'border-transparent opacity-70 hover:opacity-100'}`}
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+          
+           <button 
+              onClick={handleReset} 
+              className="text-xs text-gray-400 hover:text-white border border-[#2a2e39] px-2 py-1 rounded hover:bg-[#2a2e39] transition-colors"
+           >
+              Reset
+           </button>
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Cancel</button>
+          <button onClick={handleDone} className="px-4 py-2 bg-[#2962ff] text-white rounded font-medium hover:bg-[#1e53e5]">Done</button>
+        </div>
+      </div>
+
+      <div className="flex-1 flex items-center justify-center overflow-auto p-4 bg-[#0a0c10] touch-none">
+        <canvas 
+          ref={canvasRef}
+          className="max-h-full max-w-full shadow-2xl border border-gray-800 cursor-crosshair"
+          onMouseDown={startDrawing}
+          onMouseMove={draw}
+          onMouseUp={stopDrawing}
+          onMouseLeave={stopDrawing}
+          onTouchStart={startDrawing}
+          onTouchMove={draw}
+          onTouchEnd={stopDrawing}
+        />
+      </div>
+    </div>
+  );
+};
+
 // --- Crop Modal Helper ---
 interface CropRect {
   x: number;
@@ -151,7 +336,7 @@ const CropModal: React.FC<{
             disabled={!selection || selection.width < 10}
             className="px-4 py-2 bg-[#2962ff] text-white rounded font-medium hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Capture Region
+            Crop & Annotate
           </button>
         </div>
       </div>
@@ -230,9 +415,12 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
   const [isVisionActive, setIsVisionActive] = useState(false);
   const [pendingFileImage, setPendingFileImage] = useState<{ mimeType: string; data: string } | null>(null);
   
-  // Region Selection State
+  // Region Selection & Annotation State
   const [showCropModal, setShowCropModal] = useState(false);
   const [tempSnapshotForCrop, setTempSnapshotForCrop] = useState<string | null>(null);
+  
+  const [showAnnotationModal, setShowAnnotationModal] = useState(false);
+  const [tempCroppedImage, setTempCroppedImage] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -416,15 +604,30 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
     }
   };
 
+  // After crop confirmation, move to annotation
   const handleCropConfirm = (croppedBase64: string) => {
-    setPendingFileImage({ mimeType: 'image/jpeg', data: croppedBase64 });
+    // Add prefix back for the image src
+    setTempCroppedImage(`data:image/jpeg;base64,${croppedBase64}`);
     setShowCropModal(false);
     setTempSnapshotForCrop(null);
+    setShowAnnotationModal(true);
   };
 
   const handleCropCancel = () => {
     setShowCropModal(false);
     setTempSnapshotForCrop(null);
+  };
+
+  // After annotation confirmation, set as final image
+  const handleAnnotationConfirm = (finalBase64: string) => {
+    setPendingFileImage({ mimeType: 'image/jpeg', data: finalBase64 });
+    setShowAnnotationModal(false);
+    setTempCroppedImage(null);
+  };
+
+  const handleAnnotationCancel = () => {
+    setShowAnnotationModal(false);
+    setTempCroppedImage(null);
   };
 
   const handleFileClick = () => {
@@ -967,6 +1170,15 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
            imageSrc={tempSnapshotForCrop} 
            onConfirm={handleCropConfirm} 
            onCancel={handleCropCancel} 
+        />
+      )}
+
+      {/* ANNOTATION MODAL OVERLAY */}
+      {showAnnotationModal && tempCroppedImage && (
+        <AnnotationModal
+          imageSrc={tempCroppedImage}
+          onConfirm={handleAnnotationConfirm}
+          onCancel={handleAnnotationCancel}
         />
       )}
     </>
