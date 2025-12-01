@@ -1,111 +1,167 @@
 
 // server/agents/agents.js
 //
-// Server-side agent definitions for your trading AI team.
+// Registry of AI agents and dynamic config loaded from JSON.
+// This powers model routing and can be updated at runtime via API.
 
-const AGENTS = {
+const fs = require('fs');
+const path = require('path');
+
+const CONFIG_FILE = path.join(__dirname, 'agentConfig.json');
+
+// ---- Default roster (used if no config file yet) ----
+
+const DEFAULT_AGENTS = {
   'strategist-main': {
     id: 'strategist-main',
-    name: 'Strategist',
-    role: 'strategist',
-    model: 'gpt-5.1',
-    provider: 'openai', // uses GPT-5.1 by default
-    systemPrompt: `
-You are the Lead Market Strategist for a discretionary index trader (mostly US30, NAS100, XAUUSD).
-Your job is to read market structure, volatility, and context, and explain the "story" of the market.
-
-Rules:
-- Always think in terms of narrative: where liquidity sits, where stops are likely sitting, where higher timeframe structure points.
-- Respect the trader's playbook and rules if they are provided.
-- Never over-promise certainty; talk in probabilities and scenarios.
-- Keep language simple and direct, like you are talking to a human trader at the desk.
-`,
+    displayName: 'Strategist',
+    role: 'High-level strategy & narrative',
+    provider: 'openai',
+    model: 'gpt-4o',
+    speed: 'slow',
+    capabilities: ['strategy', 'planning', 'roundtable'],
   },
-
+  strategist: {
+    id: 'strategist',
+    displayName: 'Strategist (Alt)',
+    role: 'Strategy backup',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    speed: 'fast',
+    capabilities: ['strategy'],
+  },
+  'trend-master': {
+    id: 'trend-master',
+    displayName: 'Trend Master',
+    role: 'Multi-timeframe trend & structure',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    speed: 'fast',
+    capabilities: ['trend', 'structure'],
+  },
+  'pattern-gpt': {
+    id: 'pattern-gpt',
+    displayName: 'Pattern GPT',
+    role: 'Patterns, liquidity, timing windows',
+    provider: 'gemini',
+    model: 'gemini-2.5-flash',
+    speed: 'medium',
+    capabilities: ['patterns', 'vision-context'],
+  },
   'risk-manager': {
     id: 'risk-manager',
-    name: 'Risk Manager',
-    role: 'risk',
-    model: 'gpt-5.1',
+    displayName: 'Risk Manager',
+    role: 'Risk limits, prop-style rules',
     provider: 'openai',
-    systemPrompt: `
-You are the Risk Manager for a trader using prop-firm style funded accounts (e.g. 200K FunderPro).
-Your job is to enforce risk rules, prevent account blow-ups, and highlight violations.
-
-Rules:
-- Always prioritize survival of the account over taking trades.
-- Use clear numbers: max risk per trade, daily loss limit, weekly loss limit.
-- If a proposed trade or behavior violates rules, say so clearly and suggest safer alternatives.
-- You never place trades directly; you only approve/deny requests and comment on risk.
-`,
+    model: 'gpt-4o',
+    speed: 'slow',
+    capabilities: ['risk', 'constraints'],
   },
-
-  'quant-analyst': {
-    id: 'quant-analyst',
-    name: 'Quant Analyst',
-    role: 'quant',
-    model: 'gemini-1.5-pro',
-    provider: 'gemini',
-    systemPrompt: `
-You are a Quantitative Analyst.
-You analyze historical performance, trade logs, and statistical patterns to help the trader understand what works and what doesn't.
-
-Rules:
-- Think in terms of distributions, expectancy (average R), win rate, and drawdowns.
-- Be honest about sample size limits and noise.
-- When asked for recommendations, ground them in the data that is available (real or hypothetical).
-`,
-  },
-
   'execution-bot': {
     id: 'execution-bot',
-    name: 'Execution Bot',
-    role: 'execution',
-    model: 'gpt-5.1',
+    displayName: 'Execution Bot',
+    role: 'Entry/exit specifics, R:R',
     provider: 'openai',
-    systemPrompt: `
-You are the Trade Execution Bot.
-You translate approved trade ideas into precise orders (entry, stop loss, take profit levels, partials, trailing rules).
-
-Rules:
-- You never bypass the Risk Manager. All trades must be consistent with defined risk limits.
-- You output precise numeric levels when enough info is provided.
-- You do NOT place trades directly; you describe the order details the system should use.
-`,
+    model: 'gpt-4o-mini',
+    speed: 'fast',
+    capabilities: ['execution'],
   },
-
   'journal-coach': {
     id: 'journal-coach',
-    name: 'Journal Coach',
-    role: 'journal',
-    model: 'gemini-1.5-pro',
-    provider: 'gemini',
-    systemPrompt: `
-You are a Trading Journal Coach.
-You help the trader extract lessons from their trades and sessions, focusing on behavior, execution, and edge quality.
-
-Rules:
-- Ask short, pointed questions to clarify what happened and what can be improved.
-- Help the trader create concrete process improvements, not vague advice.
-- Be supportive but honest; the goal is long-term consistency and growth.
-`,
+    displayName: 'Journal Coach',
+    role: 'Performance analysis & coaching',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    speed: 'fast',
+    capabilities: ['coaching', 'stats'],
+  },
+  'voice-parser': {
+    id: 'voice-parser',
+    displayName: 'Voice Parser',
+    role: 'Parses spoken commands into trade instructions',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    speed: 'fast',
+    capabilities: ['parsing'],
   },
 };
 
-function getAgentById(id) {
-  const agent = AGENTS[id];
-  if (!agent) {
-    // Fallback if ID doesn't match exactly, e.g. for simple 'quant' aliases
-    const found = Object.values(AGENTS).find(a => a.id === id || a.role === id);
-    if(found) return found;
-    
-    // Default fallback
-    return AGENTS['strategist-main'];
+let AGENTS = { ...DEFAULT_AGENTS };
+
+// ---- Load & save config file ----
+
+function loadConfigFromDisk() {
+  if (!fs.existsSync(CONFIG_FILE)) {
+    return;
   }
-  return agent;
+  try {
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
+    if (!raw.trim()) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      // We expect a map {id: agentConfig}
+      // Merge carefully to preserve code-defined properties if needed, 
+      // but here we trust the config file for the properties it has.
+      AGENTS = { ...AGENTS, ...parsed };
+      console.log('[Agents] Loaded agentConfig.json');
+    }
+  } catch (err) {
+    console.error('[Agents] Failed to load agentConfig.json:', err);
+  }
+}
+
+function saveConfigToDisk() {
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(AGENTS, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[Agents] Failed to save agentConfig.json:', err);
+  }
+}
+
+// Load on module init
+loadConfigFromDisk();
+
+// ---- Public API ----
+
+function getAgentById(id) {
+  if (!id) return null;
+  return AGENTS[id] || null;
+}
+
+function getAgents() {
+  return Object.values(AGENTS);
+}
+
+function getAgentsByCapability(cap) {
+  return Object.values(AGENTS).filter((a) =>
+    Array.isArray(a.capabilities) ? a.capabilities.includes(cap) : false
+  );
+}
+
+/**
+ * Update an agent's config (e.g. provider/model) and persist to disk.
+ *
+ * @param {string} id
+ * @param {{provider?: string; model?: string}} patch
+ */
+function updateAgentConfig(id, patch) {
+  const current = AGENTS[id];
+  if (!current) return null;
+
+  const updated = {
+    ...current,
+    ...(patch || {}),
+  };
+
+  AGENTS[id] = updated;
+  saveConfigToDisk();
+  return updated;
 }
 
 module.exports = {
   AGENTS,
   getAgentById,
+  getAgents,
+  getAgentsByCapability,
+  updateAgentConfig,
 };

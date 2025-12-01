@@ -1,6 +1,6 @@
 
 // server/roundtable/roundTableEngine.js
-const { callLLM } = require('../llmRouter');
+const { callAgentLLM } = require('../llmRouter');
 const { getAgentById } = require('../agents/agents');
 const {
   getMarketSnapshotForSession,
@@ -170,9 +170,8 @@ Do NOT wrap the JSON in backticks or markdown.
   let llmText = '';
 
   try {
-    llmText = await callLLM({
-      model: strategist.model,
-      provider: strategist.provider,
+    llmText = await callAgentLLM({
+      agentId: strategist ? strategist.id : 'strategist-main',
       systemPrompt,
       messages,
       temperature: 0.35,

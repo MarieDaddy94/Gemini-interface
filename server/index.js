@@ -19,6 +19,12 @@ const { setupMarketData, getPrice } = require('./marketData');
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
 
+// Dynamic Agents
+const {
+  getAgents,
+  updateAgentConfig
+} = require('./agents/agents');
+
 // Phase 4: Autopilot
 const { 
   handleAutopilotProposedTrade,
@@ -117,6 +123,68 @@ app.get('/api/proxy', async (req, res) => {
   } catch (err) {
     console.error('Proxy Error:', err.message);
     res.status(502).send(`Proxy Error: ${err.message}`);
+  }
+});
+
+// ------------------------------
+// Agent settings / model routing
+// ------------------------------
+//
+// GET /api/agents   -> list all agents and their config
+// POST /api/agents/:id  -> update provider/model for a single agent
+
+app.get('/api/agents', (req, res) => {
+  try {
+    const list = getAgents();
+    res.json({ agents: list });
+  } catch (err) {
+    console.error('Error in GET /api/agents:', err);
+    res.status(500).json({
+      error: 'AgentListError',
+      message: err.message || 'Unknown error',
+    });
+  }
+});
+
+app.post('/api/agents/:id', (req, res) => {
+  try {
+    const id = req.params.id;
+    const { provider, model } = req.body || {};
+
+    const patch = {};
+    if (provider) patch.provider = provider;
+    if (model) patch.model = model;
+
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'Nothing to update (provider/model missing).',
+      });
+    }
+
+    // Optional: basic validation
+    if (provider && !['openai', 'gemini'].includes(provider)) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'provider must be "openai" or "gemini".',
+      });
+    }
+
+    const updated = updateAgentConfig(id, patch);
+    if (!updated) {
+      return res.status(404).json({
+        error: 'NotFound',
+        message: `Agent ${id} not found.`,
+      });
+    }
+
+    res.json(updated);
+  } catch (err) {
+    console.error('Error in POST /api/agents/:id:', err);
+    res.status(500).json({
+      error: 'AgentUpdateError',
+      message: err.message || 'Unknown error',
+    });
   }
 });
 

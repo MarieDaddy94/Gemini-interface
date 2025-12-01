@@ -3,7 +3,7 @@
 //
 // LLM coach that explains what your own history is telling you.
 
-const { callLLM } = require('../llmRouter');
+const { callAgentLLM } = require('../llmRouter');
 const { getStatsForSession } = require('./autopilotHistoryStore');
 
 /**
@@ -88,9 +88,8 @@ ${historyText}
 
   const messages = [{ role: 'user', content: userPrompt }];
 
-  const text = await callLLM({
-    model: 'gpt-5.1', // Using GPT-5.1 alias if available, fallback handled in router
-    provider: 'openai',
+  const text = await callAgentLLM({
+    agentId: 'journal-coach',
     systemPrompt,
     messages,
     temperature: 0.3,

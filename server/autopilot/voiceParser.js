@@ -1,6 +1,6 @@
 
 // server/autopilot/voiceParser.js
-const { callLLM } = require('../llmRouter');
+const { callAgentLLM } = require('../llmRouter');
 
 /**
  * @param {{ transcript: string; sessionState: any }} input
@@ -64,9 +64,8 @@ Return ONLY the JSON. No backticks, no markdown.
 
   let llmText;
   try {
-    llmText = await callLLM({
-      model: 'gpt-5.1', // Defaulting to robust model
-      provider: 'openai',
+    llmText = await callAgentLLM({
+      agentId: 'voice-parser',
       systemPrompt,
       messages,
       temperature: 0.2,

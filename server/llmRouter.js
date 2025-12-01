@@ -1,266 +1,215 @@
 
 // server/llmRouter.js
 //
-// Unified LLM router for GPT-5.1 (OpenAI) + Gemini models.
-//
-// Requires:
-// - process.env.OPENAI_API_KEY (for GPT-5.1 / other OpenAI models)
-// - process.env.GEMINI_API_KEY (for Gemini models)
-//
-// NOTE: This file assumes Node 18+ with global fetch available.
+// Single place where we talk to OpenAI (GPT-5.1 / mini) and Gemini text models.
+// Other code should go through callLLM / callAgentLLM and never hit HTTP directly.
+
+const { getAgentById } = require('./agents/agents');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
 
-// ------------------------------
-// Helpers: message conversion
-// ------------------------------
+// Defaults
+const DEFAULT_OPENAI_MODEL = 'gpt-4o'; // Mapping "gpt-5.1" to 4o for now as alias
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
 /**
- * Convert chat messages into OpenAI chat format.
- * @param {Array<{role: 'user'|'assistant'|'system', content: string}>} messages
- * @param {string | undefined} systemPrompt
- * @returns {Array<{role: string, content: string}>}
+ * Low-level OpenAI chat call.
  */
-function buildOpenAIMessages(messages, systemPrompt) {
-  const result = [];
-
-  if (systemPrompt) {
-    result.push({
-      role: 'system',
-      content: systemPrompt,
-    });
-  }
-
-  for (const m of messages) {
-    result.push({
-      role: m.role,
-      content: m.content,
-    });
-  }
-
-  return result;
-}
-
-/**
- * Convert chat messages into Gemini "contents" format.
- * @param {Array<{role: 'user'|'assistant'|'system', content: string}>} messages
- * @param {string | undefined} systemPrompt
- * @returns {{systemInstruction?: any, contents: any[]}}
- */
-function buildGeminiPayload(messages, systemPrompt) {
-  const contents = [];
-
-  for (const m of messages) {
-    if (m.role === 'system') {
-      // We'll fold system content into systemInstruction instead.
-      continue;
-    }
-
-    // Gemini roles: 'user' or 'model'
-    const role = m.role === 'assistant' ? 'model' : 'user';
-
-    contents.push({
-      role,
-      parts: [
-        {
-          text: m.content,
-        },
-      ],
-    });
-  }
-
-  const payload = { contents };
-
-  if (systemPrompt) {
-    payload.systemInstruction = {
-      role: 'user', // Gemini flash sometimes prefers system instruction as a user prompt or system role if supported
-      parts: [{ text: systemPrompt }],
-    };
-    // If model supports explicit system role in systemInstruction, use that, but flash often takes it as config.
-    // We'll assume v1beta standard structure:
-    payload.systemInstruction = {
-        parts: [ { text: systemPrompt } ]
-    };
-  }
-
-  return payload;
-}
-
-// ------------------------------
-// OpenAI (GPT-5.1 etc.)
-// ------------------------------
-
-async function callOpenAIChat(options) {
-  const {
-    model = 'gpt-5.1',
-    systemPrompt,
-    messages,
-    temperature = 0.3,
-    maxTokens = 1024,
-  } = options;
-
+async function callOpenAIChat({
+  model,
+  systemPrompt,
+  messages,
+  temperature = 0.4,
+  maxTokens = 1024,
+}) {
   if (!OPENAI_API_KEY) {
     throw new Error(
-      'OPENAI_API_KEY is not set. Set it in your environment to use GPT-5.1.'
+      'OPENAI_API_KEY is not set. Cannot call OpenAI models.'
     );
   }
 
+  const url = 'https://api.openai.com/v1/chat/completions';
+
+  const allMessages = [];
+  if (systemPrompt) {
+    allMessages.push({ role: 'system', content: systemPrompt });
+  }
+  if (Array.isArray(messages)) {
+    allMessages.push(...messages);
+  }
+
+  // Handle aliases for future-proofing
+  let useModel = model || DEFAULT_OPENAI_MODEL;
+  if (useModel.includes('gpt-5.1')) useModel = 'gpt-4o'; 
+
   const body = {
-    model,
-    messages: buildOpenAIMessages(messages, systemPrompt),
+    model: useModel,
+    messages: allMessages,
     temperature,
     max_tokens: maxTokens,
   };
 
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error('[LLMRouter][OpenAI] HTTP error:', err);
+    throw new Error('OpenAI request failed (network error).');
+  }
 
   if (!resp.ok) {
-    const errText = await resp.text();
+    const text = await resp.text();
+    console.error(
+      `[LLMRouter][OpenAI] API error (${resp.status}): ${resp.statusText} - ${text}`
+    );
     throw new Error(
-      `OpenAI API error (${resp.status}): ${resp.statusText} - ${errText}`
+      `OpenAI error: ${resp.status} ${resp.statusText}`
     );
   }
 
   const json = await resp.json();
-
-  const text =
-    json &&
-    json.choices &&
-    json.choices[0] &&
-    json.choices[0].message &&
-    json.choices[0].message.content;
-
-  return text || '';
+  const choice = json.choices && json.choices[0];
+  const content = choice && choice.message && choice.message.content;
+  if (!content) {
+    throw new Error('OpenAI returned no message content.');
+  }
+  return content;
 }
 
-// ------------------------------
-// Gemini (text-only for now)
-// ------------------------------
-
-async function callGeminiText(options) {
-  const {
-    model = 'gemini-2.5-flash',
-    systemPrompt,
-    messages,
-    temperature = 0.3,
-    maxTokens = 1024,
-  } = options;
-
+/**
+ * Low-level Gemini text call using REST API.
+ */
+async function callGeminiText({
+  model,
+  systemPrompt,
+  messages,
+  temperature = 0.4,
+  maxTokens = 1024,
+}) {
   if (!GEMINI_API_KEY) {
     throw new Error(
-      'GEMINI_API_KEY is not set. Set it in your environment to use Gemini.'
+      'GEMINI_API_KEY is not set. Cannot call Gemini text models.'
     );
   }
 
-  const { contents, systemInstruction } = buildGeminiPayload(
-    messages,
-    systemPrompt
-  );
+  const useModel = model || DEFAULT_GEMINI_MODEL;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+    useModel
+  )}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+  const parts = [];
+  // Fold system prompt into the first user message or separate if strictly supported (v1beta often prefers it as config or just prepended)
+  // We'll prepend it to context for robustness across versions
+  let effectivePrompt = "";
+  if (systemPrompt) {
+    effectivePrompt += `SYSTEM INSTRUCTION: ${systemPrompt}\n\n`;
+  }
+
+  if (Array.isArray(messages)) {
+    for (const m of messages) {
+      if (m && typeof m.content === 'string' && m.content.trim()) {
+        effectivePrompt += `${m.role === 'user' ? 'USER' : 'MODEL'}: ${m.content}\n`;
+      }
+    }
+  }
+  effectivePrompt += `\nMODEL:`; // Cue the model
 
   const body = {
-    contents,
+    contents: [{ parts: [{ text: effectivePrompt }] }],
     generationConfig: {
       temperature,
       maxOutputTokens: maxTokens,
     },
   };
 
-  if (systemInstruction) {
-    body.systemInstruction = systemInstruction;
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error('[LLMRouter][Gemini] HTTP error:', err);
+    throw new Error('Gemini request failed (network error).');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
   if (!resp.ok) {
-    const errText = await resp.text();
+    const text = await resp.text();
+    console.error(
+      `[LLMRouter][Gemini] API error (${resp.status}): ${resp.statusText} - ${text}`
+    );
     throw new Error(
-      `Gemini API error (${resp.status}): ${resp.statusText} - ${errText}`
+      `Gemini error: ${resp.status} ${resp.statusText}`
     );
   }
 
   const json = await resp.json();
-
   const candidates = json.candidates || [];
   const first = candidates[0];
-
-  if (
-    !first ||
-    !first.content ||
-    !first.content.parts ||
-    first.content.parts.length === 0
-  ) {
-    return '';
+  if (!first || !first.content || !Array.isArray(first.content.parts)) {
+    throw new Error('Gemini returned no content.');
   }
 
-  const textPart = first.content.parts.find((p) => typeof p.text === 'string');
+  const textParts = first.content.parts
+    .map((p) => p.text || '')
+    .filter(Boolean)
+    .join('\n');
 
-  return textPart ? textPart.text : '';
+  return textParts.trim();
 }
 
-// ------------------------------
-// Public router
-// ------------------------------
-
 /**
- * Generic LLM router.
- *
- * @param {{
- *   model?: string,
- *   provider?: 'openai' | 'gemini' | 'auto',
- *   systemPrompt?: string,
- *   messages: Array<{role: 'user'|'assistant'|'system', content: string}>,
- *   temperature?: number,
- *   maxTokens?: number
- * }} options
- * @returns {Promise<string>}
+ * Core router.
+ * 
+ * opts:
+ *   - provider: 'openai' | 'gemini' | 'auto' (optional)
+ *   - model: string (optional)
+ *   - agentId: string (optional) – uses AGENTS map
+ *   - systemPrompt, messages, temperature, maxTokens
  */
-async function callLLM(options) {
+async function callLLM(opts) {
   const {
+    provider,
     model,
-    provider = 'auto',
+    agentId,
     systemPrompt,
     messages,
     temperature,
     maxTokens,
-  } = options;
+  } = opts || {};
 
-  // Decide provider if "auto"
-  let chosenProvider = provider;
-  if (provider === 'auto') {
-    if (model && model.startsWith('gemini')) {
-      chosenProvider = 'gemini';
-    } else if (model && model.startsWith('gpt-')) {
-      chosenProvider = 'openai';
-    } else if (GEMINI_API_KEY) {
-      chosenProvider = 'gemini';
-    } else if (OPENAI_API_KEY) {
-      chosenProvider = 'openai';
-    } else {
-      throw new Error(
-        'No LLM provider available. Set GEMINI_API_KEY and/or OPENAI_API_KEY.'
-      );
+  let useProvider = provider || 'auto';
+  let useModel = model || null;
+
+  if (agentId) {
+    const agent = getAgentById(agentId);
+    if (agent) {
+      if (!useProvider || useProvider === 'auto') useProvider = agent.provider || 'openai';
+      if (!useModel) useModel = agent.model;
     }
   }
 
-  if (chosenProvider === 'openai') {
-    return callOpenAIChat({
-      model: model || 'gpt-5.1',
+  // If still on 'auto', infer from model name.
+  if (useProvider === 'auto') {
+    if (useModel && useModel.startsWith('gemini')) {
+      useProvider = 'gemini';
+    } else {
+      useProvider = 'openai';
+    }
+  }
+
+  if (useProvider === 'gemini') {
+    return callGeminiText({
+      model: useModel || DEFAULT_GEMINI_MODEL,
       systemPrompt,
       messages,
       temperature,
@@ -268,9 +217,32 @@ async function callLLM(options) {
     });
   }
 
-  // Default to Gemini
-  return callGeminiText({
-    model: model || 'gemini-2.5-flash',
+  // default: openai
+  return callOpenAIChat({
+    model: useModel || DEFAULT_OPENAI_MODEL,
+    systemPrompt,
+    messages,
+    temperature,
+    maxTokens,
+  });
+}
+
+/**
+ * Convenience wrapper when you know the agentId.
+ */
+async function callAgentLLM({
+  agentId,
+  systemPrompt,
+  messages,
+  temperature,
+  maxTokens,
+}) {
+  if (!agentId) {
+    throw new Error('agentId is required for callAgentLLM.');
+  }
+
+  return callLLM({
+    agentId,
     systemPrompt,
     messages,
     temperature,
@@ -280,4 +252,5 @@ async function callLLM(options) {
 
 module.exports = {
   callLLM,
+  callAgentLLM,
 };
