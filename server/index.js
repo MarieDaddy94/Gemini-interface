@@ -1,7 +1,3 @@
-
-
-
-
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -40,7 +36,7 @@ app.use(express.json({ limit: '10mb' })); // Increased limit for vision/base64
 // Mount the new Agents router
 app.use(createAgentsRouter(sessions, journalBySession));
 
-// --- NEW Multi-agent AI chat endpoint (GPT-5.1 + Gemini) ---
+// --- NEW Multi-agent AI chat endpoint (GPT-4o + Gemini) ---
 app.post("/api/agents/chat", async (req, res) => {
   try {
     const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides } = req.body || {};
