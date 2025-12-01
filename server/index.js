@@ -409,23 +409,29 @@ app.post('/api/autopilot/voice-parse', async (req, res) => {
 app.post('/api/roundtable/plan', async (req, res) => {
   try {
     const { sessionState, userQuestion, visualSummary } = req.body || {};
-    
-    // Pull last similar entries from history store automatically
-    const similar = sessionState
-      ? getSimilarAutopilotHistory(sessionState, 25)
-      : [];
+
+    if (!sessionState) {
+      return res.status(400).json({
+        error: 'BadRequest',
+        message: 'sessionState is required.',
+      });
+    }
 
     const result = await runTradingRoundTable({
       sessionState,
-      userQuestion,
-      recentJournal: similar,
-      recentEvents: [], // Could also pull recent events from history if implemented
-      visualSummary: typeof visualSummary === 'string' ? visualSummary : null,
+      userQuestion: userQuestion || '',
+      recentJournal: getSimilarAutopilotHistory(sessionState, 25),
+      visualSummary:
+        typeof visualSummary === 'string' ? visualSummary : null,
     });
+
     res.json(result);
   } catch (err) {
     console.error('Error in /api/roundtable/plan:', err);
-    res.status(500).json({ error: 'RoundTableError', message: err.message || 'Unknown error' });
+    res.status(500).json({
+      error: 'RoundTableError',
+      message: err.message || 'Unknown error',
+    });
   }
 });
 
