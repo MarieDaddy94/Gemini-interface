@@ -20,6 +20,9 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Debug: Show where we are trying to connect
+  const API_TARGET = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+
   // Clear state when opened/closed
   useEffect(() => {
     if (!isOpen) {
@@ -193,9 +196,14 @@ const ConnectBrokerModal: React.FC<ConnectBrokerModalProps> = ({
               )}
               {loading ? 'Connecting...' : 'Connect Account'}
             </button>
-            <p className="text-center text-[10px] text-gray-500 mt-3">
-              Your credentials are securely sent to the proxy server, which communicates directly with the TradeLocker API.
-            </p>
+            <div className="text-center mt-3">
+              <p className="text-[10px] text-gray-500">
+                Your credentials are securely sent to the proxy server.
+              </p>
+              <p className="text-[10px] text-gray-600 mt-1">
+                Target Backend: <span className="font-mono text-gray-400">{API_TARGET}</span>
+              </p>
+            </div>
           </div>
         </form>
       </div>
