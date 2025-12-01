@@ -1,4 +1,3 @@
-
 import React, { useEffect, useState } from 'react';
 import {
   AgentConfig,
@@ -24,6 +23,9 @@ const AgentSettingsPanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Expansion state
+  const [isExpanded, setIsExpanded] = useState(false);
 
   // Builder form state
   const [newId, setNewId] = useState('');
@@ -155,27 +157,33 @@ const AgentSettingsPanel: React.FC = () => {
     }
   }, [newProvider, newModel]);
 
-  if (loading) {
-    return (
-      <div className="agent-settings-panel px-3 py-2 text-[11px] text-gray-400">
-        Loading agent settings...
-      </div>
-    );
-  }
+  // --- RENDER HELPERS ---
 
-  return (
-    <div className="agent-settings-panel flex flex-col bg-[#050509] text-gray-100 border-l border-gray-800">
-      <div className="px-3 py-2 border-b border-gray-800">
-        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-          Agent Builder & Settings
+  const renderContent = () => (
+    <div className={`flex flex-col h-full bg-[#050509] text-gray-100 ${!isExpanded ? 'border-l border-gray-800' : ''}`}>
+      <div className="px-3 py-2 border-b border-gray-800 shrink-0 flex justify-between items-start">
+        <div>
+          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+            Agent Builder & Settings
+          </div>
+          <div className="text-[11px] text-gray-500 mt-1">
+            Create custom AI teammates. Config saved to agentConfig.json.
+          </div>
         </div>
-        <div className="text-[11px] text-gray-500 mt-1">
-          Create new AI teammates with custom roles, then choose which model
-          each runs on. All config is saved in agentConfig.json.
-        </div>
+        <button 
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="text-gray-500 hover:text-white transition-colors p-1"
+          title={isExpanded ? "Collapse" : "Expand"}
+        >
+          {isExpanded ? (
+             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>
+          ) : (
+             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+          )}
+        </button>
       </div>
 
-      <div className="px-3 py-2 text-[11px] overflow-y-auto max-h-[380px] space-y-3">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-3 text-[11px]">
         {error && (
           <div className="mb-1 text-red-400">
             {error}
@@ -373,13 +381,48 @@ const AgentSettingsPanel: React.FC = () => {
             })}
           </div>
 
-          <div className="mt-2 text-[10px] text-gray-500">
+          <div className="mt-2 text-[10px] text-gray-500 pb-2">
             Built-in agents (Strategist, Risk Manager, etc.) can be retuned to
             different models but not deleted. Custom agents can be removed
             any time.
           </div>
         </section>
       </div>
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div className="agent-settings-panel px-3 py-2 text-[11px] text-gray-400 border-l border-gray-800">
+        Loading agent settings...
+      </div>
+    );
+  }
+
+  if (isExpanded) {
+    return (
+      <>
+        {/* Placeholder to keep the grid slot filled (visual balance) */}
+        <div className="agent-settings-panel flex flex-col h-full bg-[#050509] border-l border-gray-800 opacity-25">
+           <div className="flex-1 flex items-center justify-center">
+              <span className="text-gray-500 text-xs">Expanded View Active</span>
+           </div>
+        </div>
+
+        {/* Modal Overlay */}
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in">
+           <div className="w-full max-w-4xl h-[85vh] bg-[#050509] border border-gray-600 rounded-lg shadow-2xl flex flex-col overflow-hidden">
+              {renderContent()}
+           </div>
+        </div>
+      </>
+    );
+  }
+
+  // Normal render
+  return (
+    <div className="agent-settings-panel h-full w-full">
+       {renderContent()}
     </div>
   );
 };
