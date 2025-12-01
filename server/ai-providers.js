@@ -268,7 +268,8 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
     iterations++;
 
     // Call model
-    const result = await ai.models.generateContent({
+    // generateContent returns a GenerateContentResponse object directly.
+    const response = await ai.models.generateContent({
         model: modelId,
         contents: currentHistory,
         config: {
@@ -278,13 +279,12 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
         }
     });
 
-    const response = result.response;
-    const calls = response.functionCalls();
+    // property access, not method call
+    const calls = response.functionCalls;
 
     if (calls && calls.length > 0) {
         // 1. Add model's function call message to history
         // The API returns candidates with content parts. We must replicate that structure.
-        // Ideally we use the content object directly from response.candidates[0].content
         const modelContent = response.candidates?.[0]?.content;
         if (modelContent) {
              currentHistory.push(modelContent);
@@ -315,10 +315,8 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
         }
 
         // 3. Add function responses to history as a single 'function' role message (or 'user'/'function' depending on API version)
-        // In @google/genai v1+, we send a separate message with role 'tool' (or similar).
-        // Actually, for generateContent, we send a message with parts containing functionResponse.
         currentHistory.push({
-            role: 'tool', // 'function' or 'tool' depending on backend version, usually 'tool' for functionResponse
+            role: 'tool', 
             parts: functionResponses.map(fr => ({
                 functionResponse: fr
             }))
