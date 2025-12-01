@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
-import { useAutopilotJournal } from '../context/AutopilotJournalContext';
 import {
   AutopilotMode,
   RiskConfig,
@@ -13,9 +12,14 @@ import {
 } from '../types';
 import { previewProposedTrade } from '../services/riskApi';
 import {
-  planAutopilotTrade,
+  planAutopilotTrade as planAutopilotTradeApi,
   AutopilotPlanResponse,
 } from '../services/autopilotApi';
+import {
+  executeAutopilotPlanSimApi,
+  AutopilotSimExecResponse,
+} from '../services/brokerSimApi';
+import { useAutopilotJournal } from '../context/AutopilotJournalContext';
 
 const autopilotModes: AutopilotMode[] = ['off', 'advisor', 'semi', 'full'];
 
@@ -30,7 +34,7 @@ const RiskAutopilotPanel: React.FC = () => {
     addMessage,
   } = useTradingSession();
 
-  const { addEntry } = useAutopilotJournal();
+  const { addEntry, updateExecution } = useAutopilotJournal();
 
   const [proposedDirection, setProposedDirection] =
     useState<TradeDirection>('long');
@@ -49,6 +53,18 @@ const RiskAutopilotPanel: React.FC = () => {
   const [isPlanning, setIsPlanning] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
   const [sendPlanToChat, setSendPlanToChat] = useState<boolean>(true);
+  const [lastJournalId, setLastJournalId] = useState<string | null>(null);
+
+  // Sim execution state
+  const [entryPriceInput, setEntryPriceInput] = useState<string>('');
+  const [stopPriceInput, setStopPriceInput] = useState<string>('');
+  const [executeIfRecommended, setExecuteIfRecommended] =
+    useState<boolean>(true);
+  const [execResult, setExecResult] = useState<AutopilotSimExecResponse | null>(
+    null
+  );
+  const [execError, setExecError] = useState<string | null>(null);
+  const [isExecuting, setIsExecuting] = useState(false);
 
   // -----------------------
   // Handlers: environment & mode
@@ -95,7 +111,7 @@ const RiskAutopilotPanel: React.FC = () => {
   };
 
   // -----------------------
-  // Handlers: trade preview (risk engine only)
+  // Risk preview (risk engine only)
   // -----------------------
 
   const handlePreview = async () => {
@@ -131,12 +147,14 @@ const RiskAutopilotPanel: React.FC = () => {
   };
 
   // -----------------------
-  // Handlers: Autopilot execution plan (risk + Execution Bot)
+  // Autopilot execution plan (risk + Execution Bot)
   // -----------------------
 
   const handlePlanAutopilot = async () => {
     setPlanError(null);
     setAutopilotPlan(null);
+    setExecResult(null);
+    setExecError(null);
 
     const riskPercent = Number(proposedRiskPercent);
     if (!riskPercent || riskPercent <= 0) {
@@ -146,7 +164,7 @@ const RiskAutopilotPanel: React.FC = () => {
 
     setIsPlanning(true);
     try {
-      const plan = await planAutopilotTrade(state, {
+      const plan = await planAutopilotTradeApi(state, {
         direction: proposedDirection,
         riskPercent,
         notes: 'Manual Autopilot plan from RiskAutopilotPanel',
@@ -155,7 +173,7 @@ const RiskAutopilotPanel: React.FC = () => {
       setAutopilotPlan(plan);
 
       // Log to Autopilot journal
-      addEntry({
+      const journalId = addEntry({
         instrumentSymbol:
           state.instrument.symbol || state.instrument.displayName,
         direction: proposedDirection,
@@ -165,11 +183,12 @@ const RiskAutopilotPanel: React.FC = () => {
         planSummary: plan.planSummary,
         allowed: plan.allowed,
         recommended: plan.recommended,
-        riskReasons: plan.riskReasons || [],
-        riskWarnings: plan.riskWarnings || [],
+        riskReasons: plan.riskReasons,
+        riskWarnings: plan.riskWarnings,
         source: 'risk-panel',
         executionStatus: 'not_executed',
       });
+      setLastJournalId(journalId);
 
       if (sendPlanToChat) {
         const instrumentLabel =
@@ -220,6 +239,107 @@ const RiskAutopilotPanel: React.FC = () => {
       setPlanError(err?.message || 'Failed to generate Autopilot plan.');
     } finally {
       setIsPlanning(false);
+    }
+  };
+
+  // -----------------------
+  // Execute in SIM (semi/full Autopilot)
+  // -----------------------
+
+  const handleExecuteSim = async () => {
+    setExecError(null);
+    setExecResult(null);
+
+    if (!autopilotPlan) {
+      setExecError('Generate an Autopilot plan first.');
+      return;
+    }
+
+    const ep = Number(entryPriceInput);
+    if (!ep || Number.isNaN(ep) || ep <= 0) {
+      setExecError('Please enter a valid entry price.');
+      return;
+    }
+
+    const sp =
+      stopPriceInput.trim().length > 0 ? Number(stopPriceInput) : undefined;
+    if (stopPriceInput.trim().length > 0 && (Number.isNaN(sp!) || sp! <= 0)) {
+      setExecError('Stop price must be a positive number if provided.');
+      return;
+    }
+
+    const riskPercent = Number(proposedRiskPercent);
+
+    setIsExecuting(true);
+    try {
+      const res = await executeAutopilotPlanSimApi({
+        sessionState: state,
+        direction: proposedDirection,
+        riskPercent,
+        notes: 'Sim execution from RiskAutopilotPanel',
+        entryPrice: ep,
+        stopPrice: sp,
+        executeIfRecommended,
+      });
+
+      setExecResult(res);
+
+      // Update journal if we have an entry
+      if (lastJournalId && res.executed && res.position) {
+        updateExecution({
+          id: lastJournalId,
+          executionStatus: 'executed',
+          executionPrice: res.position.entryPrice,
+          closePrice: res.position.closePrice,
+          pnl: res.position.pnl,
+        });
+      }
+
+      // Push execution summary into chat
+      const instrumentLabel =
+        state.instrument.displayName || state.instrument.symbol;
+
+      let msg = `Autopilot SIM Execution\n\n`;
+      msg += `Instrument: ${instrumentLabel}\n`;
+      msg += `Direction: ${proposedDirection.toUpperCase()}\n`;
+      msg += `Risk: ${riskPercent.toFixed(2)}% of equity\n`;
+      msg += `Environment: ${state.environment.toUpperCase()}\n`;
+      msg += `Autopilot mode: ${state.autopilotMode.toUpperCase()}\n\n`;
+      msg += `Risk allowed: ${res.plan.allowed ? 'YES' : 'NO'}\n`;
+      msg += `Execution Bot recommended: ${
+        res.plan.recommended ? 'YES' : 'NO'
+      }\n`;
+      msg += `Executed in SIM: ${res.executed ? 'YES' : 'NO'}\n\n`;
+      msg += `Plan summary:\n${res.plan.planSummary}\n\n`;
+
+      if (res.position) {
+        msg += `Position ID: ${res.position.id}\n`;
+        msg += `Entry price: ${res.position.entryPrice}\n`;
+        if (res.position.stopPrice !== undefined) {
+          msg += `Stop price: ${res.position.stopPrice}\n`;
+        }
+        if (typeof res.position.pnl === 'number') {
+          msg += `PnL (realized): ${res.position.pnl.toFixed(2)}\n`;
+        }
+      }
+
+      msg += `\nAccount equity now: ${res.account.equity.toFixed(2)} ${
+        res.account.currency
+      }\n`;
+
+      addMessage({
+        agentId: 'execution-bot',
+        sender: 'agent',
+        content: msg,
+        metadata: {
+          via: 'autopilot-sim-exec',
+        },
+      });
+    } catch (err: any) {
+      console.error('Error executing plan in SIM:', err);
+      setExecError(err?.message || 'Failed to execute Autopilot plan in SIM.');
+    } finally {
+      setIsExecuting(false);
     }
   };
 
@@ -447,8 +567,7 @@ const RiskAutopilotPanel: React.FC = () => {
             </div>
           </div>
           <div className="text-[11px] text-gray-500 mt-1">
-            In a later phase, these will be updated automatically from your broker &
-            trade journal. For now you can set them manually when testing.
+            Later this will update automatically from your broker & journal. For now, set it manually when testing.
           </div>
         </section>
 
@@ -637,18 +756,19 @@ const RiskAutopilotPanel: React.FC = () => {
                 </div>
               </div>
 
-              {autopilotPlan.riskReasons && autopilotPlan.riskReasons.length > 0 && (
-                <div className="mt-1">
-                  <div className="font-semibold text-red-400">
-                    Hard risk blocks
+              {autopilotPlan.riskReasons &&
+                autopilotPlan.riskReasons.length > 0 && (
+                  <div className="mt-1">
+                    <div className="font-semibold text-red-400">
+                      Hard risk blocks
+                    </div>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      {autopilotPlan.riskReasons.map((r, idx) => (
+                        <li key={idx}>{r}</li>
+                      ))}
+                    </ul>
                   </div>
-                  <ul className="list-disc list-inside space-y-0.5">
-                    {autopilotPlan.riskReasons.map((r, idx) => (
-                      <li key={idx}>{r}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                )}
 
               {autopilotPlan.riskWarnings &&
                 autopilotPlan.riskWarnings.length > 0 && (
@@ -663,6 +783,110 @@ const RiskAutopilotPanel: React.FC = () => {
                     </ul>
                   </div>
                 )}
+            </div>
+          )}
+        </section>
+
+        {/* Execute Autopilot Plan in SIM */}
+        <section className="space-y-1">
+          <div className="font-semibold text-gray-300">
+            Execute Plan in SIM (Semi / Full Autopilot)
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="block text-[11px] text-gray-400">
+                Entry price
+              </label>
+              <input
+                type="number"
+                className="w-full bg-[#101018] border border-gray-700 rounded-md px-2 py-1 text-[11px]"
+                value={entryPriceInput}
+                onChange={(e) => setEntryPriceInput(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] text-gray-400">
+                Stop price (optional)
+              </label>
+              <input
+                type="number"
+                className="w-full bg-[#101018] border border-gray-700 rounded-md px-2 py-1 text-[11px]"
+                value={stopPriceInput}
+                onChange={(e) => setStopPriceInput(e.target.value)}
+              />
+            </div>
+            <div className="flex items-end">
+              <button
+                type="button"
+                className="w-full px-3 py-1 rounded-md bg-purple-600 hover:bg-purple-500 text-[11px] disabled:bg-purple-900 disabled:cursor-not-allowed"
+                onClick={handleExecuteSim}
+                disabled={isExecuting}
+              >
+                {isExecuting ? 'Executing...' : 'Execute in SIM'}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 mt-1">
+            <label className="inline-flex items-center gap-1 text-[11px] text-gray-400">
+              <input
+                type="checkbox"
+                className="h-3 w-3"
+                checked={executeIfRecommended}
+                onChange={(e) => setExecuteIfRecommended(e.target.checked)}
+              />
+              <span>Only execute if Execution Bot recommends</span>
+            </label>
+          </div>
+
+          {execError && (
+            <div className="mt-1 text-[11px] text-red-400">
+              {execError}
+            </div>
+          )}
+
+          {execResult && (
+            <div className="mt-2 text-[11px] space-y-1 border border-gray-700 rounded-md p-2 bg-[#101018]">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-semibold">Executed in SIM:</span>{' '}
+                  {execResult.executed ? (
+                    <span className="text-emerald-400">YES</span>
+                  ) : (
+                    <span className="text-yellow-400">NO</span>
+                  )}
+                </div>
+                <div className="text-[10px] text-gray-400">
+                  Equity: {execResult.account.equity.toFixed(2)}{' '}
+                  {execResult.account.currency}
+                </div>
+              </div>
+
+              {execResult.position && (
+                <div className="mt-1 space-y-0.5">
+                  <div>
+                    <span className="font-semibold">Position ID:</span>{' '}
+                    {execResult.position.id}
+                  </div>
+                  <div>
+                    <span className="font-semibold">Entry:</span>{' '}
+                    {execResult.position.entryPrice}
+                  </div>
+                  {execResult.position.stopPrice !== undefined && (
+                    <div>
+                      <span className="font-semibold">Stop:</span>{' '}
+                      {execResult.position.stopPrice}
+                    </div>
+                  )}
+                  {typeof execResult.position.pnl === 'number' && (
+                    <div>
+                      <span className="font-semibold">PnL (realized):</span>{' '}
+                      {execResult.position.pnl.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </section>

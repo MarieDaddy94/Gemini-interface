@@ -36,7 +36,8 @@ const AccessGate: React.FC<AccessGateProps> = ({ children }) => {
       });
       return res.ok;
     } catch (e) {
-      console.error("Auth verification failed", e);
+      // Warn instead of error to avoid alarming users in dev mode (backend might be down)
+      console.warn("Auth verification skipped (Backend unreachable):", e);
       // Fallback for local dev if server isn't running auth yet
       return true; 
     }

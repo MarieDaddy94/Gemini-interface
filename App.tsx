@@ -1,5 +1,4 @@
 
-
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -11,11 +10,13 @@ import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
 import AutopilotPanel from './components/AutopilotPanel';
 import RiskAutopilotPanel from './components/RiskAutopilotPanel';
+import AutopilotJournalTab from './components/AutopilotJournalTab';
 import AccessGate from './components/AccessGate';
 import { JournalProvider, useJournal } from './context/JournalContext';
 import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
 import { AgentConfigProvider } from './context/AgentConfigContext';
 import { TradingSessionProvider } from './context/TradingSessionContext';
+import { AutopilotJournalProvider } from './context/AutopilotJournalContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
@@ -38,7 +39,7 @@ import {
 } from './symbolMap';
 import { fetchJournalEntries } from './services/journalService';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'risk';
+type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'risk' | 'autopilot-journal';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -78,6 +79,7 @@ const Dashboard: React.FC = () => {
     { id: 'terminal', label: 'Terminal' },
     { id: 'autopilot', label: 'Autopilot' },
     { id: 'risk', label: 'Risk Desk' },
+    { id: 'autopilot-journal', label: 'AP Journal' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
@@ -136,46 +138,40 @@ const Dashboard: React.FC = () => {
   // WEBSOCKET: Real-time Market Data Feed
   useEffect(() => {
     if (wsRef.current) return;
+    // Assuming backend runs on 4000
     const wsUrl = `ws://localhost:4000/ws`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    
+    try {
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.onopen = () => console.log('Connected to Real-time Market Data Feed');
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'SNAPSHOT' || msg.type === 'UPDATE') {
-          const updates = msg.data as Record<string, MarketTick>;
-          setMarketData(prev => ({ ...prev, ...updates }));
-          setCharts(prevCharts => {
-            return prevCharts.map(chart => {
-              const tick = updates[chart.symbol];
-              if (!tick) return chart;
-              const newData = [...chart.data];
-              const lastPoint = newData[newData.length - 1];
-              const updatedPoint = {
-                ...lastPoint,
-                value: tick.price,
-                close: tick.price,
-                high: Math.max(lastPoint.high, tick.price),
-                low: Math.min(lastPoint.low, tick.price),
-                time: lastPoint.time
-              };
-              newData[newData.length - 1] = updatedPoint;
-              return { ...chart, data: newData };
-            });
-          });
+      ws.onopen = () => console.log('Connected to Real-time Market Data Feed');
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'SNAPSHOT' || msg.type === 'UPDATE') {
+            const updates = msg.data as Record<string, MarketTick>;
+            setMarketData(prev => ({ ...prev, ...updates }));
+            // Optional: Update charts if we were tracking history in this component
+          }
+        } catch (err) {
+          console.error('WS parse error', err);
         }
-      } catch (err) {
-        console.error('WS parse error', err);
-      }
-    };
-    ws.onclose = () => {
-      console.log('Market Data Feed Disconnected');
-      wsRef.current = null;
-    };
+      };
+      ws.onclose = () => {
+        console.log('Market Data Feed Disconnected');
+        wsRef.current = null;
+      };
+      ws.onerror = () => {
+        // Silently fail if dev server isn't running WS
+        if (wsRef.current) wsRef.current.close();
+      };
+    } catch (e) {
+      console.warn("WebSocket connection failed (Backend likely down)");
+    }
+    
     return () => {
-      if (ws.readyState === 1) ws.close();
+      if (wsRef.current && wsRef.current.readyState === 1) wsRef.current.close();
     };
   }, []);
 
@@ -236,7 +232,7 @@ const Dashboard: React.FC = () => {
           }
 
         } catch (e) {
-          console.error('Failed to poll broker data', e);
+          console.warn('Failed to poll broker data (Backend likely down)');
         }
       };
 
@@ -434,6 +430,7 @@ const Dashboard: React.FC = () => {
           {activeTab === 'terminal' && <div className="flex-1 min-h-0"><WebBrowser onUrlChange={handleBrowserUrlChange} /></div>}
           {activeTab === 'autopilot' && <div className="flex-1 min-h-0"><AutopilotPanel chartContext={marketContext} brokerSessionId={brokerSessionId} symbol={chartSymbol} onOpenSettings={() => setIsSettingsModalOpen(true)} /></div>}
           {activeTab === 'risk' && <div className="flex-1 min-h-0 flex"><div className="w-full max-w-md border-r border-[#2a2e39]"><RiskAutopilotPanel /></div><div className="flex-1 bg-[#131722] flex items-center justify-center text-gray-600 text-sm select-none">Risk Simulation Environment</div></div>}
+          {activeTab === 'autopilot-journal' && <div className="flex-1 min-h-0"><AutopilotJournalTab /></div>}
           {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {activeTab === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
@@ -464,10 +461,12 @@ const App: React.FC = () => {
       <AgentConfigProvider>
         <TradingSessionProvider>
           <JournalProvider>
-            <TradeEventsProvider>
-              <TradeEventsToJournal />
-              <Dashboard />
-            </TradeEventsProvider>
+            <AutopilotJournalProvider>
+              <TradeEventsProvider>
+                <TradeEventsToJournal />
+                <Dashboard />
+              </TradeEventsProvider>
+            </AutopilotJournalProvider>
           </JournalProvider>
         </TradingSessionProvider>
       </AgentConfigProvider>
