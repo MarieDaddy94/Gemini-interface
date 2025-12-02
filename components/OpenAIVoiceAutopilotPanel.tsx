@@ -4,6 +4,13 @@ import { RealtimeAgent, RealtimeSession } from "@openai/agents-realtime";
 import { tool } from "@openai/agents";
 import { z } from "zod";
 import { useTradingContextForAI } from "../hooks/useTradingContextForAI";
+import { buildVisionSummaryForAutopilot } from "../utils/buildVisionSummaryForAutopilot";
+import {
+  VisionResult,
+  ChartVisionAnalysis,
+  LiveWatchResult,
+  JournalVisionResult,
+} from "../types";
 
 type ConnectionState = "idle" | "connecting" | "connected" | "error";
 
@@ -26,7 +33,19 @@ interface AutopilotReviewResult {
   };
 }
 
-const OpenAIVoiceAutopilotPanel: React.FC = () => {
+interface OpenAIVoiceAutopilotPanelProps {
+  chartVision?: VisionResult | null;
+  mtfAnalysis?: ChartVisionAnalysis | null;
+  liveWatch?: LiveWatchResult | null;
+  journalVision?: JournalVisionResult | null;
+}
+
+const OpenAIVoiceAutopilotPanel: React.FC<OpenAIVoiceAutopilotPanelProps> = ({
+  chartVision,
+  mtfAnalysis,
+  liveWatch,
+  journalVision
+}) => {
   const [session, setSession] = useState<RealtimeSession | null>(null);
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("idle");
@@ -34,17 +53,25 @@ const OpenAIVoiceAutopilotPanel: React.FC = () => {
 
   const { brokerSnapshot, journalInsights } = useTradingContextForAI();
 
+  // Prepare vision summary derived from props
+  const visionSummary = buildVisionSummaryForAutopilot({
+    chartVision: chartVision ?? null,
+    mtfAnalysis: mtfAnalysis ?? null,
+    liveWatch: liveWatch ?? null,
+    journalVision: journalVision ?? null,
+  });
+
   // Tool 1: Expose the latest trading context
   const getTradingContextTool = tool({
     name: "get_trading_context",
     description:
-      "Returns the latest broker snapshot, open positions and recent journal insights.",
-    // No parameters, it's just a fetch of local state
+      "Returns the latest broker snapshot, open positions, recent journal insights, and VISION summaries (charts/trends).",
     parameters: z.object({}),
     async execute() {
       return {
         brokerSnapshot,
         journalInsights,
+        visionSummary, // Pass the structured vision summary to the model context
       };
     },
   });
@@ -53,7 +80,7 @@ const OpenAIVoiceAutopilotPanel: React.FC = () => {
   const reviewAutopilotPlanTool = tool({
     name: "review_autopilot_plan",
     description:
-      "Send a candidate trade plan plus current context to the backend Autopilot Risk Engine. Returns approval + adjusted plan.",
+      "Send a candidate trade plan plus current context (including chart/journal vision) to the backend Autopilot Risk Engine. Returns approval + adjusted plan.",
     parameters: z.object({
       candidatePlan: z.object({
         symbol: z.string(),
@@ -61,7 +88,7 @@ const OpenAIVoiceAutopilotPanel: React.FC = () => {
         entry: z.number(),
         stopLoss: z.number(),
         takeProfits: z.array(z.number()).nonempty(),
-        riskPct: z.number(), // e.g. 0.5 for 0.5% of equity
+        riskPct: z.number(),
         rationale: z.string(),
         timeframe: z.string(),
       }),
@@ -74,7 +101,7 @@ const OpenAIVoiceAutopilotPanel: React.FC = () => {
       const payload = {
         brokerSnapshot,
         candidatePlan,
-        visionSummary: null, // Placeholder for future vision data
+        visionSummary: visionSummary ?? null,
         journalInsights,
         riskProfile: riskProfile ?? "balanced",
       };
@@ -101,7 +128,6 @@ const OpenAIVoiceAutopilotPanel: React.FC = () => {
     setConnectionState("connecting");
 
     try {
-      // 1) Ask backend for ephemeral key
       const resp = await fetch("/api/openai/realtime-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -118,19 +144,18 @@ const OpenAIVoiceAutopilotPanel: React.FC = () => {
 
       const { key } = (await resp.json()) as { key: string };
 
-      // 2) Create agent with tools hooked into your app
       const agent = new RealtimeAgent({
         name: "Trading Squad Voice",
         instructions: `
 You are the VOICE INTERFACE for an AI trading squad supporting a discretionary index trader.
 
 - You see tools: "get_trading_context" and "review_autopilot_plan".
-- ALWAYS call "get_trading_context" early in the conversation so you understand current equity, open PnL and journal patterns.
+- ALWAYS call "get_trading_context" early to understand equity, journal patterns, and VISION (charts).
 - When the user asks for a plan or says things like "plan a long on US30", you should:
   1) Call "get_trading_context".
   2) Propose a candidatePlan object.
-  3) Call "review_autopilot_plan" with that candidatePlan.
-  4) Explain the returned result (riskScore, approved or not, and adjustedPlan) back to the user in plain language.
+  3) Call "review_autopilot_plan" with that candidatePlan (this runs the reasoning gate).
+  4) Explain the returned result (riskScore, approved or not, and adjustedPlan) back to the user.
 
 Risk philosophy:
 - Preserve capital first.
@@ -140,12 +165,10 @@ Risk philosophy:
         tools: [getTradingContextTool, reviewAutopilotPlanTool],
       });
 
-      // 3) Create realtime session
       const newSession = new RealtimeSession(agent, {
         model: "gpt-4o-realtime-preview-2024-12-17",
       });
 
-      // Optionally hook up some events for debugging UI
       newSession.on("transport-stateChanged", (state) => {
         if (state.state === "connected") setConnectionState("connected");
         if (state.state === "disconnected") setConnectionState("idle");
@@ -157,9 +180,7 @@ Risk philosophy:
         setConnectionState("error");
       });
 
-      await newSession.connect({
-        apiKey: key, // ephemeral key from backend
-      });
+      await newSession.connect({ apiKey: key });
 
       setSession(newSession);
       setConnectionState("connected");
@@ -168,7 +189,7 @@ Risk philosophy:
       setError(e?.message || "Failed to connect");
       setConnectionState("error");
     }
-  }, [brokerSnapshot, journalInsights, getTradingContextTool, reviewAutopilotPlanTool]);
+  }, [getTradingContextTool, reviewAutopilotPlanTool]);
 
   const disconnectSession = useCallback(async () => {
     if (!session) return;
@@ -182,7 +203,6 @@ Risk philosophy:
     }
   }, [session]);
 
-  // Clean up on unmount
   useEffect(() => {
     return () => {
       if (session) {
@@ -197,7 +217,7 @@ Risk philosophy:
         <div>
           <h2 className="text-sm font-bold text-gray-200">OpenAI Voice Autopilot</h2>
           <p className="text-[10px] text-gray-500">
-            Realtime reasoning agent with live context access.
+            Realtime reasoning agent with live context + Vision.
           </p>
         </div>
         <div className="flex items-center gap-2">

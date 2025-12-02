@@ -15,30 +15,50 @@ router.post("/autopilot/review", async (req, res) => {
     const {
       brokerSnapshot,
       candidatePlan,
-      visionSummary,
+      visionSummary, // Now expects a structured object, though backward compatible with null
       journalInsights,
       riskProfile = "balanced",
     } = body;
+
+    if (!brokerSnapshot || !candidatePlan) {
+      return res.status(400).json({ error: "Missing brokerSnapshot or candidatePlan" });
+    }
 
     const systemPrompt = `
 You are the AUTOPILOT RISK ENGINE for a prop-firm style trading account.
 You DO NOT chase trades. Your #1 job is capital preservation and enforcing risk rules.
 
 You are reviewing a candidate trade plan from an AI "squad" for a trader on indices like US30/NAS100.
-You must:
-- Check if the plan respects prop-style risk:
-  - Max risk per trade (usually <= 1%).
-  - Max daily drawdown (e.g., 4-5%).
-  - Clustered risk (too many similar correlations).
-- Consider broker state (equity, open PnL, open positions).
-- Consider recent mistakes and emotional patterns from the journal.
-- Optionally incorporate the chart vision summary (structure, liquidity, major levels).
+You receive several kinds of context:
 
-You will output STRICT JSON ONLY, with no extra text, in this shape:
+1) brokerSnapshot:
+   - balance, equity, openPnL, maxDailyDrawdownPct, openPositions
+
+2) candidatePlan:
+   - symbol, direction, entry, stopLoss, takeProfits[], riskPct, timeframe, rationale
+
+3) visionSummary (if provided):
+   - textSummary: stitched summary from chart/MTF/live/journal vision.
+   - primarySymbol / primaryTimeframe
+   - chartBias / htfBias / ltfBias / alignmentScorePct
+   - liveWatchStatus (e.g. "invalidated", "tp_hit", "in_play")
+   - journalCoachSummary: recent performance notes
+
+4) journalInsights (structured text):
+   - recentTakeaways[], recentMistakes[], recentWins[]
+
+Your job:
+- Decide whether this plan is safe and aligned with prop-style risk.
+- Use visionSummary to judge alignment:
+  - If chartBias/htfBias conflicts with trade direction -> lower riskScore or reject.
+  - If liveWatchStatus says "invalidated" -> REJECT.
+- Use journalInsights to be EXTRA conservative if the trader is in a losing streak or tilt.
+
+Output STRICT JSON ONLY, no extra text:
 
 {
   "approved": boolean,
-  "riskScore": number,              // 0-100, higher = safer & more aligned with rules
+  "riskScore": number,              // 0-100, higher = safer
   "reasons": string[],
   "requiredChanges": string[],
   "adjustedPlan": {
@@ -55,9 +75,9 @@ You will output STRICT JSON ONLY, with no extra text, in this shape:
   }
 }
 
-- "approved": false if risk rules are violated.
-- If you disapprove, adjustedPlan SHOULD still be present, but with safer parameters.
-- Be conservative if recent losses are heavy or drawdown is near limits.
+Guidelines:
+- "approved": false if risk rules, vision context, or journal context raise major red flags.
+- If you disapprove, adjustedPlan MUST still be present (with safer parameters or 0 risk).
 `;
 
     const userContext = {
