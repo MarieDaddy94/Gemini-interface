@@ -2,6 +2,7 @@
 const { gemini, GEMINI_AUTOPILOT_MODEL, GEMINI_THINKING_CONFIG } = require("../geminiClient");
 const { evaluateProposedTrade } = require("../risk/riskEngine");
 const playbookPerformanceService = require("./playbookPerformanceService");
+const deskPolicyEngine = require("../services/deskPolicyEngine");
 
 /**
  * Generates a structured trade plan using Gemini.
@@ -94,19 +95,23 @@ async function reviewAutopilotPlan(plan, sessionState) {
     };
   }
 
-  // 1. Basic Risk Engine Check
+  // 0. Fetch Current Desk Policy
+  const currentPolicy = await deskPolicyEngine.getCurrentPolicy();
+
+  // 1. Basic Risk Engine Check (now with policy)
   const proposedTrade = {
     direction: tradePlan.direction.toLowerCase(), // 'long' | 'short'
     riskPercent: tradePlan.riskPct,
-    comment: plan.summary
+    comment: plan.summary,
+    playbook: tradePlan.playbook
   };
 
-  const riskResult = evaluateProposedTrade(sessionState, proposedTrade);
+  const riskResult = evaluateProposedTrade(sessionState, proposedTrade, currentPolicy);
   const reasons = [...riskResult.reasons];
   const warnings = [...riskResult.warnings];
   let allowed = riskResult.allowed;
 
-  // 2. Playbook Performance Check
+  // 2. Playbook Performance Check (Historical)
   let playbookProfile = null;
   if (tradePlan.playbook && tradePlan.symbol) {
      playbookProfile = await playbookPerformanceService.getProfileForPlaybook(tradePlan.playbook, tradePlan.symbol);
@@ -118,10 +123,8 @@ async function reviewAutopilotPlan(plan, sessionState) {
            reasons.push(`Stats: Win ${Math.round(playbookProfile.winRate*100)}%, Avg ${playbookProfile.avgR.toFixed(2)}R.`);
         } else if (playbookProfile.health === 'amber') {
            warnings.push(`Playbook '${tradePlan.playbook}' is AMBER. Proceed with caution.`);
-           // Optional: Cap risk for amber
            if (tradePlan.riskPct > 0.25) {
               warnings.push("Risk capped to 0.25% due to Amber health status.");
-              // In a real implementation, we'd mutate the plan riskPct here
            }
         }
      } else {
@@ -135,7 +138,8 @@ async function reviewAutopilotPlan(plan, sessionState) {
     warnings,
     plan,
     riskDetails: riskResult,
-    playbookProfile // Pass back to UI
+    playbookProfile,
+    policyUsed: currentPolicy.id // Traceability
   };
 }
 

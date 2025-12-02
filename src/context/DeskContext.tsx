@@ -1,5 +1,7 @@
 
-import React, { createContext, useContext, useState, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from 'react';
+import { DeskPolicy } from '../types';
+import { getCurrentPolicy, updatePolicy, generatePolicy } from '../services/deskPolicyApi';
 
 export type DeskRoleId = 'strategist' | 'pattern' | 'quant' | 'risk' | 'execution' | 'journal' | 'news';
 
@@ -10,37 +12,41 @@ export type DeskSessionPhase = 'preSession' | 'live' | 'cooldown' | 'postSession
 export interface DeskRoleState {
   id: DeskRoleId;
   label: string;
-  onDesk: boolean; // Is this agent currently "clocked in"?
+  onDesk: boolean; 
   symbolFocus: string | null;
   timeframes: string[];
   status: DeskRoleStatus;
-  lastUpdate: string | null; // e.g. "Bias bullish above 34200"
+  lastUpdate: string | null; 
 }
 
 export interface TradingDeskState {
   deskName: string;
-  goal: string | null; // e.g. "Catch 1-2 clean trend moves on US30"
+  goal: string | null; 
   sessionPhase: DeskSessionPhase;
   roles: Record<DeskRoleId, DeskRoleState>;
+  activePolicy: DeskPolicy | null; // Phase J
 }
 
 export interface DeskActions {
   setDeskGoal: (goal: string) => void;
   setSessionPhase: (phase: DeskSessionPhase) => void;
   
-  /** Configuration changes (who watches what) */
   assignRole: (
     roleId: DeskRoleId,
     updates: Partial<Pick<DeskRoleState, "symbolFocus" | "timeframes" | "onDesk">>
   ) => void;
 
-  /** Live status updates (what are they doing) */
   updateRoleStatus: (
     roleId: DeskRoleId,
     updates: Partial<Pick<DeskRoleState, "status" | "lastUpdate">>
   ) => void;
 
   resetDesk: () => void;
+  
+  // Policy Actions
+  refreshPolicy: () => Promise<void>;
+  updateDeskPolicy: (updates: Partial<DeskPolicy>) => Promise<void>;
+  regenerateDeskPolicy: () => Promise<void>;
 }
 
 export interface DeskContextValue {
@@ -48,7 +54,6 @@ export interface DeskContextValue {
   actions: DeskActions;
 }
 
-// Default initial state
 const INITIAL_ROLES: Record<DeskRoleId, DeskRoleState> = {
   strategist: {
     id: 'strategist',
@@ -123,7 +128,13 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     goal: 'Identify high-quality setups with 2R+ potential.',
     sessionPhase: 'preSession',
     roles: INITIAL_ROLES,
+    activePolicy: null,
   });
+
+  // Initial Policy Load
+  useEffect(() => {
+      getCurrentPolicy().then(p => setDeskState(prev => ({ ...prev, activePolicy: p }))).catch(console.error);
+  }, []);
 
   const actions = useMemo<DeskActions>(() => ({
     setDeskGoal: (goal) =>
@@ -155,8 +166,24 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         goal: 'Identify high-quality setups with 2R+ potential.',
         sessionPhase: 'preSession',
         roles: INITIAL_ROLES,
+        activePolicy: deskState.activePolicy
     }),
-  }), []);
+
+    refreshPolicy: async () => {
+        const p = await getCurrentPolicy();
+        setDeskState(prev => ({ ...prev, activePolicy: p }));
+    },
+
+    updateDeskPolicy: async (updates) => {
+        const p = await updatePolicy(updates);
+        setDeskState(prev => ({ ...prev, activePolicy: p }));
+    },
+
+    regenerateDeskPolicy: async () => {
+        const p = await generatePolicy();
+        setDeskState(prev => ({ ...prev, activePolicy: p }));
+    }
+  }), [deskState.activePolicy]);
 
   return (
     <DeskContext.Provider value={{ state: deskState, actions }}>

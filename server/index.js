@@ -37,9 +37,10 @@ const geminiVisionRouter = require('./routes/geminiVisionRouter');
 // --- Import New Routers ---
 const playbookRouter = require('./routes/playbookRouter');
 const journalRouter = require('./routes/journalRouter');
-const performanceRouter = require('./routes/performanceRouter'); // NEW
+const performanceRouter = require('./routes/performanceRouter'); 
 const ttsRouter = require('./routes/ttsRouter');
 const { router: deskRouter } = require('./routes/deskRouter'); 
+const deskPolicyRouter = require('./routes/deskPolicyRouter'); // NEW
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -138,7 +139,8 @@ app.use('/api/openai/', aiLimiter);
 app.use('/api/gemini/', aiLimiter);
 app.use('/api/playbooks', aiLimiter);
 app.use('/api/journal', journalRouter);
-app.use('/api/performance', performanceRouter); // NEW MOUNT
+app.use('/api/performance', performanceRouter); 
+app.use('/api/desk/policy', deskPolicyRouter); // NEW MOUNT
 app.use('/api/tools/', aiLimiter);
 app.use('/api/desk/', aiLimiter);
 

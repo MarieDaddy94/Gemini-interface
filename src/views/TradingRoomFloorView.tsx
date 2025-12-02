@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
-import { useDesk, DeskRoleId, DeskSessionPhase, DeskRoleState } from '../context/DeskContext';
+import { useDesk, DeskRoleId, DeskSessionPhase } from '../context/DeskContext';
 import { apiClient } from '../utils/apiClient';
 import { performanceApi, DeskInsights } from '../services/performanceApi';
-import VoiceRoomBar from '../components/VoiceRoomBar'; // Integrated
+import VoiceRoomBar from '../components/VoiceRoomBar';
+import DeskPolicyPanel from '../components/DeskPolicyPanel'; // NEW
 
 const roleColors: Record<DeskRoleId, string> = {
   strategist: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200',
@@ -110,7 +111,6 @@ const TradingRoomFloorView: React.FC = () => {
           const roleId = update.roleId;
           if (!roleId || !roles[roleId]) return;
 
-          // Filter out invalid status strings if TS complains, or cast
           const status = update.status as any;
           const lastUpdate = update.lastUpdate;
           
@@ -121,13 +121,12 @@ const TradingRoomFloorView: React.FC = () => {
         });
       }
 
-      // Optional: Update phase/goal if coordinator wants to adjust them
       if (res.sessionPhase && res.sessionPhase !== sessionPhase) {
         setSessionPhase(res.sessionPhase);
       }
       if (typeof res.goal === "string" && res.goal !== goal) {
         setDeskGoal(res.goal);
-        setDraftGoal(res.goal); // sync local input
+        setDraftGoal(res.goal); 
       }
     } catch (err) {
       console.error("Desk roundup error", err);
@@ -361,6 +360,9 @@ const TradingRoomFloorView: React.FC = () => {
                 </button>
             </div>
             </div>
+            
+            {/* NEW: Policy Panel at bottom */}
+            <DeskPolicyPanel />
         </div>
       </div>
     </div>

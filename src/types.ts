@@ -873,3 +873,28 @@ export interface JournalVisionResult {
   summary: string;
   analysis: JournalVisionAnalysis;
 }
+
+// ===============================
+// Desk Policy Types (Phase J)
+// ===============================
+
+export type PolicyMode = 'advisory' | 'enforced';
+
+export interface DeskPolicy {
+  id: string;
+  createdAt: string;
+  date: string;
+  mode: PolicyMode;
+  maxRiskPerTrade: number; // e.g. 0.5 for 0.5%
+  maxDailyLossR: number; // e.g. -3
+  maxTradesPerDay: number;
+  allowedPlaybooks: string[]; // e.g. ["London Breakout", "NY Reversal"]
+  notes: string;
+  
+  // Stats driving this policy (optional context)
+  contextStats?: {
+    winRate: number;
+    avgR: number;
+    bestPlaybook: string;
+  };
+}

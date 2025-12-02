@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const { callLLM } = require("../llmRouter");
 const { getBrokerSnapshot } = require("../broker/brokerStateStore");
+const policyEngine = require("../services/deskPolicyEngine");
 
 function cleanAndParseJson(text) {
   try {
@@ -24,6 +25,16 @@ async function runDeskCoordinator(input, deskState) {
       ? `Equity: ${brokerSnapshot.equity}, Balance: ${brokerSnapshot.balance}, Daily PnL: ${brokerSnapshot.dailyPnl}, Open Positions: ${brokerSnapshot.openPositions?.length || 0}`
       : "Broker disconnected";
 
+    // Fetch live policy
+    const policy = await policyEngine.getCurrentPolicy();
+    const policyText = `
+    Mode: ${policy.mode.toUpperCase()}
+    Max Risk: ${policy.maxRiskPerTrade}%
+    Max Daily Loss: ${policy.maxDailyLossR}R
+    Allowed Playbooks: [${policy.allowedPlaybooks.join(", ")}]
+    Notes: ${policy.notes}
+    `;
+
     const systemPrompt = `
 You are the **Trading Desk Coordinator** (The Boss).
 You manage a team of AI agents and the Autopilot system.
@@ -33,10 +44,14 @@ You manage a team of AI agents and the Autopilot system.
 - Phase: "${deskState.sessionPhase}"
 - Account: ${accountContext}
 
+**ACTIVE DESK POLICY (Rules for Today):**
+${policyText}
+
 **Your Job:**
 1. Read the user's input.
 2. Decide how the desk should react.
 3. Update agent statuses and reply to the user.
+4. **ENFORCE POLICY**: If the user suggests something outside the policy, warn them or block it.
 
 **Autopilot Operations:**
 If the trader asks to "run autopilot" or "scan for trades":
