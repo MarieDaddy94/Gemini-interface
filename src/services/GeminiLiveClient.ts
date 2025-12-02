@@ -1,4 +1,5 @@
 import { voiceBus } from "./voiceBus";
+import { GEMINI_LIVE_TOOLS } from "../config/geminiLiveTools";
 
 const LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
@@ -101,6 +102,75 @@ export class GeminiLiveClient {
   private sendSetup() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
 
+    // Combine existing tools with the new playbook tools
+    const tools = [
+      {
+        functionDeclarations: [
+          {
+            name: "get_trading_context",
+            description:
+              "Fetch latest trading context: equity, open positions, risk limits, journal stats.",
+            parameters: {
+              type: "object",
+              properties: {
+                scope: {
+                  type: "string",
+                  enum: ["minimal", "full"],
+                },
+              },
+              required: ["scope"],
+            },
+          },
+          {
+            name: "run_autopilot_review",
+            description:
+              "Send a proposed trade to the backend risk engine for approval and adjusted parameters.",
+            parameters: {
+              type: "object",
+              properties: {
+                symbol: { type: "string" },
+                side: { type: "string", enum: ["buy", "sell"] },
+                entry: { type: "number" },
+                stopLoss: { type: "number" },
+                takeProfit: { type: "number" },
+                riskPct: { type: "number" },
+                timeFrame: { type: "string" },
+                reasoningSummary: { type: "string" },
+              },
+              required: ["symbol", "side", "entry", "stopLoss", "riskPct"],
+            },
+          },
+          {
+            name: "get_recent_vision_summary",
+            description:
+              "Get a stitched summary of the last few days of chart vision for the symbol/timeframe.",
+            parameters: {
+              type: "object",
+              properties: {
+                symbol: {
+                  type: "string",
+                  description: "Symbol, e.g. US30, NAS100.",
+                },
+                timeframe: {
+                  type: "string",
+                  description: "Timeframe string, e.g. '1m', '15m'.",
+                },
+                days: {
+                  type: "number",
+                  description:
+                    "How many days of history to summarize (default 3).",
+                },
+              },
+              required: ["symbol"],
+            },
+          },
+          // Merge in new playbook/journaling tools
+          ...(GEMINI_LIVE_TOOLS[0]?.functionDeclarations || []),
+          ...(GEMINI_LIVE_TOOLS[1]?.functionDeclarations || []),
+        ],
+      },
+    ];
+
     const setupPayload = {
       setup: {
         model: this.model,
@@ -124,131 +194,12 @@ export class GeminiLiveClient {
               text:
                 "You are a prop-firm style AI trading squad. " +
                 "You MUST call tools to get live trading context, recent chart structure, " +
-                "playbooks, and to log trades into the journal before suggesting heavy risk. " +
+                "playbooks (get_chart_playbook), and to log trades (log_trade_journal) before suggesting heavy risk. " +
                 "Never hallucinate balances or trade history.",
             },
           ],
         },
-        tools: [
-          {
-            functionDeclarations: [
-              {
-                name: "get_trading_context",
-                description:
-                  "Fetch latest trading context: equity, open positions, risk limits, journal stats.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    scope: {
-                      type: "string",
-                      enum: ["minimal", "full"],
-                    },
-                  },
-                  required: ["scope"],
-                },
-              },
-              {
-                name: "run_autopilot_review",
-                description:
-                  "Send a proposed trade to the backend risk engine for approval and adjusted parameters.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    symbol: { type: "string" },
-                    side: { type: "string", enum: ["buy", "sell"] },
-                    entry: { type: "number" },
-                    stopLoss: { type: "number" },
-                    takeProfit: { type: "number" },
-                    riskPct: { type: "number" },
-                    timeFrame: { type: "string" },
-                    reasoningSummary: { type: "string" },
-                  },
-                  required: ["symbol", "side", "entry", "stopLoss", "riskPct"],
-                },
-              },
-              {
-                name: "get_chart_playbook",
-                description:
-                  "Retrieve the trader's saved playbooks for the current symbol/timeframe.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    symbol: {
-                      type: "string",
-                      description: "Symbol, e.g. US30, NAS100, XAUUSD.",
-                    },
-                    timeframe: {
-                      type: "string",
-                      description: "Timeframe string, e.g. '1m', '5m', '15m'.",
-                    },
-                    limit: {
-                      type: "number",
-                      description: "Max number of playbooks to fetch (default 5).",
-                    },
-                  },
-                  required: ["symbol"],
-                },
-              },
-              {
-                name: "log_trade_journal",
-                description:
-                  "Log a trade (real or simulated) into the auto-journal so future coaching can reference it.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    symbol: { type: "string" },
-                    direction: {
-                      type: "string",
-                      enum: ["long", "short"],
-                    },
-                    result: {
-                      type: "string",
-                      enum: ["win", "loss", "breakeven", "open"],
-                    },
-                    rMultiple: { type: "number" },
-                    pnl: { type: "number" },
-                    environment: {
-                      type: "string",
-                      enum: ["SIM", "LIVE"],
-                    },
-                    timeframe: { type: "string" },
-                    notes: { type: "string" },
-                    source: {
-                      type: "string",
-                      enum: ["autopilot", "manual", "voice"],
-                    },
-                    meta: { type: "object" },
-                  },
-                  required: ["symbol", "direction", "environment", "timeframe"],
-                },
-              },
-              {
-                name: "get_recent_vision_summary",
-                description:
-                  "Get a stitched summary of the last few days of chart vision for the symbol/timeframe.",
-                parameters: {
-                  type: "object",
-                  properties: {
-                    symbol: {
-                      type: "string",
-                      description: "Symbol, e.g. US30, NAS100.",
-                    },
-                    timeframe: {
-                      type: "string",
-                      description: "Timeframe string, e.g. '1m', '15m'.",
-                    },
-                    days: {
-                      type: "number",
-                      description:
-                        "How many days of history to summarize (default 3).",
-                    },
-                  },
-                  required: ["symbol"],
-                },
-              },
-            ],
-          },
-        ],
+        tools: tools,
       },
     };
 
