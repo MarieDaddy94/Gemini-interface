@@ -1,6 +1,4 @@
 
-
-
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -465,16 +463,35 @@ const Dashboard: React.FC = () => {
           
           {activeTab === 'command' && (
             <div className="flex-1 min-h-0 flex overflow-hidden">
+               {/* Left Column: Controls & Configuration */}
                <div className="flex-1 border-r border-[#2a2e39] overflow-hidden flex flex-col">
-                  <div className="flex-1 min-h-0 flex flex-col">
+                  {/* 1. Risk Autopilot (Top Priority) */}
+                  <div className="flex-[2] min-h-0 flex flex-col">
                      <RiskAutopilotPanel />
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
-                  <div className="flex-1 min-h-0 flex flex-col">
+                  
+                  {/* 2. Voice Commander (Compact) */}
+                  <div className="flex-none">
                      <VoiceCommander />
                   </div>
+                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
+
+                  {/* 3. Trader Coach (Moved from Right) */}
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <TraderCoachPanel />
+                  </div>
+                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
+
+                  {/* 4. Agent Settings (Moved from Right) */}
+                  <div className="flex-1 min-h-0 flex flex-col">
+                     <AgentSettingsPanel />
+                  </div>
                </div>
+
+               {/* Right Column: Visual Intelligence */}
                <div className="flex-1 overflow-hidden flex flex-col">
+                  {/* 1. Round Table Chat (Split 50%) */}
                   <div className="flex-1 min-h-0 flex flex-col">
                      <RoundTablePanel onCommandProposed={(cmd, risk) => {
                        setAgentAutopilotCommand(cmd);
@@ -486,16 +503,10 @@ const Dashboard: React.FC = () => {
                      }} />
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
+                  
+                  {/* 2. Chart Vision (Split 50%) */}
                   <div className="flex-1 min-h-0 flex flex-col">
                      <ChartVisionAgentPanel />
-                  </div>
-                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
-                  <div className="flex-1 min-h-0 flex flex-col">
-                     <TraderCoachPanel />
-                  </div>
-                  <div className="h-[1px] bg-[#2a2e39] shrink-0" />
-                  <div className="flex-1 min-h-0 flex flex-col">
-                     <AgentSettingsPanel />
                   </div>
                </div>
             </div>
