@@ -32,6 +32,9 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
   const [activeTab, setActiveTab] = useState<PanelTab>('compose');
   const { activeSpeaker } = useVoiceActivity();
 
+  // Load OpenAI Realtime URL from environment or default
+  const openaiWsUrl = (import.meta as any).env?.VITE_OPENAI_REALTIME_URL || "wss://api.openai.com/v1/realtime";
+
   const [manualCommand, setManualCommand] = useState<AutopilotCommand | null>(() => {
     const defaultOpen: OpenTradeCommand = {
       type: 'open',
@@ -302,7 +305,7 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
       {/* Main content */}
       <div className="flex-1 flex flex-col gap-4 overflow-auto px-4 pb-4">
         {activeTab === 'voice-squad' && (
-           <RealtimeSquadPanel />
+           <RealtimeSquadPanel openaiRealtimeWsUrl={openaiWsUrl} />
         )}
 
         {activeTab === 'compose' && (

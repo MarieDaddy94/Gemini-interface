@@ -3,7 +3,11 @@ import { useRealtimeConfig } from "../context/RealtimeConfigContext";
 import GeminiVoicePanel from "./GeminiVoicePanel";
 import OpenAIVoiceAutopilotPanel from "./OpenAIVoiceAutopilotPanel";
 
-const RealtimeSquadPanel: React.FC = () => {
+type Props = {
+  openaiRealtimeWsUrl?: string;
+};
+
+const RealtimeSquadPanel: React.FC<Props> = ({ openaiRealtimeWsUrl }) => {
   const { provider } = useRealtimeConfig();
 
   return (
@@ -11,7 +15,7 @@ const RealtimeSquadPanel: React.FC = () => {
       {provider === "gemini" ? (
         <GeminiVoicePanel />
       ) : (
-        <OpenAIVoiceAutopilotPanel />
+        <OpenAIVoiceAutopilotPanel wsUrl={openaiRealtimeWsUrl || ""} />
       )}
     </div>
   );
