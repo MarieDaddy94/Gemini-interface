@@ -1,32 +1,46 @@
 
-import React, { createContext, useContext, useState, useMemo, ReactNode } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useMemo,
+  ReactNode,
+  useEffect
+} from "react";
 
 /**
- * AppRoom defines the main views of the application.
- * Agents can "navigate" to these rooms.
+ * 1) Rooms = big areas of the app the user/agents can "be" in.
  */
 export type AppRoom =
-  | 'terminal'
-  | 'command'
-  | 'autopilot'
-  | 'journal'
-  | 'analysis'
-  | 'analytics';
+  | "terminal"
+  | "command"
+  | "autopilot"
+  | "journal"
+  | "analysis"
+  | "analytics";
 
 /**
- * AppOverlay defines global modals/dialogs.
+ * 2) Overlays = global modals/dialogs.
  */
 export type AppOverlay = 'none' | 'broker' | 'settings';
+
+export interface ToastMessage {
+  id: string;
+  msg: string;
+  type: 'success' | 'info' | 'error';
+}
 
 export interface AppWorldState {
   currentRoom: AppRoom;
   activeOverlay: AppOverlay;
+  toast: ToastMessage | null;
 }
 
 export interface AppWorldActions {
   openRoom: (room: AppRoom) => void;
   openOverlay: (overlay: AppOverlay) => void;
   closeOverlay: () => void;
+  showToast: (msg: string, type?: 'success' | 'info' | 'error') => void;
 }
 
 export interface AppWorldContextValue {
@@ -39,25 +53,33 @@ const AppWorldContext = createContext<AppWorldContextValue | null>(null);
 export const AppWorldProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentRoom, setCurrentRoom] = useState<AppRoom>('terminal');
   const [activeOverlay, setActiveOverlay] = useState<AppOverlay>('none');
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  // Auto-dismiss toast after 4 seconds
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   const value = useMemo<AppWorldContextValue>(
     () => ({
       state: {
         currentRoom,
         activeOverlay,
+        toast,
       },
       actions: {
-        openRoom: (room) => {
-          setCurrentRoom(room);
-          // Optional: Close overlay on navigation? 
-          // Keeping it open might be useful in some cases, but generally navigating implies focusing on the new view.
-          // setActiveOverlay('none'); 
-        },
+        openRoom: (room) => setCurrentRoom(room),
         openOverlay: (overlay) => setActiveOverlay(overlay),
         closeOverlay: () => setActiveOverlay('none'),
+        showToast: (msg, type = 'info') => {
+          setToast({ id: Date.now().toString(), msg, type });
+        }
       },
     }),
-    [currentRoom, activeOverlay]
+    [currentRoom, activeOverlay, toast]
   );
 
   return (
@@ -70,7 +92,7 @@ export const AppWorldProvider: React.FC<{ children: ReactNode }> = ({ children }
 export const useAppWorld = (): AppWorldContextValue => {
   const ctx = useContext(AppWorldContext);
   if (!ctx) {
-    throw new Error('useAppWorld must be used inside an AppWorldProvider');
+    throw new Error("useAppWorld must be used inside an AppWorldProvider");
   }
   return ctx;
 };
