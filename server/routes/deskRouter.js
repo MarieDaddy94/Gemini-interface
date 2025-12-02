@@ -1,18 +1,28 @@
 
 const express = require("express");
 const router = express.Router();
+const { callLLM } = require("../llmRouter");
+const { getBrokerSnapshot } = require("../broker/brokerStateStore");
+
+// Helper to clean LLM output if it wraps in markdown
+function cleanAndParseJson(text) {
+  try {
+    const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error("JSON Parse Error in Coordinator:", text);
+    return null;
+  }
+}
 
 /**
  * POST /api/desk/roundup
  *
- * Receives the user's message and the current desk state.
- * Returns a coordinator response and any state updates (role status, goal changes).
- *
- * Body:
- *  {
- *    input: string;          // User message
- *    deskState: { ... }      // Current frontend DeskContext state
- *  }
+ * The "Brain" of the Trading Room Floor.
+ * 1. Reads current desk state (roles, goal).
+ * 2. Reads live broker state (equity, PnL).
+ * 3. Processes user instruction via LLM.
+ * 4. Returns structured updates for the UI.
  */
 router.post("/roundup", async (req, res) => {
   try {
@@ -22,45 +32,103 @@ router.post("/roundup", async (req, res) => {
       return res.status(400).json({ error: "deskState is required" });
     }
 
-    // --- STUB COORDINATOR LOGIC (Phase B) ---
-    // In Phase C, this will be replaced by a real LLM call (Gemini/OpenAI).
-    
-    const safeGoal = deskState.goal || "No explicit goal set";
-    
-    // Simulate some "thinking" and role updates based on keywords
-    const roleUpdates = [];
-    let replyText = "";
-    
-    const lowerInput = (input || "").toLowerCase();
+    // 1. Get Context
+    const brokerSnapshot = getBrokerSnapshot("default"); // Default user session
+    const accountContext = brokerSnapshot
+      ? `Equity: ${brokerSnapshot.equity}, Balance: ${brokerSnapshot.balance}, Daily PnL: ${brokerSnapshot.dailyPnl}, Open Positions: ${brokerSnapshot.openPositions?.length || 0}`
+      : "Broker disconnected";
 
-    if (lowerInput.includes("scan") || lowerInput.includes("look for")) {
-        replyText = "Understood. I've instructed the Strategist and Pattern GPT to start scanning for setups matching your criteria.";
-        roleUpdates.push({ roleId: "strategist", status: "scanning", lastUpdate: "Scanning HTF structure for setups." });
-        roleUpdates.push({ roleId: "pattern", status: "scanning", lastUpdate: "Hunting liquidity sweeps on 1m/5m." });
-    } else if (lowerInput.includes("stop") || lowerInput.includes("halt")) {
-        replyText = "Stopping all active agents. Desk is now in cooldown.";
-        roleUpdates.push({ roleId: "strategist", status: "cooldown", lastUpdate: "Standby." });
-        roleUpdates.push({ roleId: "execution", status: "cooldown", lastUpdate: "Execution paused." });
-    } else if (lowerInput.includes("risk")) {
-        replyText = "Checking risk parameters. Risk Manager is reviewing open exposure.";
-        roleUpdates.push({ roleId: "risk", status: "busy", lastUpdate: "Calculating exposure vs daily cap." });
-    } else {
-        replyText = `Copy that. Current desk goal is: "${safeGoal}". I'll keep the team aligned to this.`;
+    // 2. Build System Prompt
+    const systemPrompt = `
+You are the **Trading Desk Coordinator** (The Boss).
+You manage a team of AI agents on a trading floor:
+- **Strategist**: HTF bias & narrative.
+- **Pattern**: Technical setups & triggers.
+- **Risk**: Sizing, drawdown limits, stops.
+- **Execution**: Entry precision & management.
+- **Quant**: Statistics & probability.
+- **News**: Calendar & macro events.
+
+**Current Desk Context:**
+- Goal: "${deskState.goal || "None"}"
+- Phase: "${deskState.sessionPhase}"
+- Account: ${accountContext}
+
+**Your Job:**
+1. Read the user's input.
+2. Decide how the desk should react.
+3. Update agent statuses (IDLE, SCANNING, ALERT, BUSY, COOLDOWN) and "lastUpdate" text to reflect what they should be doing.
+4. Reply to the user clearly.
+
+**Rules:**
+- If the user asks to "Scan", set relevant agents (Strategist, Pattern) to SCANNING.
+- If the user asks to "Stop", set everyone to COOLDOWN or IDLE.
+- If the user asks for a "Status Report", check the account PnL and give a summary.
+- Keep "lastUpdate" short (max 10 words).
+- Output STRICT JSON.
+
+**JSON Response Format:**
+{
+  "message": "Your natural language reply to the trader.",
+  "goal": "Updated goal string (optional, null to keep current)",
+  "sessionPhase": "preSession" | "live" | "cooldown" | "postSession" (optional),
+  "roleUpdates": [
+    {
+      "roleId": "strategist" | "risk" | "pattern" | "execution" | "quant" | "news" | "journal",
+      "status": "idle" | "scanning" | "alert" | "busy" | "cooldown",
+      "lastUpdate": "Short status text..."
+    }
+  ]
+}
+`;
+
+    // 3. Build User Prompt
+    const userPrompt = `
+User Input: "${input}"
+
+Current Agent States:
+${Object.values(deskState.roles)
+  .map((r) => `- ${r.label}: ${r.status} (${r.lastUpdate})`)
+  .join("\n")}
+
+Respond with JSON updates.
+`;
+
+    // 4. Call LLM (Gemini 2.5 Flash or GPT-4o)
+    // We use a high temperature for dynamic responses, but force JSON structure.
+    const llmOutput = await callLLM({
+      provider: "auto", // Uses configured defaults
+      model: "gemini-2.5-flash", // Fast & smart enough for coordination
+      systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+      temperature: 0.3,
+      maxTokens: 1000,
+    });
+
+    // 5. Parse & Fallback
+    let parsed = cleanAndParseJson(llmOutput);
+
+    if (!parsed) {
+      // Fallback if LLM fails to output JSON
+      parsed = {
+        message: "I understood, but had trouble syncing with the squad. (JSON Error)",
+        roleUpdates: [],
+      };
     }
 
-    // Stub response
+    // 6. Return to Frontend
     return res.json({
-      message: replyText,
-      roleUpdates: roleUpdates,
-      // We can also update the phase or goal if the LLM decides to
-      sessionPhase: deskState.sessionPhase, 
-      goal: deskState.goal,
+      message: parsed.message || "Desk updated.",
+      roleUpdates: Array.isArray(parsed.roleUpdates) ? parsed.roleUpdates : [],
+      sessionPhase: parsed.sessionPhase || deskState.sessionPhase,
+      goal: parsed.goal !== undefined ? parsed.goal : deskState.goal,
     });
 
   } catch (err) {
     console.error("Error in /api/desk/roundup:", err);
     return res.status(500).json({
-      error: "Desk roundup failed",
+      error: "Desk Coordinator crashed.",
+      details: err.message
     });
   }
 });
