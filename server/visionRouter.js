@@ -1,5 +1,6 @@
 
 
+
 const express = require('express');
 
 const visionRouter = express.Router();
@@ -225,6 +226,52 @@ autopilotHint: short directive like:
 - "Take partials or trail"
 
 Do NOT output anything except JSON. No markdown, no prose around it.
+`.trim();
+}
+
+function buildJournalVisionPrompt(payload) {
+  const { contextNote } = payload;
+
+  return `
+You are a trading performance analyst and journal coach.
+You will see a screenshot of either:
+- a broker history page
+- a performance analytics dashboard
+- a stats page with win rate / PnL curves / per-session results
+- or something related.
+
+Your job is to extract and interpret what you can see.
+
+You MUST respond ONLY with a single JSON object in this shape:
+
+interface JournalVisionAnalysis {
+  source: 'broker_history' | 'performance_dashboard' | 'stats_page' | 'other';
+
+  approxWinRate?: number;        // 0–1 if you can approximate from visible stats
+  approxRR?: number;             // average R-multiple if visible
+  approxDrawdown?: number;       // 0–1 fraction of peak if visible
+  totalTradesText?: string;      // human-readable snippet like "121 trades last 30 days"
+  bestDayText?: string;          // e.g. "Best day +$540 on 2025-11-20"
+  worstDayText?: string;         // e.g. "Worst day -$400 on 2025-11-18"
+
+  strengths: string[];           // 3–7 bullet points
+  weaknesses: string[];          // 3–7 bullet points
+  behaviorPatterns: string[];    // patterns you infer from graphs/metrics
+
+  sessionInsights: string[];     // session-based notes if visible (London/NY/Asia)
+  instrumentInsights: string[];  // symbol-based notes if visible
+
+  coachingNotes: string;         // 2–4 sentences of coaching, in plain language.
+}
+
+Context note from the user (what they care about):
+${contextNote || '(none provided)'}
+
+Rules:
+- If a numeric stat is NOT clearly visible, leave that field undefined.
+- strengths/weaknesses/behaviorPatterns should be concrete and actionable.
+- coachingNotes should sound like a coach talking directly to the trader.
+- Do NOT output anything except plain JSON (no markdown, no prose before/after).
 `.trim();
 }
 
@@ -553,7 +600,61 @@ visionRouter.post('/run', async (req, res) => {
       });
     }
 
-    // ------- Branch 4: Generic vision (fallback) -------
+    // ------- Branch 4: Journal / UI Vision -------
+    if (mode === 'journal_vision_v1' && payload && payload.imageBase64) {
+      const journalTask = 'journal';
+
+      const prompt = buildJournalVisionPrompt(payload);
+      const imageArr = [payload.imageBase64];
+
+      let rawText;
+      if (provider === 'gemini') {
+        rawText = await callGeminiVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else if (provider === 'openai') {
+        rawText = await callOpenAIVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+
+      const parsed = safeExtractJsonObject(rawText);
+
+      const analysis =
+        parsed && typeof parsed === 'object'
+          ? parsed
+          : {
+              source: 'other',
+              strengths: [],
+              weaknesses: [],
+              behaviorPatterns: [],
+              sessionInsights: [],
+              instrumentInsights: [],
+              coachingNotes: rawText || '',
+            };
+
+      const summary = `Journal Vision: ${
+        analysis.coachingNotes?.slice(0, 160) || 'No summary.'
+      }${analysis.coachingNotes && analysis.coachingNotes.length > 160 ? '…' : ''}`;
+
+      return res.json({
+        provider,
+        modelId: resolvedModelId,
+        task: journalTask,
+        createdAt: new Date().toISOString(),
+        rawText,
+        summary,
+        analysis,
+      });
+    }
+
+    // ------- Branch 5: Generic vision (fallback) -------
     const contextSummary = visionContext
       ? `\n\nContext JSON:\n${JSON.stringify(visionContext)}`
       : '';

@@ -1,5 +1,6 @@
 
 
+
 export enum AnalystPersona {
   QUANT_BOT = 'QuantBot',
   TREND_MASTER = 'TrendMaster AI',
@@ -808,4 +809,35 @@ export interface LiveWatchResult {
   rawText: string;
   plan: LiveWatchPlan;
   analysis: LiveWatchAnalysis;
+}
+
+// ===============================
+// Journal / UI Vision
+// ===============================
+
+export interface JournalVisionAnalysis {
+  source: 'broker_history' | 'performance_dashboard' | 'stats_page' | 'other';
+
+  // Extracted stats (if visible in screenshot)
+  approxWinRate?: number;        // 0–1
+  approxRR?: number;             // average R-multiple if visible
+  approxDrawdown?: number;       // 0–1, fraction of peak
+  totalTradesText?: string;      // "121 trades last 30 days"
+  bestDayText?: string;          // "Best day +$540 on 2025-11-20"
+  worstDayText?: string;         // "Worst day -$400 on 2025-11-18"
+
+  strengths: string[];           // bullet points: "You cut losses quickly", etc.
+  weaknesses: string[];          // bullet points: "Overtrade after 2 losses", etc.
+  behaviorPatterns: string[];    // "You size up after big wins", etc.
+
+  sessionInsights: string[];     // per-session notes, if visible (London vs NY)
+  instrumentInsights: string[];  // if screenshot shows per-symbol stats
+
+  coachingNotes: string;         // 2–4 sentences as if Journal Coach is talking directly to the trader.
+}
+
+export interface JournalVisionResult {
+  rawText: string;
+  summary: string;
+  analysis: JournalVisionAnalysis;
 }

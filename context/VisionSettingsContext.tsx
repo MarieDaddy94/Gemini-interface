@@ -1,3 +1,4 @@
+
 import React, {
   createContext,
   useCallback,
@@ -18,13 +19,17 @@ interface VisionSettingsContextValue {
   setMode: (mode: VisionMode) => void;
   setGeminiModel: (modelId: string) => void;
   setOpenAIModel: (modelId: string) => void;
+
+  // Derived helpers used by the vision services
+  selectedProvider: VisionProvider;
+  selectedVisionModelId: string | null;
 }
 
 const defaultSettings: VisionSettings = {
   provider: 'auto',
   mode: 'fast',
-  defaultGeminiModel: 'gemini-2.5-flash',      // tweak if you want
-  defaultOpenAIModel: 'gpt-4o-mini',           // tweak if you want
+  defaultGeminiModel: 'gemini-2.5-flash',
+  defaultOpenAIModel: 'gpt-4o-mini',
 };
 
 const VisionSettingsContext = createContext<VisionSettingsContextValue | undefined>(
@@ -52,16 +57,31 @@ export const VisionSettingsProvider: React.FC<{ children: ReactNode }> = ({
     setSettings(prev => ({ ...prev, defaultOpenAIModel: modelId }));
   }, []);
 
-  const value = useMemo(
-    () => ({
+  const value = useMemo(() => {
+    // Decide which model string we’ll actually use
+    let selectedProvider: VisionProvider = settings.provider;
+    if (selectedProvider === 'auto') {
+      // Simple heuristic: default to Gemini when "auto"
+      selectedProvider = 'gemini';
+    }
+
+    let selectedVisionModelId: string | null = null;
+    if (selectedProvider === 'gemini') {
+      selectedVisionModelId = settings.defaultGeminiModel ?? null;
+    } else if (selectedProvider === 'openai') {
+      selectedVisionModelId = settings.defaultOpenAIModel ?? null;
+    }
+
+    return {
       settings,
       setProvider,
       setMode,
       setGeminiModel,
       setOpenAIModel,
-    }),
-    [settings, setProvider, setMode, setGeminiModel, setOpenAIModel]
-  );
+      selectedProvider,
+      selectedVisionModelId,
+    };
+  }, [settings, setProvider, setMode, setGeminiModel, setOpenAIModel]);
 
   return (
     <VisionSettingsContext.Provider value={value}>

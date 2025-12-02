@@ -1,9 +1,12 @@
 
+
+
 import React, { useMemo, useState } from "react";
 import { useJournal } from "../context/JournalContext";
 import { PlaybookReviewPayload, PlaybookLesson, PlayDirection } from "../types";
+import JournalVisionPanel from "./JournalVisionPanel";
 
-type ViewMode = "journal" | "playbooks";
+type ViewMode = "journal" | "playbooks" | "vision";
 
 type PlaybookRow = {
   playbook: string;
@@ -101,6 +104,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
 
   const isJournalView = viewMode === "journal";
   const isPlaybookView = viewMode === "playbooks";
+  const isVisionView = viewMode === "vision";
 
   const handleExportCsv = () => {
     if (playbookRows.length === 0) return;
@@ -183,7 +187,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
   return (
     <div className="flex flex-col h-full bg-slate-950 border-t border-slate-800">
       {/* HEADER BAR */}
-      <div className="flex items-center justify-between px-4 py-2 text-xs border-b border-slate-800">
+      <div className="flex items-center justify-between px-4 py-2 text-xs border-b border-slate-800 shrink-0">
         {/* Left: title + view tabs */}
         <div className="flex items-center gap-4">
           <div className="flex flex-col">
@@ -220,6 +224,19 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
               ].join(" ")}
             >
               Playbooks
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("vision")}
+              className={[
+                "px-3 py-1.5 font-medium transition flex items-center gap-1",
+                isVisionView
+                  ? "bg-purple-500/15 text-purple-300"
+                  : "text-slate-400 hover:bg-slate-800",
+              ].join(" ")}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              Vision Import
             </button>
           </div>
         </div>
@@ -265,60 +282,64 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              disabled={playbookRows.length === 0}
-              className={[
-                "px-2 py-1 rounded-md border text-[11px] font-medium transition",
-                playbookRows.length === 0
-                  ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
-                  : "border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800",
-              ].join(" ")}
-            >
-              Export Playbooks CSV
-            </button>
+          {!isVisionView && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={playbookRows.length === 0}
+                className={[
+                  "px-2 py-1 rounded-md border text-[11px] font-medium transition",
+                  playbookRows.length === 0
+                    ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
+                    : "border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800",
+                ].join(" ")}
+              >
+                Export CSV
+              </button>
 
-            <button
-              type="button"
-              onClick={handleRequestReview}
-              disabled={baseEntries.length === 0}
-              className={[
-                "px-2 py-1 rounded-md border text-[11px] font-medium transition",
-                baseEntries.length === 0
-                  ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
-                  : "border-amber-400/70 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20",
-              ].join(" ")}
-            >
-              Ask AI: Review Top 3
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={handleRequestReview}
+                disabled={baseEntries.length === 0}
+                className={[
+                  "px-2 py-1 rounded-md border text-[11px] font-medium transition",
+                  baseEntries.length === 0
+                    ? "border-slate-700 bg-slate-900 text-slate-600 cursor-not-allowed"
+                    : "border-amber-400/70 bg-amber-400/10 text-amber-200 hover:bg-amber-400/20",
+                ].join(" ")}
+              >
+                Ask AI: Review Top 3
+              </button>
+            </div>
+          )}
 
           {/* Journal Coach Filter */}
-          <div className="flex items-center gap-2 text-slate-400">
-            <span className="text-[10px] uppercase tracking-wide">
-              Filter
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowJournalCoachOnly((v) => !v)}
-              className={[
-                "px-2 py-1 rounded-full border text-[11px] font-medium transition",
-                showJournalCoachOnly
-                  ? "border-amber-400/70 bg-amber-400/10 text-amber-300"
-                  : "border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-800",
-              ].join(" ")}
-            >
-              {showJournalCoachOnly ? "Journal Coach • ON" : "Journal Coach Only"}
-            </button>
-          </div>
+          {!isVisionView && (
+            <div className="flex items-center gap-2 text-slate-400">
+              <span className="text-[10px] uppercase tracking-wide">
+                Filter
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowJournalCoachOnly((v) => !v)}
+                className={[
+                  "px-2 py-1 rounded-full border text-[11px] font-medium transition",
+                  showJournalCoachOnly
+                    ? "border-amber-400/70 bg-amber-400/10 text-amber-300"
+                    : "border-slate-700 bg-slate-900 text-slate-400 hover:bg-slate-800",
+                ].join(" ")}
+              >
+                {showJournalCoachOnly ? "Coach Only" : "All"}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* TABLE HEADER */}
       {isJournalView && (
-        <div className="grid grid-cols-[70px,80px,1.5fr,0.7fr,0.5fr,0.5fr,2.2fr] px-4 py-1 text-[11px] text-slate-400 border-b border-slate-900 bg-slate-950/70">
+        <div className="grid grid-cols-[70px,80px,1.5fr,0.7fr,0.5fr,0.5fr,2.2fr] px-4 py-1 text-[11px] text-slate-400 border-b border-slate-900 bg-slate-950/70 shrink-0">
           <div>Time</div>
           <div>Src</div>
           <div>Playbook</div>
@@ -330,7 +351,7 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
       )}
 
       {isPlaybookView && (
-        <div className="grid grid-cols-[2fr,0.7fr,0.7fr,0.6fr,0.6fr,0.6fr,0.8fr] px-4 py-1 text-[11px] text-slate-400 border-b border-slate-900 bg-slate-950/70">
+        <div className="grid grid-cols-[2fr,0.7fr,0.7fr,0.6fr,0.6fr,0.6fr,0.8fr] px-4 py-1 text-[11px] text-slate-400 border-b border-slate-900 bg-slate-950/70 shrink-0">
           <div>Playbook</div>
           <div>Symbol</div>
           <div>Direction</div>
@@ -342,7 +363,12 @@ const JournalPanel: React.FC<JournalPanelProps> = ({ onRequestPlaybookReview }) 
       )}
 
       {/* BODY */}
-      <div className="flex-1 overflow-y-auto text-xs">
+      <div className="flex-1 overflow-y-auto text-xs min-h-0">
+        
+        {isVisionView && (
+           <JournalVisionPanel />
+        )}
+
         {/* JOURNAL VIEW ROWS */}
         {isJournalView && (
           <>
