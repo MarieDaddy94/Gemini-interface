@@ -81,14 +81,12 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
   const toolSpecs = mapToolsToOpenAi(tools);
   const toolResults = [];
 
-  // We maintain a messages array in OpenAI format and mutate it with tool calls.
   let chatMessages = buildOpenAiMessages(agent, messages, visionImages);
   let raw = null;
 
   let iterations = 0;
   const maxIterations = 5;
 
-  // Check for JSON mode preference
   const responseFormat = agent.response_format || (agent.forceJson ? { type: "json_object" } : undefined);
 
   while (iterations < maxIterations) {
@@ -112,9 +110,8 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
 
     const toolCalls = msg.tool_calls || [];
 
-    // If the model wants to call tools, run them and loop again.
     if (toolCalls.length > 0 && tools.length > 0) {
-      chatMessages.push(msg); // keep the assistant message with tool_calls in history
+      chatMessages.push(msg);
 
       for (const call of toolCalls) {
         const toolName = call.function?.name;
@@ -163,10 +160,8 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
       continue;
     }
 
-    // No tool calls => final answer.
     const text = msg.content || "";
     
-    // Construct final message object for app usage
     const finalMessages = [
       ...messages,
       {
@@ -196,13 +191,9 @@ function buildGeminiContents(agent, messages, visionImages) {
   messages.forEach((m, idx) => {
     const isLast = idx === messages.length - 1;
     const isUser = m.role === "user";
-    
-    // Convert generic 'assistant' role to Gemini 'model' role
     const role = m.role === "assistant" ? "model" : "user";
     
     if (m.role === 'tool') {
-        // Gemini handles tool outputs differently in history.
-        // We simulate by adding context as user.
         contents.push({
             role: 'user',
             parts: [{ text: `[System Tool Output]: ${m.content}` }]
@@ -262,7 +253,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
       ? agent.systemPrompt
       : undefined;
 
-  // Determine if we should force JSON output
   const responseMimeType = agent.responseMimeType || (agent.forceJson ? "application/json" : undefined);
 
   let iterations = 0;
@@ -271,7 +261,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
   while (iterations < maxIterations) {
     iterations++;
 
-    // Call model
     const response = await ai.models.generateContent({
         model: modelId,
         contents: currentHistory,
@@ -280,7 +269,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
             tools: toolSpecs,
             temperature: agent.temperature ?? 0.4,
             responseMimeType: responseMimeType,
-            // Pass thinking config if present
             thinkingConfig: agent.thinkingConfig
         }
     });
@@ -288,13 +276,11 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
     const calls = response.functionCalls;
 
     if (calls && calls.length > 0) {
-        // 1. Add model's function call message to history
         const modelContent = response.candidates?.[0]?.content;
         if (modelContent) {
              currentHistory.push(modelContent);
         }
 
-        // 2. Execute tools and collect responses
         const functionResponses = [];
         for (const call of calls) {
             const toolDef = tools.find(t => t.name === call.name);
@@ -308,7 +294,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
                     output = `Error: ${e.message}`;
                 }
             }
-            // Store for return value
             toolResults.push({ toolName: call.name, args: call.args, result: output });
             
             functionResponses.push({
@@ -317,7 +302,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
             });
         }
 
-        // 3. Add function responses to history
         currentHistory.push({
             role: 'tool', 
             parts: functionResponses.map(fr => ({
@@ -326,7 +310,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
         });
 
     } else {
-        // No more tools, we have the answer
         const text = response.text || "";
         return {
             provider: "gemini",
@@ -342,8 +325,6 @@ async function callGeminiWithTools(agent, messages, tools = [], visionImages, ct
   throw new Error("Gemini tool loop exceeded maximum iterations.");
 }
 
-// --- MAIN RUNNER ---
-
 async function runAgentWithTools(request, ctx) {
   const { agent, messages, tools = [], visionImages } = request;
 
@@ -355,7 +336,6 @@ async function runAgentWithTools(request, ctx) {
     return callGeminiWithTools(agent, messages, tools, visionImages, ctx);
   }
 
-  // Default fallback
   if (agent.model && agent.model.includes('gemini')) {
       return callGeminiWithTools(agent, messages, tools, visionImages, ctx);
   }
@@ -433,32 +413,56 @@ const brokerAndJournalTools = [
   },
   {
     name: "append_journal_entry",
-    description: "Append a structured trade log or note to the trading journal. Use this to log setups, executions, or reviews.",
+    description: "Log a planned or completed trade to the journal.",
     parameters: {
       type: "object",
       properties: {
-        timestamp: { type: "string", description: "ISO datetime" },
-        symbol: { type: "string", description: "Symbol traded (e.g. US30)" },
-        direction: { type: "string", enum: ["long", "short"] },
-        timeframe: { type: "string", description: "e.g. 5m, 15m, 1h" },
-        session: { type: "string", description: "e.g. London, NY, Asia" },
-        size: { type: "number", description: "Lot size" },
-        netPnl: { type: "number" },
-        rMultiple: { type: "number", description: "Realized R" },
-        playbook: { type: "string", description: "Name of strategy/setup" },
-        preTradePlan: { type: "string", description: "Plan before entry" },
-        postTradeNotes: { type: "string", description: "Review after exit" },
-        sentiment: { type: "string", description: "Psychological state" },
-        tags: { type: "array", items: { type: "string" } },
-        note: { type: "string" },
+        phase: { type: "string", enum: ["planned", "executed", "closed"] },
+        symbol: { type: "string" },
+        direction: { type: "string" },
+        timeframe: { type: "string" },
+        entryPrice: { type: "number" },
+        stopPrice: { type: "number" },
+        resultR: { type: "number" },
+        resultPnl: { type: "number" },
+        notes: { type: "string" },
+        playbook: { type: "string" },
+        deskGoal: { type: "string" },
       },
     },
     handler: async (args, ctx) => {
-      if (!ctx.appendJournalEntry) throw new Error("Missing appendJournalEntry ctx");
-      const payload = { ...args, createdAt: new Date().toISOString() };
-      await ctx.appendJournalEntry(payload);
-      return { status: "ok", message: "Journal entry saved." };
+      if (ctx.journalService) {
+        if (args.phase === 'planned') {
+           return ctx.journalService.logEntry(args);
+        } else {
+           // For simplicity in agent flow, 'append_journal_entry' wraps various logic
+           // In a real flow, you'd use updateEntry for existing IDs
+           return ctx.journalService.logEntry(args);
+        }
+      }
+      if (ctx.appendJournalEntry) {
+         // Legacy fallback
+         await ctx.appendJournalEntry(args);
+         return { status: "ok", message: "Journal entry saved." };
+      }
+      return { error: "Journal service unavailable" };
     },
+  },
+  {
+    name: "get_journal_stats",
+    description: "Get aggregated performance stats from the journal (win rate, avg R, drawdown).",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string" },
+        playbook: { type: "string" },
+        days: { type: "number" }
+      }
+    },
+    handler: async (args, ctx) => {
+      if (!ctx.journalService) return { error: "Journal service unavailable" };
+      return ctx.journalService.getStats(args);
+    }
   },
   {
     name: "get_playbooks",
@@ -473,40 +477,6 @@ const brokerAndJournalTools = [
       if (!ctx.getPlaybooks) throw new Error("Missing getPlaybooks ctx");
       return ctx.getPlaybooks({ symbol: args.symbol });
     },
-  },
-  {
-    name: "fetch_url_html",
-    description: "Fetch raw text content from a URL (simulated for now).",
-    parameters: {
-      type: "object",
-      properties: {
-        url: { type: "string" }
-      },
-      required: ["url"]
-    },
-    handler: async (args, ctx) => {
-      return `[System] Fetched content from ${args.url}: (Mock Data: The market is waiting for FOMC minutes...)`;
-    }
-  },
-  {
-    name: "save_playbook_variant",
-    description: "Save a playbook variant logic.",
-    parameters: {
-      type: "object",
-      properties: {
-        basePlaybookName: { type: 'string' },
-        variantName: { type: 'string' },
-        entryRules: { type: 'string' },
-        exitRules: { type: 'string' },
-      },
-      required: ["basePlaybookName"]
-    },
-    handler: async (args, ctx) => {
-       if (ctx.savePlaybookVariant) {
-         return ctx.savePlaybookVariant(args);
-       }
-       return "Playbook variant saved (simulated).";
-    }
   },
   {
     name: "control_app_ui",
@@ -536,7 +506,6 @@ const brokerAndJournalTools = [
       required: ["action"]
     },
     handler: async (args, ctx) => {
-        // Backend just echoes this back. The frontend 'AgentActionDispatcher' will intercept it via the tool bus.
         return { 
             status: "dispatched", 
             command: "control_app_ui", 
@@ -570,40 +539,9 @@ const brokerAndJournalTools = [
     parameters: {
       type: "object",
       properties: {
-        goal: {
-          type: "string",
-          description:
-            "Daily goal in trader language, e.g. '1–2 clean A+ trades on US30/NAS100, max 0.5% risk each'.",
-        },
-        sessionPhase: {
-          type: "string",
-          enum: ["preSession", "live", "cooldown", "postSession"],
-          description: "What phase the session should be in.",
-        },
-        assignments: {
-          type: "object",
-          description:
-            "Optional mapping from roleId to symbol/timeframes config.",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              symbolFocus: {
-                type: "string",
-                description: "Primary symbol or focus, e.g. 'US30' or 'News'.",
-              },
-              timeframes: {
-                type: "array",
-                items: { type: "string" },
-                description: "List of timeframes like ['1m','5m','15m','1h'].",
-              },
-              onDesk: {
-                type: "boolean",
-                description: "Whether this role is active for this desk.",
-              },
-            },
-            additionalProperties: false,
-          },
-        },
+        goal: { type: "string" },
+        sessionPhase: { type: "string" },
+        assignments: { type: "object" }
       },
       required: [],
       additionalProperties: false,
@@ -619,14 +557,14 @@ const brokerAndJournalTools = [
   {
     name: "run_autopilot_review",
     description:
-      "Generate an Autopilot trade plan for the current desk context and run it through the risk engine. Use this to propose potential trades.",
+      "Generate an Autopilot trade plan for the current desk context and run it through the risk engine.",
     parameters: {
       type: "object",
       properties: {
         symbol: { type: "string" },
         timeframe: { type: "string" },
         maxRiskPct: { type: "number" },
-        sidePreference: { type: "string", enum: ["long", "short", "either"] },
+        sidePreference: { type: "string" },
         notes: { type: "string" }
       },
       required: ["symbol", "timeframe"]
@@ -639,24 +577,16 @@ const brokerAndJournalTools = [
   {
     name: "commit_autopilot_proposal",
     description:
-      "Take a previously reviewed Autopilot plan and stage it to the frontend Autopilot Panel. Does NOT execute, just stages.",
+      "Take a previously reviewed Autopilot plan and stage it to the frontend Autopilot Panel.",
     parameters: {
       type: "object",
       properties: {
-        plan: {
-          type: "object",
-          description: "The full JSON plan returned by run_autopilot_review.",
-        },
-        source: {
-          type: "string",
-          enum: ["desk", "agent"],
-          description: "Who is committing this proposal.",
-        },
+        plan: { type: "object" },
+        source: { type: "string" },
       },
       required: ["plan", "source"],
     },
     handler: async (args, ctx) => {
-      // Just echo back, the frontend dispatcher will pick it up
       return {
         status: "dispatched",
         command: "autopilot_proposal",

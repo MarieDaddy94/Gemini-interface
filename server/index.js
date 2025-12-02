@@ -16,7 +16,7 @@ const globalErrorHandler = require('./middleware/errorMiddleware');
 const db = require('./persistence');
 
 // Import Tools Data
-const { getPlaybooks, addJournalEntry } = require("./toolsData");
+const { getPlaybooks } = require("./toolsData");
 
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
@@ -36,9 +36,9 @@ const geminiVisionRouter = require('./routes/geminiVisionRouter');
 
 // --- Import New Routers ---
 const playbookRouter = require('./routes/playbookRouter');
-const journalAutoRouter = require('./routes/journalAutoRouter');
+const journalRouter = require('./routes/journalRouter'); // UPDATED: Phase F Router
 const ttsRouter = require('./routes/ttsRouter');
-const { router: deskRouter } = require('./routes/deskRouter'); // NEW: Phase B updated
+const { router: deskRouter } = require('./routes/deskRouter'); 
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -101,7 +101,6 @@ const { visionRouter } = require('./visionRouter');
 // --- GLOBAL SERVER CRASH PROTECTION ---
 process.on('uncaughtException', (err) => {
   logger.error('UNCAUGHT EXCEPTION - Server would have crashed', err);
-  // Keep alive in this demo context, but typically you'd restart
 });
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -137,9 +136,9 @@ app.use('/api/history/', aiLimiter);
 app.use('/api/openai/', aiLimiter);
 app.use('/api/gemini/', aiLimiter);
 app.use('/api/playbooks', aiLimiter);
-app.use('/api/journal', aiLimiter);
+app.use('/api/journal', journalRouter); // UPDATED MOUNT
 app.use('/api/tools/', aiLimiter);
-app.use('/api/desk/', aiLimiter); // NEW
+app.use('/api/desk/', aiLimiter);
 
 app.use(
   cors({
@@ -166,7 +165,7 @@ app.post('/api/log', (req, res) => {
 
 // ---------- AI Squad Tool Endpoints ----------
 
-// GET /api/tools/playbooks?symbol=US30&timeframe=15m&direction=long
+// GET /api/tools/playbooks
 app.get("/api/tools/playbooks", (req, res) => {
   try {
     const { symbol, timeframe, direction } = req.query;
@@ -190,43 +189,35 @@ app.get("/api/tools/playbooks", (req, res) => {
   }
 });
 
-// POST /api/tools/journal-entry
-// Body: {
-//   symbol, timeframe, direction, entryPrice, stopLoss, takeProfit,
-//   size, accountEquity, resultRMultiple, outcome, notes,
-//   agentName, autopilotMode, meta?: { [key: string]: any }
-// }
-app.post("/api/tools/journal-entry", (req, res) => {
+// Tool wrapper for old endpoints to new journal service (compatibility)
+app.post("/api/tools/journal-entry", async (req, res) => {
   try {
     const payload = req.body || {};
-
-    const entry = addJournalEntry({
-      symbol: payload.symbol || null,
-      timeframe: payload.timeframe || null,
-      direction: payload.direction || null,
-      entryPrice: payload.entryPrice ?? null,
-      stopLoss: payload.stopLoss ?? null,
-      takeProfit: payload.takeProfit ?? null,
-      size: payload.size ?? null,
-      accountEquity: payload.accountEquity ?? null,
-      resultRMultiple: payload.resultRMultiple ?? null,
-      outcome: payload.outcome || null, // win / loss / BE / planned / canceled
-      notes: payload.notes || "",
-      agentName: payload.agentName || "OpenAI Squad",
-      autopilotMode: payload.autopilotMode || "confirm", // confirm / auto / sim
-      meta: payload.meta || {},
+    // Map legacy fields to new service
+    const entry = await require('./services/journalService').logEntry({
+       ...payload,
+       source: 'ai'
     });
-
-    res.json({
-      ok: true,
-      entry,
-    });
+    res.json({ ok: true, entry });
   } catch (err) {
     console.error("Error in /api/tools/journal-entry", err);
-    res.status(500).json({
-      ok: false,
-      error: "Failed to log journal entry",
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/tools/autopilot-proposal (Wrapper for computeAutopilotProposal)
+// Kept for simple tool usage if needed, though most logic is in Orchestrator now
+const { computeAutopilotProposal } = require("./toolsData");
+app.post("/api/tools/autopilot-proposal", (req, res) => {
+  try {
+    const payload = req.body || {};
+    const proposal = computeAutopilotProposal(payload);
+    res.json({
+      ok: proposal.riskEngine?.status !== "review",
+      proposal,
     });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -244,9 +235,8 @@ app.use('/api/gemini', geminiVisionRouter);
 
 // Mount New Routers
 app.use('/api/playbooks', playbookRouter);
-app.use('/api/journal', journalAutoRouter);
 app.use('/api', ttsRouter); 
-app.use('/api/desk', deskRouter); // NEW
+app.use('/api/desk', deskRouter); 
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {
@@ -394,10 +384,6 @@ app.post('/api/agents/:id', (req, res, next) => {
       return next(new AppError('Nothing to update (provider/model missing).', 400));
     }
 
-    if (provider && !['openai', 'gemini'].includes(provider)) {
-      return next(new AppError('provider must be "openai" or "gemini".', 400));
-    }
-
     const updated = updateAgentConfig(id, patch);
     if (!updated) {
       return next(new AppError(`Agent ${id} not found.`, 404));
@@ -485,7 +471,7 @@ app.post("/api/agents/chat", async (req, res, next) => {
       agentOverrides,
       db, 
       accountId,
-      deskState // Pass deskState to runner
+      deskState 
     });
 
     res.json({ ok: true, agents: results });
@@ -538,7 +524,6 @@ app.post('/api/ai/route', async (req, res, next) => {
 app.post('/api/agent-router', async (req, res, next) => {
   try {
     const { agentId, userMessage, sessionState, history, deskState } = req.body || {};
-    // Updated to pass db to handleAgentRequest
     const result = await handleAgentRequest({ agentId, userMessage, sessionState, history, deskState }, db);
     res.json(result);
   } catch (err) {
@@ -790,11 +775,9 @@ app.use(globalErrorHandler);
 
 // --- 404 Handler ---
 app.all('*', (req, res, next) => {
-  // If it's an API route that wasn't caught
   if (req.path.startsWith('/api')) {
     return next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
   }
-  // Otherwise serve static
   const clientDistPath = path.join(__dirname, '..', 'dist');
   if (fs.existsSync(clientDistPath)) {
     res.sendFile(path.join(clientDistPath, 'index.html'));

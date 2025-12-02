@@ -3,6 +3,7 @@
 const { getPrice } = require('./marketData');
 const { runDeskCoordinator } = require('./routes/deskRouter');
 const { generateAutopilotPlan, reviewAutopilotPlan } = require('./services/autopilotOrchestrator');
+const journalService = require('./services/journalService');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -14,6 +15,9 @@ function createRuntimeContext(db, reqContext) {
   return {
     accountId: brokerSessionId,
     symbol: symbol || "US30",
+    
+    // Inject the robust service
+    journalService,
 
     log: (msg, data) => console.log(`[ContextLog] ${msg}`, data),
 
@@ -96,14 +100,15 @@ function createRuntimeContext(db, reqContext) {
     },
 
     getRecentTrades: async ({ limit }) => {
-      const entries = await db.getJournal(journalSessionId);
+      // Use the new service instead of raw DB calls
+      const entries = await journalService.listEntries({}, journalSessionId);
       const trades = entries.slice(0, limit).map(e => ({
-        timestamp: e.timestamp,
-        symbol: e.symbol || e.focusSymbol,
-        direction: e.direction || e.bias,
-        outcome: e.outcome,
-        pnl: e.netPnl || e.finalPnl,
-        note: e.postTradeNotes || e.note,
+        timestamp: e.createdAt,
+        symbol: e.symbol,
+        direction: e.direction,
+        outcome: e.status === 'closed' ? (e.resultPnl > 0 ? 'Win' : 'Loss') : e.status,
+        pnl: e.resultPnl,
+        note: e.notes,
         tags: e.tags
       }));
       return trades;
@@ -116,37 +121,13 @@ function createRuntimeContext(db, reqContext) {
       ];
     },
 
+    // Legacy support wrapper
     appendJournalEntry: async (entry) => {
-      const list = await db.getJournal(journalSessionId);
-      
-      const newEntry = {
-        id: `ai-${Date.now()}`,
-        timestamp: entry.createdAt || new Date().toISOString(),
-        symbol: entry.symbol,
-        direction: entry.direction,
-        timeframe: entry.timeframe,
-        session: entry.session,
-        size: entry.size,
-        netPnl: entry.netPnl,
-        rMultiple: entry.rMultiple,
-        playbook: entry.playbook,
-        preTradePlan: entry.preTradePlan,
-        postTradeNotes: entry.postTradeNotes,
-        sentiment: entry.sentiment,
-        tags: Array.isArray(entry.tags) ? entry.tags : (entry.tag ? [entry.tag] : []),
-        focusSymbol: entry.symbol || symbol || 'AI-Note',
-        bias: entry.direction === 'long' ? 'Bullish' : entry.direction === 'short' ? 'Bearish' : 'Neutral',
-        note: entry.note || entry.postTradeNotes || entry.preTradePlan || "AI Entry",
-        outcome: 'Open',
-        rr: typeof entry.rr === 'number' ? entry.rr : (typeof entry.rMultiple === 'number' ? entry.rMultiple : null),
-        pnl: typeof entry.pnl === 'number' ? entry.pnl : (typeof entry.netPnl === 'number' ? entry.netPnl : null),
-      };
-      
-      if (journalSessionId) {
-          list.unshift(newEntry);
-          await db.setJournal(journalSessionId, list);
-      }
-      console.log(`[AI] appended structured journal entry for ${newEntry.symbol}`);
+      await journalService.logEntry({
+         ...entry,
+         sessionId: journalSessionId
+      });
+      console.log(`[AI] appended structured journal entry via legacy wrapper`);
     },
     
     savePlaybookVariant: async (args) => {
@@ -170,9 +151,8 @@ function createRuntimeContext(db, reqContext) {
         }
     },
 
-    // --- PHASE E: Autopilot Orchestrator Handler ---
+    // --- Autopilot Handler ---
     runAutopilotReview: async (args) => {
-      // 1. Get broker snapshot from DB
       let brokerSnapshot = null;
       if (brokerSessionId) {
         const session = await db.getSession(brokerSessionId);
@@ -185,22 +165,19 @@ function createRuntimeContext(db, reqContext) {
         }
       }
 
-      // 2. Generate Plan
       const generated = await generateAutopilotPlan({
         symbol: args.symbol,
         timeframe: args.timeframe,
-        mode: "auto", // Assume auto-ready for review
+        mode: "auto",
         question: args.notes || `Proposed by Desk Agent (${args.sidePreference || 'any'} side)`,
         brokerSnapshot,
         riskProfile: "balanced"
       });
 
-      // 3. Review Plan
-      // We reconstruct a session-like object for the legacy risk engine function
       const sessionStateForRisk = {
         riskConfig: {
           maxRiskPerTradePercent: args.maxRiskPct || 0.5,
-          maxDailyLossPercent: 3, // Default hardcoded or fetched if we had full session state
+          maxDailyLossPercent: 3, 
           maxTradesPerDay: 5
         },
         riskRuntime: {
