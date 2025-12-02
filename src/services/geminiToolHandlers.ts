@@ -1,4 +1,6 @@
+
 // src/services/geminiToolHandlers.ts
+import { recordToolActivity } from "./toolActivityBus";
 
 export type GeminiLiveSession = {
   sendToolResponse: (params: {
@@ -29,8 +31,19 @@ async function callBackendTool(
 ): Promise<any> {
   const body = args ?? {};
 
+  // Default logging for tools we don't explicitly override logic for below
+  // We can refine this logic to catch the start of known tools.
+  // For simplicity, let's record 'pending' for known tools here if we want generic coverage
+  // OR rely on specific blocks below. Specific blocks are cleaner.
+
   if (fnName === "get_chart_playbook") {
-    // mirror the OpenAI path: use /api/tools/playbooks with query params
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "pending",
+      args: body,
+    });
+
     const params = new URLSearchParams();
     if (body.symbol) params.set("symbol", String(body.symbol));
     if (body.timeframe) params.set("timeframe", String(body.timeframe));
@@ -39,12 +52,33 @@ async function callBackendTool(
     const res = await fetch(`${API_BASE_URL}/api/tools/playbooks?${params.toString()}`);
     if (!res.ok) {
       const text = await res.text();
+      recordToolActivity({
+        provider: "gemini",
+        name: fnName,
+        status: "error",
+        args: body,
+        errorMessage: text || `HTTP ${res.status}`,
+      });
       return { ok: false, error: `HTTP ${res.status}: ${text}` };
     }
-    return res.json();
+    const json = await res.json();
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "ok",
+      args: body,
+    });
+    return json;
   }
 
   if (fnName === "log_trade_journal") {
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "pending",
+      args: body,
+    });
+
     const res = await fetch(`${API_BASE_URL}/api/tools/journal-entry`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -52,12 +86,33 @@ async function callBackendTool(
     });
     if (!res.ok) {
       const text = await res.text();
+      recordToolActivity({
+        provider: "gemini",
+        name: fnName,
+        status: "error",
+        args: body,
+        errorMessage: text || `HTTP ${res.status}`,
+      });
       return { ok: false, error: `HTTP ${res.status}: ${text}` };
     }
-    return res.json();
+    const json = await res.json();
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "ok",
+      args: body,
+    });
+    return json;
   }
 
   if (fnName === "get_autopilot_proposal") {
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "pending",
+      args: body,
+    });
+
     const res = await fetch(`${API_BASE_URL}/api/tools/autopilot-proposal`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -65,9 +120,23 @@ async function callBackendTool(
     });
     if (!res.ok) {
       const text = await res.text();
+      recordToolActivity({
+        provider: "gemini",
+        name: fnName,
+        status: "error",
+        args: body,
+        errorMessage: text || `HTTP ${res.status}`,
+      });
       return { ok: false, error: `HTTP ${res.status}: ${text}` };
     }
-    return res.json();
+    const json = await res.json();
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "ok",
+      args: body,
+    });
+    return json;
   }
 
   return {

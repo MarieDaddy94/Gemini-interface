@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from "react";
 import {
   OpenAIRealtimeClient,
@@ -7,6 +8,7 @@ import { useRealtimeConfig } from "../context/RealtimeConfigContext";
 import AutopilotProposalCard, {
   AutopilotProposal,
 } from "./AutopilotProposalCard";
+import { recordToolActivity } from "../services/toolActivityBus";
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
@@ -227,6 +229,13 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             pushLog(
               `🛠 Tool call: get_chart_playbook(${JSON.stringify(args)})`
             );
+            recordToolActivity({
+              provider: "openai",
+              name,
+              status: "pending",
+              args,
+            });
+
             const params = new URLSearchParams();
             if (args.symbol) params.set("symbol", String(args.symbol));
             if (args.timeframe)
@@ -240,12 +249,32 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
               );
               if (!resp.ok) {
                 const errText = await resp.text();
+                recordToolActivity({
+                  provider: "openai",
+                  name,
+                  status: "error",
+                  args,
+                  errorMessage: errText || `HTTP ${resp.status}`,
+                });
                 throw new Error(`API ${resp.status}: ${errText}`);
               }
               const json = await resp.json();
+              recordToolActivity({
+                provider: "openai",
+                name,
+                status: "ok",
+                args,
+              });
               client.sendToolResult(callId, json);
             } catch (err: any) {
               pushLog(`❌ Error fetching playbooks: ${err.message}`);
+              recordToolActivity({
+                provider: "openai",
+                name,
+                status: "error",
+                args,
+                errorMessage: err.message,
+              });
               client.sendToolResult(callId, { error: `Failed to get playbooks: ${err.message}` });
             }
 
@@ -253,6 +282,13 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             pushLog(
               `🛠 Tool call: log_trade_journal(${JSON.stringify(args)})`
             );
+            recordToolActivity({
+              provider: "openai",
+              name,
+              status: "pending",
+              args,
+            });
+
             try {
               const resp = await fetch(`${API_BASE_URL}/api/tools/journal-entry`, {
                 method: "POST",
@@ -261,13 +297,33 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
               });
               if (!resp.ok) {
                 const errText = await resp.text();
+                recordToolActivity({
+                  provider: "openai",
+                  name,
+                  status: "error",
+                  args,
+                  errorMessage: errText || `HTTP ${resp.status}`,
+                });
                 throw new Error(`API ${resp.status}: ${errText}`);
               }
               const json = await resp.json();
+              recordToolActivity({
+                provider: "openai",
+                name,
+                status: "ok",
+                args,
+              });
               client.sendToolResult(callId, json);
               pushLog("✅ Journal entry logged successfully.");
             } catch (err: any) {
               pushLog(`❌ Error logging journal: ${err.message}`);
+              recordToolActivity({
+                provider: "openai",
+                name,
+                status: "error",
+                args,
+                errorMessage: err.message,
+              });
               client.sendToolResult(callId, { error: `Failed to log journal: ${err.message}` });
             }
 
@@ -275,6 +331,12 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             pushLog(
               `🛠 Tool call: get_autopilot_proposal(${JSON.stringify(args)})`
             );
+            recordToolActivity({
+              provider: "openai",
+              name,
+              status: "pending",
+              args,
+            });
             setProposalStatus("Generating proposal…");
             
             try {
@@ -286,6 +348,13 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
 
               if (!resp.ok) {
                 const errText = await resp.text();
+                recordToolActivity({
+                  provider: "openai",
+                  name,
+                  status: "error",
+                  args,
+                  errorMessage: errText || `HTTP ${resp.status}`,
+                });
                 throw new Error(`API ${resp.status}: ${errText}`);
               }
 
@@ -304,16 +373,37 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
                 setProposalStatus("No proposal returned from risk engine.");
               }
 
+              recordToolActivity({
+                provider: "openai",
+                name,
+                status: "ok",
+                args,
+              });
+
               // Also send back into the model
               client.sendToolResult(callId, json);
             } catch (err: any) {
               setProposalStatus(`Error generating proposal: ${err.message}`);
               pushLog(`❌ Error generating proposal: ${err.message}`);
+              recordToolActivity({
+                provider: "openai",
+                name,
+                status: "error",
+                args,
+                errorMessage: err.message,
+              });
               client.sendToolResult(callId, { error: `Failed to generate proposal: ${err.message}` });
             }
 
           } else {
             pushLog(`🛠 Unknown tool: ${name}`);
+            recordToolActivity({
+              provider: "openai",
+              name,
+              status: "error",
+              args,
+              errorMessage: "Unknown tool",
+            });
             client.sendToolResult(callId, {
               ok: false,
               error: `Unknown tool: ${name}`,
@@ -322,6 +412,13 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
         } catch (err) {
           console.error("Tool handler error", err);
           pushLog(`⚠️ Tool handler error: ${String((err as any)?.message ?? err)}`);
+          recordToolActivity({
+            provider: "openai",
+            name: "unknown_error",
+            status: "error",
+            args: {},
+            errorMessage: String((err as any)?.message ?? err),
+          });
           client.sendToolResult(callId, {
             ok: false,
             error: "Tool handler threw an error",

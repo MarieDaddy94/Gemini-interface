@@ -26,6 +26,7 @@ import { VisionProvider } from './context/VisionContext';
 import { VisionSettingsProvider } from './context/VisionSettingsContext';
 import { VoiceActivityProvider } from './context/VoiceActivityContext';
 import { RealtimeConfigProvider } from './context/RealtimeConfigContext';
+import { ToolActivityProvider } from './context/ToolActivityContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
@@ -553,8 +554,10 @@ const App: React.FC = () => {
                   <VisionSettingsProvider>
                     <VoiceActivityProvider>
                       <RealtimeConfigProvider>
-                        <TradeEventsToJournal />
-                        <Dashboard />
+                        <ToolActivityProvider>
+                          <TradeEventsToJournal />
+                          <Dashboard />
+                        </ToolActivityProvider>
                       </RealtimeConfigProvider>
                     </VoiceActivityProvider>
                   </VisionSettingsProvider>
