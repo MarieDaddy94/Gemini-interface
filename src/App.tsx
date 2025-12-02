@@ -1,6 +1,5 @@
 
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
 import WebBrowser from './components/WebBrowser';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
@@ -10,31 +9,24 @@ import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
 import AutopilotPanel from './components/AutopilotPanel';
 import RiskAutopilotPanel from './components/RiskAutopilotPanel';
-import AutopilotJournalTab from './components/AutopilotJournalTab';
 import RoundTablePanel from './components/RoundTablePanel';
 import ChartVisionAgentPanel from './components/ChartVisionAgentPanel';
 import VoiceCommander from './components/VoiceCommander';
 import TraderCoachPanel from './components/TraderCoachPanel';
 import AgentSettingsPanel from './components/AgentSettingsPanel';
 import AccessGate from './components/AccessGate';
-import { JournalProvider, useJournal } from './context/JournalContext';
-import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
-import { AgentConfigProvider } from './context/AgentConfigContext';
-import { TradingSessionProvider } from './context/TradingSessionContext';
-import { AutopilotJournalProvider } from './context/AutopilotJournalContext';
-import { VisionProvider } from './context/VisionContext';
-import { VisionSettingsProvider } from './context/VisionSettingsContext';
-import { VoiceActivityProvider } from './context/VoiceActivityContext';
-import { RealtimeConfigProvider } from './context/RealtimeConfigContext';
-import { ToolActivityProvider } from './context/ToolActivityContext';
-import TradeEventsToJournal from './components/TradeEventsToJournal';
+
+// Hooks & Contexts (Providers now handled in AppProviders.tsx)
+import { useJournal } from './context/JournalContext';
+import { useTradeEvents } from './context/TradeEventsContext';
+import { useAppWorld, AppRoom } from './context/AppWorldContext';
+
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
   TradeLockerAccountSummary,
   PlaybookReviewPayload,
   BrokerEvent,
-  ChartConfig,
   MarketTick,
   AutopilotCommand,
   RiskVerdict
@@ -50,8 +42,6 @@ import {
   FocusSymbol
 } from './symbolMap';
 import { fetchJournalEntries } from './services/journalService';
-
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'command';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -86,12 +76,15 @@ function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timefram
 
 // Inner App Component that uses Contexts
 const Dashboard: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<MainTab>('terminal');
-  
-  // NEW: State for highlighting Autopilot tab
+  // --- AppWorld Integration ---
+  const { state: worldState, actions: worldActions } = useAppWorld();
+  const { currentRoom, activeOverlay } = worldState;
+  const { openRoom, openOverlay, closeOverlay } = worldActions;
+
+  // Local UI state
   const [autopilotHasNew, setAutopilotHasNew] = useState(false);
 
-  const tabs: { id: MainTab; label: string }[] = [
+  const tabs: { id: AppRoom; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
     { id: 'command', label: 'Command Center' },
     { id: 'autopilot', label: 'Autopilot' },
@@ -112,8 +105,6 @@ const Dashboard: React.FC = () => {
   });
 
   // Broker State
-  const [isBrokerModalOpen, setIsBrokerModalOpen] = useState(false);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [brokerSessionId, setBrokerSessionId] = useState<string | null>(null);
   const [brokerData, setBrokerData] = useState<BrokerAccountInfo | null>(null);
   const [accounts, setAccounts] = useState<TradeLockerAccountSummary[]>([]);
@@ -153,7 +144,10 @@ const Dashboard: React.FC = () => {
   // WEBSOCKET: Real-time Market Data Feed
   useEffect(() => {
     if (wsRef.current) return;
-    const wsUrl = `ws://localhost:4000/ws`;
+    // Determine WS URL based on env or default
+    const apiBase = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+    const wsBase = apiBase.replace(/^http/, 'ws');
+    const wsUrl = `${wsBase}/ws`;
     
     try {
       const ws = new WebSocket(wsUrl);
@@ -168,7 +162,7 @@ const Dashboard: React.FC = () => {
             setMarketData(prev => ({ ...prev, ...updates }));
           }
         } catch (err) {
-          console.error('WS parse error', err);
+          // Silent catch for parsing errors on stream
         }
       };
       ws.onclose = () => {
@@ -236,7 +230,6 @@ const Dashboard: React.FC = () => {
             if (needsJournalRefresh) {
                fetchJournalEntries(effectiveJournalSessionId).then(entries => {
                  setEntries(entries);
-                 console.log("[App] Refreshed journal from server due to closed trade event.");
                });
             }
           }
@@ -306,8 +299,8 @@ const Dashboard: React.FC = () => {
     if (timeframe) setChartTimeframe(timeframe);
   };
 
-  const handleTabChange = (tabId: MainTab) => {
-    setActiveTab(tabId);
+  const handleTabChange = (tabId: AppRoom) => {
+    openRoom(tabId);
     if (tabId === 'autopilot') {
       setAutopilotHasNew(false);
     }
@@ -376,10 +369,10 @@ const Dashboard: React.FC = () => {
                 <button
                   key={tab.id}
                   onClick={() => handleTabChange(tab.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${activeTab === tab.id ? 'bg-[#2962ff]/10 text-[#2962ff] border border-[#2962ff]/30' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'} relative`}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${currentRoom === tab.id ? 'bg-[#2962ff]/10 text-[#2962ff] border border-[#2962ff]/30' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/40'} relative`}
                 >
                   {tab.label}
-                  {tab.id === 'autopilot' && autopilotHasNew && activeTab !== 'autopilot' && (
+                  {tab.id === 'autopilot' && autopilotHasNew && currentRoom !== 'autopilot' && (
                     <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
@@ -390,7 +383,11 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={() => setIsSettingsModalOpen(true)} className="text-gray-400 hover:text-white transition-colors" title="Settings & API Keys">
+            <button 
+              onClick={() => openOverlay('settings')} 
+              className={`text-gray-400 hover:text-white transition-colors ${activeOverlay === 'settings' ? 'text-white' : ''}`} 
+              title="Settings & API Keys"
+            >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 0 2.83 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
             </button>
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-1"></div>
@@ -435,7 +432,7 @@ const Dashboard: React.FC = () => {
                 <button onClick={handleDisconnect} className="text-[10px] text-red-400 hover:text-red-300 font-medium">Disconnect</button>
               </div>
             ) : (
-              <button onClick={() => setIsBrokerModalOpen(true)} className="flex items-center gap-2 text-xs bg-[#2962ff] hover:bg-[#1e53e5] text-white py-1.5 px-3 rounded font-medium transition-colors">Connect Broker</button>
+              <button onClick={() => openOverlay('broker')} className="flex items-center gap-2 text-xs bg-[#2962ff] hover:bg-[#1e53e5] text-white py-1.5 px-3 rounded font-medium transition-colors">Connect Broker</button>
             )}
             <div className="h-4 w-[1px] bg-[#2a2e39] mx-1"></div>
             <div className="flex items-center gap-2 text-xs bg-[#2a2e39] py-1 px-2 rounded text-[#d1d4dc]">
@@ -448,14 +445,14 @@ const Dashboard: React.FC = () => {
 
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {/* Show WebBrowser ONLY for Terminal tab */}
-          {activeTab === 'terminal' && (
+          {currentRoom === 'terminal' && (
             <div className="flex-1 min-h-0">
               <WebBrowser onUrlChange={handleBrowserUrlChange} />
             </div>
           )}
 
-          {/* Autopilot Tab - Updated for new Execution Panel */}
-          {activeTab === 'autopilot' && (
+          {/* Autopilot Tab */}
+          {currentRoom === 'autopilot' && (
             <div className="flex-1 min-h-0 h-full">
                <AutopilotPanel 
                  agentProposedCommand={agentAutopilotCommand}
@@ -465,7 +462,7 @@ const Dashboard: React.FC = () => {
             </div>
           )}
           
-          {activeTab === 'command' && (
+          {currentRoom === 'command' && (
             <div className="flex-1 min-h-0 flex overflow-hidden">
                {/* Left Column: Controls & Configuration */}
                <div className="flex-1 border-r border-[#2a2e39] overflow-hidden flex flex-col">
@@ -516,9 +513,9 @@ const Dashboard: React.FC = () => {
             </div>
           )}
           
-          {activeTab === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
-          {activeTab === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
-          {activeTab === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
+          {currentRoom === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
+          {currentRoom === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
+          {currentRoom === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
         </main>
       </div>
 
@@ -535,38 +532,24 @@ const Dashboard: React.FC = () => {
         openPositions={brokerData?.positions}
       />
       
-      <ConnectBrokerModal isOpen={isBrokerModalOpen} onClose={() => setIsBrokerModalOpen(false)} onConnect={handleBrokerConnect} />
-      <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
+      <ConnectBrokerModal 
+        isOpen={activeOverlay === 'broker'} 
+        onClose={closeOverlay} 
+        onConnect={handleBrokerConnect} 
+      />
+      <SettingsModal 
+        isOpen={activeOverlay === 'settings'} 
+        onClose={closeOverlay} 
+      />
     </div>
   );
 };
 
-// Wrapper App to provide Contexts
+// Wrapper App
 const App: React.FC = () => {
   return (
     <AccessGate>
-      <AgentConfigProvider>
-        <TradingSessionProvider>
-          <JournalProvider>
-            <AutopilotJournalProvider>
-              <VisionProvider>
-                <TradeEventsProvider>
-                  <VisionSettingsProvider>
-                    <VoiceActivityProvider>
-                      <RealtimeConfigProvider>
-                        <ToolActivityProvider>
-                          <TradeEventsToJournal />
-                          <Dashboard />
-                        </ToolActivityProvider>
-                      </RealtimeConfigProvider>
-                    </VoiceActivityProvider>
-                  </VisionSettingsProvider>
-                </TradeEventsProvider>
-              </VisionProvider>
-            </AutopilotJournalProvider>
-          </JournalProvider>
-        </TradingSessionProvider>
-      </AgentConfigProvider>
+      <Dashboard />
     </AccessGate>
   );
 };
