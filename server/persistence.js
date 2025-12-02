@@ -1,3 +1,4 @@
+
 const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const path = require('path');
@@ -33,11 +34,22 @@ class PersistenceLayer {
       `);
 
       // Journals Table: Stores the entire journal array as JSON (for now, to match existing logic)
-      // In a strict schema migration, we would normalize entries, but JSON blob is fine for this stage.
       this.db.run(`
         CREATE TABLE IF NOT EXISTS journals (
           sessionId TEXT PRIMARY KEY,
           data TEXT
+        )
+      `);
+
+      // Vision Snapshots Table: Structured vision data
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS vision_snapshots (
+          id TEXT PRIMARY KEY,
+          symbol TEXT,
+          timeframe TEXT,
+          createdAt TEXT,
+          source TEXT,
+          summaryJson TEXT
         )
       `);
     });
@@ -120,6 +132,44 @@ class PersistenceLayer {
        ON CONFLICT(sessionId) DO UPDATE SET data = excluded.data`,
       [sessionId, json]
     );
+  }
+
+  // --- VISION SNAPSHOTS ---
+
+  async saveVisionSnapshot(snapshot) {
+    const { id, symbol, timeframe, createdAt, source, ...rest } = snapshot;
+    const json = JSON.stringify(rest);
+    await this.run(
+      `INSERT INTO vision_snapshots (id, symbol, timeframe, createdAt, source, summaryJson) VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, symbol || 'UNKNOWN', timeframe || 'UNKNOWN', createdAt, source || 'manual', json]
+    );
+  }
+
+  async getRecentVisionSnapshots(symbol, limit = 5) {
+    let sql = 'SELECT * FROM vision_snapshots';
+    const params = [];
+    if (symbol && symbol !== 'Auto') {
+        sql += ' WHERE symbol = ?';
+        params.push(symbol);
+    }
+    sql += ' ORDER BY createdAt DESC LIMIT ?';
+    params.push(limit);
+
+    const rows = await this.all(sql, params);
+    return rows.map(r => {
+        let rest = {};
+        try {
+            rest = JSON.parse(r.summaryJson || '{}');
+        } catch (e) {}
+        return { 
+            id: r.id, 
+            symbol: r.symbol, 
+            timeframe: r.timeframe, 
+            createdAt: r.createdAt, 
+            source: r.source,
+            ...rest 
+        };
+    });
   }
 }
 

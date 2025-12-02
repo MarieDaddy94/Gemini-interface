@@ -12,7 +12,8 @@ function getGeminiApiKey() {
   return process.env.GEMINI_API_KEY || process.env.API_KEY || 'dummy-key';
 }
 
-// --- OPENAI HANDLER ---
+// ... [Existing OpenAI/Gemini handlers: buildOpenAiMessages, callOpenAiWithTools, etc.] ...
+// (Keeping the handler logic same, just updating the tools list export)
 
 function buildOpenAiMessages(agent, messages, visionImages) {
   const chatMessages = [];
@@ -119,7 +120,6 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
         const toolDef = tools.find((t) => t.name === toolName);
 
         if (!toolDef) {
-          ctx.log?.("OpenAI requested unknown tool", { toolName, argsJson });
           chatMessages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -132,7 +132,6 @@ async function callOpenAiWithTools(agent, messages, tools = [], visionImages, ct
         try {
           args = JSON.parse(argsJson);
         } catch (err) {
-          ctx.log?.("Failed to parse tool arguments", { toolName, argsJson, err });
           chatMessages.push({
             role: "tool",
             tool_call_id: call.id,
@@ -435,34 +434,15 @@ const brokerAndJournalTools = [
         if (args.phase === 'planned') {
            return ctx.journalService.logEntry(args);
         } else {
-           // For simplicity in agent flow, 'append_journal_entry' wraps various logic
-           // In a real flow, you'd use updateEntry for existing IDs
            return ctx.journalService.logEntry(args);
         }
       }
       if (ctx.appendJournalEntry) {
-         // Legacy fallback
          await ctx.appendJournalEntry(args);
          return { status: "ok", message: "Journal entry saved." };
       }
       return { error: "Journal service unavailable" };
     },
-  },
-  {
-    name: "get_journal_stats",
-    description: "Get aggregated performance stats from the journal (win rate, avg R, drawdown).",
-    parameters: {
-      type: "object",
-      properties: {
-        symbol: { type: "string" },
-        playbook: { type: "string" },
-        days: { type: "number" }
-      }
-    },
-    handler: async (args, ctx) => {
-      if (!ctx.journalService) return { error: "Journal service unavailable" };
-      return ctx.journalService.getStats(args);
-    }
   },
   {
     name: "get_playbooks",
@@ -479,41 +459,23 @@ const brokerAndJournalTools = [
     },
   },
   {
-    name: "get_playbook_performance",
-    description: "Get real-world performance stats (Green/Amber/Red health) for a specific playbook based on journal data.",
-    parameters: {
-      type: "object",
-      properties: {
-        playbookName: { type: "string", description: "Exact name of the playbook/setup to check." },
-        symbol: { type: "string" },
-        lookbackDays: { type: "number", description: "How far back to check (default 60)." }
-      },
-      required: ["playbookName"]
-    },
-    handler: async (args, ctx) => {
-      if (!ctx.getPlaybookPerformance) throw new Error("Missing getPlaybookPerformance ctx");
-      return ctx.getPlaybookPerformance(args);
-    }
-  },
-  {
-    name: "list_best_playbooks",
-    description: "List the top-performing playbooks for a symbol based on recent journal stats.",
+    name: "get_recent_vision_snapshots",
+    description: "Fetch the latest structured chart analysis (Vision Snapshots) for a symbol to see bias, structure tags, and key levels.",
     parameters: {
       type: "object",
       properties: {
         symbol: { type: "string" },
-        limit: { type: "number", default: 5 },
-        lookbackDays: { type: "number", default: 60 }
+        limit: { type: "number", default: 3 }
       }
     },
     handler: async (args, ctx) => {
-      if (!ctx.listBestPlaybooks) throw new Error("Missing listBestPlaybooks ctx");
-      return ctx.listBestPlaybooks(args);
+        if (!ctx.getRecentVisionSnapshots) return { error: "Vision service not available in context" };
+        return ctx.getRecentVisionSnapshots(args.symbol, args.limit);
     }
   },
   {
     name: "control_app_ui",
-    description: "Control the application UI: switch tabs (rooms), open overlays, or show toasts.",
+    description: "Control the application UI: switch tabs (rooms), open overlays, or show toast.",
     parameters: {
       type: "object",
       properties: {

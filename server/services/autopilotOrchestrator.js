@@ -19,7 +19,7 @@ async function generateAutopilotPlan({
   const systemInstruction = `
 You are the lead strategist of an AI trading squad.
 Your job:
-- Read the account snapshot, risk context, and question.
+- Read the account snapshot, risk context, **VISION SNAPSHOTS**, and question.
 - Propose ONE structured trade plan as JSON.
 - Respect strict risk: never exceed requested risk% or blow daily drawdown.
 - **IMPORTANT**: You must assign a "playbook" name to this trade (e.g. "NY Liquidity Sweep", "Trend Pullback").
@@ -30,7 +30,7 @@ Context:
 - Timeframe: ${timeframe}
 - Mode: ${mode}
 - Risk Profile: ${riskProfile || "balanced"}
-- Vision Summary: ${visionSummary || "none"}
+- **VISION CONTEXT**: ${visionSummary || "No vision data available. Rely on price structure implied by question."}
 - Extra Notes: ${notes || "none"}
 
 Account:

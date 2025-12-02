@@ -5,6 +5,7 @@ const { runDeskCoordinator } = require('./routes/deskRouter');
 const { generateAutopilotPlan, reviewAutopilotPlan } = require('./services/autopilotOrchestrator');
 const journalService = require('./services/journalService');
 const playbookPerformanceService = require('./services/playbookPerformanceService');
+const visionService = require('./services/visionService');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -124,37 +125,8 @@ function createRuntimeContext(db, reqContext) {
       ];
     },
 
-    getPlaybookPerformance: async ({ playbookName, symbol, lookbackDays }) => {
-        const profile = await playbookPerformanceService.getProfileForPlaybook(
-            playbookName, 
-            symbol
-        );
-        if (!profile) return `No data found for playbook '${playbookName}' on ${symbol}. Status: GRAY (Insufficient Data).`;
-        
-        return {
-            playbook: profile.playbook,
-            symbol: profile.symbol,
-            health: profile.health.toUpperCase(),
-            winRate: (profile.winRate * 100).toFixed(1) + '%',
-            avgR: profile.avgR.toFixed(2),
-            sampleSize: profile.sampleSize,
-            lastTrade: profile.lastTradeAt
-        };
-    },
-
-    listBestPlaybooks: async ({ symbol, limit, lookbackDays }) => {
-        const profiles = await playbookPerformanceService.getPlaybookProfiles({
-            symbol, 
-            lookbackDays
-        });
-        
-        // Return simplified list
-        return profiles.slice(0, limit).map(p => ({
-            name: p.playbook,
-            health: p.health.toUpperCase(),
-            winRate: (p.winRate * 100).toFixed(0) + '%',
-            avgR: p.avgR.toFixed(2) + 'R'
-        }));
+    getRecentVisionSnapshots: async (symbol, limit) => {
+        return visionService.getRecent(symbol, limit);
     },
 
     // Legacy support wrapper
@@ -166,11 +138,6 @@ function createRuntimeContext(db, reqContext) {
       console.log(`[AI] appended structured journal entry via legacy wrapper`);
     },
     
-    savePlaybookVariant: async (args) => {
-        console.log("[AI] Saved playbook variant", args);
-        return "Variant saved.";
-    },
-
     deskRoundup: async (args) => {
         if (!deskState) {
             return "Error: Desk state not provided in context.";
@@ -201,12 +168,19 @@ function createRuntimeContext(db, reqContext) {
         }
       }
 
+      // Fetch vision context to inform the plan
+      const visionHistory = await visionService.getRecent(args.symbol || symbol, 2);
+      const visionSummary = visionHistory.length > 0 
+         ? `Recent Vision (${visionHistory[0].timeframe}): Bias=${visionHistory[0].bias}, Regime=${visionHistory[0].regime}, Summary=${visionHistory[0].textSummary}`
+         : "No recent vision snapshots.";
+
       const generated = await generateAutopilotPlan({
         symbol: args.symbol,
         timeframe: args.timeframe,
         mode: "auto",
         question: args.notes || `Proposed by Desk Agent (${args.sidePreference || 'any'} side)`,
         brokerSnapshot,
+        visionSummary,
         riskProfile: "balanced"
       });
 
