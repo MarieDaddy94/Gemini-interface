@@ -13,6 +13,7 @@ import React, {
  */
 export type AppRoom =
   | "terminal"
+  | "tradingRoomFloor" // NEW: The Desk View
   | "command"
   | "autopilot"
   | "journal"

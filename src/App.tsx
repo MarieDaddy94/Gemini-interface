@@ -15,12 +15,16 @@ import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
 import SettingsModal from './components/SettingsModal';
 import AccessGate from './components/AccessGate';
-import AgentActionDispatcher from './components/AgentActionDispatcher'; // Import Dispatcher
+import AgentActionDispatcher from './components/AgentActionDispatcher'; 
+
+// Context Providers
+import { AppProviders } from './context/AppProviders';
 
 // Views
 import TerminalView from './views/TerminalView';
 import CommandCenterView from './views/CommandCenterView';
 import AutopilotView from './views/AutopilotView';
+import TradingRoomFloorView from './views/TradingRoomFloorView'; // NEW
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
@@ -59,7 +63,7 @@ function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timefram
 
 // Inner Dashboard Component
 const Dashboard: React.FC = () => {
-  // --- Global State ---
+  // --- Global State from AppWorld (Single Source of Truth) ---
   const { state: worldState, actions: worldActions } = useAppWorld();
   const { currentRoom, activeOverlay, toast } = worldState;
   const { openRoom, openOverlay, closeOverlay } = worldActions;
@@ -163,7 +167,8 @@ const Dashboard: React.FC = () => {
 
   const tabs: { id: AppRoom; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
-    { id: 'command', label: 'Command Center' },
+    { id: 'tradingRoomFloor', label: 'Desk' }, // NEW TAB
+    { id: 'command', label: 'Command' },
     { id: 'autopilot', label: 'Autopilot' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
@@ -283,6 +288,10 @@ const Dashboard: React.FC = () => {
             <TerminalView onUrlChange={handleBrowserUrlChange} />
           )}
 
+          {currentRoom === 'tradingRoomFloor' && (
+            <TradingRoomFloorView />
+          )}
+
           {currentRoom === 'command' && (
             <CommandCenterView onCommandProposed={handleCommandProposed} />
           )}
@@ -308,7 +317,7 @@ const Dashboard: React.FC = () => {
         chartSymbol={chartSymbol}
         chartTimeframe={chartTimeframe}
         isBrokerConnected={!!brokerSessionId}
-        sessionId={brokerSessionId || 'local'}
+        sessionId={effectiveJournalSessionId}
         autoFocusSymbol={autoFocusSymbol}
         brokerSessionId={brokerSessionId}
         openPositions={brokerData?.positions}
@@ -324,7 +333,9 @@ const Dashboard: React.FC = () => {
 const App: React.FC = () => {
   return (
     <AccessGate>
-      <Dashboard />
+      <AppProviders>
+        <Dashboard />
+      </AppProviders>
     </AccessGate>
   );
 };

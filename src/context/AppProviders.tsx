@@ -11,6 +11,7 @@ import { TradeEventsProvider } from './TradeEventsContext';
 import { VoiceActivityProvider } from './VoiceActivityContext';
 import { RealtimeConfigProvider } from './RealtimeConfigContext';
 import { ToolActivityProvider } from './ToolActivityContext';
+import { DeskProvider } from './DeskContext'; // NEW
 import TradeEventsToJournal from '../components/TradeEventsToJournal';
 
 interface Props {
@@ -34,13 +35,15 @@ export const AppProviders: React.FC<Props> = ({ children }) => {
                     <VoiceActivityProvider>
                       <RealtimeConfigProvider>
                         <ToolActivityProvider>
-                          {/* 
-                             TradeEventsToJournal is a background component that listens 
-                             to events and logs them. It needs to be inside the providers.
-                          */}
-                          <TradeEventsToJournal />
-                          
-                          {children}
+                          <DeskProvider>
+                            {/* 
+                               TradeEventsToJournal is a background component that listens 
+                               to events and logs them. It needs to be inside the providers.
+                            */}
+                            <TradeEventsToJournal />
+                            
+                            {children}
+                          </DeskProvider>
                         </ToolActivityProvider>
                       </RealtimeConfigProvider>
                     </VoiceActivityProvider>
