@@ -721,12 +721,30 @@ export interface VisionPattern {
   confidence?: number; // 0–1
 }
 
+// High-level “what did Pattern GPT see on the chart?”
+export interface ChartVisionAnalysis {
+  symbol: string;
+  timeframe: string;
+  sessionContext?: string;
+
+  marketBias: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  confidence: number; // 0–1
+
+  structureNotes: string;        // trend, HH/HL vs LH/LL, ranges
+  liquidityNotes: string;        // equal highs/lows, obvious stops, sweep risk
+  fvgNotes: string;              // fair value gaps / imbalances
+  keyZones: string[];            // “NY session high”, “London low”, etc.
+  patternNotes: string;          // classic patterns, internal structure
+  riskWarnings: string[];        // “extended move, late long”, “news nearby”
+  suggestedPlaybookTags: string[]; // e.g. ["PDH sweep", "NY reversal"]
+}
+
 // Normalized result format for any provider
 export interface VisionResult {
-  provider: VisionProvider;
-  modelId: string;
-  task: VisionTask;
-  createdAt: string;
+  provider?: VisionProvider;
+  modelId?: string;
+  task?: VisionTask;
+  createdAt?: string;
 
   htfBias?: VisionBias;
   structureSummary?: string;
@@ -740,4 +758,6 @@ export interface VisionResult {
 
   // Raw text from the model, for logging / UI
   rawText?: string;
+  summary?: string;
+  analysis?: ChartVisionAnalysis;
 }

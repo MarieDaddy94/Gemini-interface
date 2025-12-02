@@ -1,5 +1,6 @@
 
 
+
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { MOCK_CHARTS } from './constants';
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
@@ -13,7 +14,7 @@ import AutopilotPanel from './components/AutopilotPanel';
 import RiskAutopilotPanel from './components/RiskAutopilotPanel';
 import AutopilotJournalTab from './components/AutopilotJournalTab';
 import RoundTablePanel from './components/RoundTablePanel';
-import ChartVisionPanel from './components/ChartVisionPanel';
+import ChartVisionAgentPanel from './components/ChartVisionAgentPanel';
 import VoiceCommander from './components/VoiceCommander';
 import TraderCoachPanel from './components/TraderCoachPanel';
 import AgentSettingsPanel from './components/AgentSettingsPanel';
@@ -486,7 +487,7 @@ const Dashboard: React.FC = () => {
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
                   <div className="flex-1 min-h-0 flex flex-col">
-                     <ChartVisionPanel />
+                     <ChartVisionAgentPanel />
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
                   <div className="flex-1 min-h-0 flex flex-col">
