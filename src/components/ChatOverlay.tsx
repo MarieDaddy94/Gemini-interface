@@ -4,22 +4,23 @@ import { callAgentRouter, AgentId, TradeMeta, ToolCall } from '../services/agent
 import { useJournal } from '../context/JournalContext';
 import { useAgentConfig } from '../context/AgentConfigContext';
 import { useTradingSession } from '../context/TradingSessionContext';
+import { useDesk } from '../context/DeskContext'; // NEW
 import { BrokerPosition, AgentMessage } from '../types';
 import { executeTrade } from '../services/tradeLockerService';
-import { recordToolActivity } from '../services/toolActivityBus'; // Import Bus
+import { recordToolActivity } from '../services/toolActivityBus'; 
 
 // UI Metadata for styling specific agents
 const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
   quant_bot: { avatar: '🤖', color: 'bg-blue-100 text-blue-800' },
-  "quant-analyst": { avatar: '🤖', color: 'bg-blue-100 text-blue-800' }, // New ID mapping
+  "quant-analyst": { avatar: '🤖', color: 'bg-blue-100 text-blue-800' }, 
   
   trend_master: { avatar: '📈', color: 'bg-purple-100 text-purple-800' },
-  "strategist-main": { avatar: '🧠', color: 'bg-purple-100 text-purple-800' }, // New ID mapping
+  "strategist-main": { avatar: '🧠', color: 'bg-purple-100 text-purple-800' }, 
   
   pattern_gpt: { avatar: '🧠', color: 'bg-green-100 text-green-800' },
   
   journal_coach: { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' },
-  "journal-coach": { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' }, // New ID mapping
+  "journal-coach": { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' }, 
   
   "risk-manager": { avatar: '🛡️', color: 'bg-red-100 text-red-800' },
   "execution-bot": { avatar: '⚡', color: 'bg-yellow-100 text-yellow-800' },
@@ -538,6 +539,7 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
 
   // Global Session State via Context (Replaces local state for persistence)
   const { state: sessionState, addMessage } = useTradingSession();
+  const { state: deskState } = useDesk(); // Consume Desk Context
 
   // UI State
   const [isOpen, setIsOpen] = useState(true);
@@ -785,7 +787,8 @@ const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref)
         agentId: targetAgentId,
         userMessage: text,
         sessionState: sessionState,
-        history: historyForApi
+        history: historyForApi,
+        deskState // Pass desk context
       });
 
       // Add agent response to context

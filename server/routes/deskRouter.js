@@ -16,20 +16,15 @@ function cleanAndParseJson(text) {
 }
 
 /**
- * POST /api/desk/roundup
- *
- * The "Brain" of the Trading Room Floor.
+ * Core Logic: The "Brain" of the Trading Room Floor.
  * 1. Reads current desk state (roles, goal).
  * 2. Reads live broker state (equity, PnL).
  * 3. Processes user instruction via LLM.
- * 4. Returns structured updates for the UI.
+ * 4. Returns structured updates.
  */
-router.post("/roundup", async (req, res) => {
-  try {
-    const { input, deskState } = req.body || {};
-
+async function runDeskCoordinator(input, deskState) {
     if (!deskState) {
-      return res.status(400).json({ error: "deskState is required" });
+      throw new Error("deskState is required");
     }
 
     // 1. Get Context
@@ -95,10 +90,9 @@ Respond with JSON updates.
 `;
 
     // 4. Call LLM (Gemini 2.5 Flash or GPT-4o)
-    // We use a high temperature for dynamic responses, but force JSON structure.
     const llmOutput = await callLLM({
-      provider: "auto", // Uses configured defaults
-      model: "gemini-2.5-flash", // Fast & smart enough for coordination
+      provider: "auto", 
+      model: "gemini-2.5-flash",
       systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
       temperature: 0.3,
@@ -109,21 +103,28 @@ Respond with JSON updates.
     let parsed = cleanAndParseJson(llmOutput);
 
     if (!parsed) {
-      // Fallback if LLM fails to output JSON
       parsed = {
         message: "I understood, but had trouble syncing with the squad. (JSON Error)",
         roleUpdates: [],
       };
     }
 
-    // 6. Return to Frontend
-    return res.json({
+    return {
       message: parsed.message || "Desk updated.",
       roleUpdates: Array.isArray(parsed.roleUpdates) ? parsed.roleUpdates : [],
       sessionPhase: parsed.sessionPhase || deskState.sessionPhase,
       goal: parsed.goal !== undefined ? parsed.goal : deskState.goal,
-    });
+    };
+}
 
+/**
+ * POST /api/desk/roundup
+ */
+router.post("/roundup", async (req, res) => {
+  try {
+    const { input, deskState } = req.body || {};
+    const result = await runDeskCoordinator(input, deskState);
+    return res.json(result);
   } catch (err) {
     console.error("Error in /api/desk/roundup:", err);
     return res.status(500).json({
@@ -133,4 +134,7 @@ Respond with JSON updates.
   }
 });
 
-module.exports = router;
+module.exports = {
+  router,
+  runDeskCoordinator
+};

@@ -543,6 +543,79 @@ const brokerAndJournalTools = [
             details: args 
         };
     }
+  },
+  {
+    name: "desk_roundup",
+    description: "Ask the Trading Desk Coordinator for a short status report and updated agent tasking.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description: "Optional specific question for the desk.",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    handler: async (args, ctx) => {
+        if (!ctx.deskRoundup) throw new Error("Missing deskRoundup context handler");
+        return ctx.deskRoundup(args);
+    }
+  },
+  {
+    name: "configure_trading_desk",
+    description:
+      "Configure the Trading Room Floor: set today's goal, session phase, and which agents watch which symbols/timeframes.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          description:
+            "Daily goal in trader language, e.g. '1–2 clean A+ trades on US30/NAS100, max 0.5% risk each'.",
+        },
+        sessionPhase: {
+          type: "string",
+          enum: ["preSession", "live", "cooldown", "postSession"],
+          description: "What phase the session should be in.",
+        },
+        assignments: {
+          type: "object",
+          description:
+            "Optional mapping from roleId to symbol/timeframes config.",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              symbolFocus: {
+                type: "string",
+                description: "Primary symbol or focus, e.g. 'US30' or 'News'.",
+              },
+              timeframes: {
+                type: "array",
+                items: { type: "string" },
+                description: "List of timeframes like ['1m','5m','15m','1h'].",
+              },
+              onDesk: {
+                type: "boolean",
+                description: "Whether this role is active for this desk.",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+    handler: async (args, ctx) => {
+        // Echoes back to frontend dispatch
+        return {
+            status: "dispatched",
+            command: "configure_trading_desk",
+            details: args
+        };
+    }
   }
 ];
 

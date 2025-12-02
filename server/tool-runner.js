@@ -1,6 +1,7 @@
 
 // server/tool-runner.js
 const { getPrice } = require('./marketData');
+const { runDeskCoordinator } = require('./routes/deskRouter');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -9,7 +10,7 @@ const { getPrice } = require('./marketData');
  * Updated to support Async DB Access (SQLite).
  */
 function createRuntimeContext(db, reqContext) {
-  const { brokerSessionId, journalSessionId, symbol } = reqContext || {};
+  const { brokerSessionId, journalSessionId, symbol, deskState } = reqContext || {};
 
   return {
     accountId: brokerSessionId, // Treat sessionId as primary account lookup for now
@@ -164,6 +165,25 @@ function createRuntimeContext(db, reqContext) {
     savePlaybookVariant: async (args) => {
         console.log("[AI] Saved playbook variant", args);
         return "Variant saved.";
+    },
+
+    deskRoundup: async (args) => {
+        if (!deskState) {
+            return "Error: Desk state not provided in context.";
+        }
+        const question = args.question || "Give a short desk status for the current goal.";
+        
+        // Reuse logic from desk router
+        try {
+            const result = await runDeskCoordinator(question, deskState);
+            return {
+                messageFromDesk: result.message
+                // We don't apply updates here, just informative text. 
+                // To apply updates, the agent should have used configure_trading_desk or frontend needs to poll.
+            };
+        } catch (e) {
+            return `Error running desk coordinator: ${e.message}`;
+        }
     }
   };
 }

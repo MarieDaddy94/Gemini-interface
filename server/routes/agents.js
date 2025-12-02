@@ -11,7 +11,7 @@ function createAgentsRouter(db) {
 
   router.post('/api/agents/:agentId/chat', catchAsync(async (req, res, next) => {
     const { agentId } = req.params;
-    const { messages, visionImages, accountId, symbol } = req.body;
+    const { messages, visionImages, accountId, symbol, deskState } = req.body;
 
     const agentReg = getRegisteredAgent(agentId);
     if (!agentReg) {
@@ -23,7 +23,8 @@ function createAgentsRouter(db) {
     // Create runtime context using the DB instance
     const ctx = createRuntimeContext(db, {
       brokerSessionId: accountId,
-      symbol: symbol || 'US30'
+      symbol: symbol || 'US30',
+      deskState
     });
 
     const processedVision = visionImages

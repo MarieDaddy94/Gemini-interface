@@ -70,12 +70,13 @@ function historyToChatMessages(history) {
  *   agentId?: string,
  *   userMessage: string,
  *   sessionState: any,
- *   history?: Array<any>
+ *   history?: Array<any>,
+ *   deskState?: any
  * }} payload
  * @param {object} db - Database instance required for tools
  */
 async function handleAgentRequest(payload, db) {
-  const { agentId, userMessage, sessionState, history } = payload || {};
+  const { agentId, userMessage, sessionState, history, deskState } = payload || {};
 
   if (!userMessage || typeof userMessage !== 'string') {
     throw new Error('userMessage is required and must be a string.');
@@ -124,7 +125,8 @@ ${sessionSummary}
   const ctx = createRuntimeContext(db, {
     brokerSessionId: accountId,
     journalSessionId: accountId,
-    symbol: sessionState?.instrument?.symbol || 'US30'
+    symbol: sessionState?.instrument?.symbol || 'US30',
+    deskState
   });
 
   // Execute

@@ -6,7 +6,7 @@ const { createRuntimeContext } = require('./tool-runner');
 const { agentsById } = require('./agents/agentConfig');
 
 async function handleAiRoute(reqBody, db) {
-  const { agentId, messages, vision, marketContext } = reqBody;
+  const { agentId, messages, vision, marketContext, deskState } = reqBody;
   
   // Try to find agent via the new config first
   let agent = agentsById[agentId];
@@ -20,7 +20,10 @@ async function handleAiRoute(reqBody, db) {
 
   // 1. Create the runtime context (adapters to DB/Broker)
   // NOW TAKING DB INSTANCE INSTEAD OF MAPS
-  const ctx = createRuntimeContext(db, marketContext || {});
+  const ctx = createRuntimeContext(db, {
+      ...marketContext, 
+      deskState
+  });
 
   // 2. Filter tools allowed for this agent
   const allowedToolNames = agent.tools || [];

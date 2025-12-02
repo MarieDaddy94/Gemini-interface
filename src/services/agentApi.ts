@@ -95,6 +95,7 @@ export async function fetchAgentInsights(params: {
   journalMode?: JournalMode;
   agentOverrides?: Record<string, AgentConfigOverride>;
   accountId?: string | null;
+  deskState?: any; // NEW: Desk Context
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/chat`, {
     method: "POST",
@@ -107,7 +108,8 @@ export async function fetchAgentInsights(params: {
       screenshot: params.screenshot || null,
       journalMode: params.journalMode || "live",
       agentOverrides: params.agentOverrides,
-      accountId: params.accountId
+      accountId: params.accountId,
+      deskState: params.deskState
     }),
   });
 
@@ -141,6 +143,7 @@ export async function fetchAgentDebrief(params: {
   journalContext?: any[];
   agentOverrides?: Record<string, AgentConfigOverride>;
   accountId?: string | null;
+  deskState?: any;
 }): Promise<AgentInsight[]> {
   const response = await fetch(`${API_BASE_URL}/api/agents/debrief`, {
     method: "POST",
@@ -150,7 +153,8 @@ export async function fetchAgentDebrief(params: {
       chartContext: params.chartContext || {},
       journalContext: params.journalContext || [],
       agentOverrides: params.agentOverrides,
-      accountId: params.accountId
+      accountId: params.accountId,
+      deskState: params.deskState
     }),
   });
 
@@ -184,6 +188,7 @@ export interface AgentRouterRequest {
   userMessage: string;
   sessionState: TradingSessionState;
   history?: AgentMessage[];
+  deskState?: any; // NEW
 }
 
 export interface AgentRouterResponse {

@@ -1,7 +1,7 @@
 
 import React, { useEffect } from 'react';
 import { useAppWorld, AppRoom, AppOverlay } from '../context/AppWorldContext';
-import { useToolActivity } from '../context/ToolActivityContext';
+import { useDesk } from '../context/DeskContext';
 import { ToolActivityEvent, subscribeToolActivity } from '../services/toolActivityBus';
 
 /**
@@ -10,48 +10,71 @@ import { ToolActivityEvent, subscribeToolActivity } from '../services/toolActivi
  * This invisible component acts as the bridge between the "Tool Activity Bus"
  * (where backend agent actions are logged) and the "App World" (React state).
  * 
- * When an agent calls `control_app_ui`, this component executes it.
+ * When an agent calls `control_app_ui` or `configure_trading_desk`, this component executes it.
  */
 const AgentActionDispatcher: React.FC = () => {
-  const { actions } = useAppWorld();
+  const { actions: appActions } = useAppWorld();
+  const { actions: deskActions } = useDesk();
 
   useEffect(() => {
     // We subscribe directly to the bus service to avoid re-render loops 
     // or dependency on the context array changing.
     const unsubscribe = subscribeToolActivity((evt: ToolActivityEvent) => {
-      // We only care about the 'control_app_ui' tool
-      if (evt.name !== 'control_app_ui') return;
-
-      // We only execute on 'ok' (completed) or 'pending' if we want immediate reaction.
-      // Let's execute on 'pending' to make it feel snappy, or 'ok' to be safe.
-      // Since the backend handler is just a pass-through, 'ok' is fine and safer.
-      if (evt.status !== 'ok') return;
-
-      const args = evt.args || {};
-      const action = args.action;
       
-      console.log(`[AgentActionDispatcher] Executing:`, args);
+      // 1. UI Control
+      if (evt.name === 'control_app_ui' && evt.status === 'ok') {
+        const args = evt.args || {};
+        const action = args.action;
+        
+        console.log(`[AgentActionDispatcher] UI Action:`, args);
 
-      if (action === 'navigate') {
-        if (args.target) {
-          // Type guard or cast
-          actions.openRoom(args.target as AppRoom);
+        if (action === 'navigate') {
+          if (args.target) {
+            appActions.openRoom(args.target as AppRoom);
+          }
+        } else if (action === 'overlay') {
+          if (args.target) {
+            appActions.openOverlay(args.target as AppOverlay);
+          }
+        } else if (action === 'toast') {
+          if (args.message) {
+            appActions.showToast(args.message, args.type || 'info');
+          }
         }
-      } else if (action === 'overlay') {
-        if (args.target) {
-          actions.openOverlay(args.target as AppOverlay);
+      }
+
+      // 2. Desk Configuration
+      if (evt.name === 'configure_trading_desk' && evt.status === 'ok') {
+        const args = evt.args || {};
+        console.log(`[AgentActionDispatcher] Desk Config:`, args);
+
+        if (args.goal) {
+            deskActions.setDeskGoal(args.goal);
         }
-      } else if (action === 'toast') {
-        if (args.message) {
-          actions.showToast(args.message, args.type || 'info');
+        
+        if (args.sessionPhase) {
+            deskActions.setSessionPhase(args.sessionPhase);
         }
+
+        if (args.assignments) {
+            Object.entries(args.assignments).forEach(([roleId, config]: [string, any]) => {
+                deskActions.assignRole(roleId as any, {
+                    symbolFocus: config.symbolFocus,
+                    timeframes: config.timeframes,
+                    onDesk: config.onDesk
+                });
+            });
+        }
+        
+        // Optionally notify user
+        appActions.showToast("Desk reconfigured by Agent", "info");
       }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [actions]);
+  }, [appActions, deskActions]);
 
   return null; // Invisible
 };

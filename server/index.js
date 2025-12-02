@@ -38,7 +38,7 @@ const geminiVisionRouter = require('./routes/geminiVisionRouter');
 const playbookRouter = require('./routes/playbookRouter');
 const journalAutoRouter = require('./routes/journalAutoRouter');
 const ttsRouter = require('./routes/ttsRouter');
-const deskRouter = require('./routes/deskRouter'); // NEW: Phase B
+const { router: deskRouter } = require('./routes/deskRouter'); // NEW: Phase B updated
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -463,7 +463,7 @@ app.use(createAgentsRouter(db));
 // --- MULTI-AGENT CHAT ---
 app.post("/api/agents/chat", async (req, res, next) => {
   try {
-    const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId } = req.body || {};
+    const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId, deskState } = req.body || {};
 
     if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
       return next(new AppError("agentIds[] and userMessage are required", 400));
@@ -484,7 +484,8 @@ app.post("/api/agents/chat", async (req, res, next) => {
       apiKeys,
       agentOverrides,
       db, 
-      accountId 
+      accountId,
+      deskState // Pass deskState to runner
     });
 
     res.json({ ok: true, agents: results });
@@ -495,7 +496,7 @@ app.post("/api/agents/chat", async (req, res, next) => {
 
 app.post("/api/agents/debrief", async (req, res, next) => {
   try {
-    const { previousInsights, chartContext, journalContext, agentOverrides, accountId } = req.body || {};
+    const { previousInsights, chartContext, journalContext, agentOverrides, accountId, deskState } = req.body || {};
 
     if (!previousInsights || !Array.isArray(previousInsights)) {
       return next(new AppError("previousInsights array is required", 400));
@@ -513,7 +514,8 @@ app.post("/api/agents/debrief", async (req, res, next) => {
       apiKeys,
       agentOverrides,
       db, 
-      accountId
+      accountId,
+      deskState
     });
 
     res.json({ ok: true, insights: results });
@@ -535,9 +537,9 @@ app.post('/api/ai/route', async (req, res, next) => {
 // --- AGENT ROUTER ---
 app.post('/api/agent-router', async (req, res, next) => {
   try {
-    const { agentId, userMessage, sessionState, history } = req.body || {};
+    const { agentId, userMessage, sessionState, history, deskState } = req.body || {};
     // Updated to pass db to handleAgentRequest
-    const result = await handleAgentRequest({ agentId, userMessage, sessionState, history }, db);
+    const result = await handleAgentRequest({ agentId, userMessage, sessionState, history, deskState }, db);
     res.json(result);
   } catch (err) {
     next(err);
