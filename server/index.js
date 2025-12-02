@@ -5,6 +5,8 @@
 
 
 
+
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -28,6 +30,8 @@ const openaiAutopilotRouter = require('./routes/openaiAutopilotRouter');
 
 // --- Import Gemini Routers ---
 const geminiAutopilotRouter = require('./routes/geminiAutopilotRouter');
+const geminiLiveTokenRouter = require('./routes/geminiLiveTokenRouter');
+const geminiVisionRouter = require('./routes/geminiVisionRouter');
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -131,8 +135,10 @@ app.use('/api/vision', visionRouter);
 app.use('/api/openai', openaiRealtimeRouter);
 app.use('/api/openai', openaiAutopilotRouter);
 
-// Mount Gemini Router
+// Mount Gemini Routers
 app.use('/api/gemini', geminiAutopilotRouter);
+app.use('/api/gemini', geminiLiveTokenRouter);
+app.use('/api/gemini', geminiVisionRouter);
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {

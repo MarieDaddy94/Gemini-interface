@@ -2,6 +2,8 @@
 
 
 
+
+
 // client/src/components/AutopilotPanel.tsx
 
 import React, { useMemo, useState } from 'react';
@@ -15,8 +17,9 @@ import {
 } from '../types';
 import { useAutopilotExecute, useBrokerSnapshot } from '../hooks/useAutopilot';
 import OpenAIVoiceAutopilotPanel from './OpenAIVoiceAutopilotPanel';
+import GeminiVoicePanel from './GeminiVoicePanel';
 
-type PanelTab = 'compose' | 'status' | 'voice';
+type PanelTab = 'compose' | 'status' | 'voice' | 'gemini-live';
 
 interface AutopilotPanelProps {
   // Proposed command from the AI round-table (Execution Bot)
@@ -293,12 +296,24 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
         >
           OpenAI Voice
         </button>
+        <button
+          onClick={() => setActiveTab('gemini-live')}
+          className={`pb-2 text-[11px] font-medium transition-colors border-b-2 ${
+            activeTab === 'gemini-live' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          Gemini Live
+        </button>
       </div>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col gap-4 overflow-auto px-4 pb-4">
         {activeTab === 'voice' && (
            <OpenAIVoiceAutopilotPanel />
+        )}
+
+        {activeTab === 'gemini-live' && (
+           <GeminiVoicePanel />
         )}
 
         {activeTab === 'compose' && (
