@@ -1,4 +1,3 @@
-
 const express = require("express");
 const {
   geminiLiveClient,
@@ -32,24 +31,16 @@ router.post("/live/ephemeral-token", async (req, res) => {
       now.getTime() + newSessionWindowMinutes * 60_000
     );
 
-    // Call the GenAI SDK to create the token
-    // Accessing internal/alpha API for tokens if not fully exposed in typed SDK yet
-    // Note: The Node SDK exposes this via `client.tokens.create` in newer versions or raw request
-    // The provided snippet used `auth_tokens.create`, we will adapt to the SDK structure if needed
-    // or use the generic client fetch if specific method is missing.
-    // Assuming standard SDK usage for v1alpha tokens:
+    // Call the GenAI SDK to create the token using bracket notation to avoid type errors in some environments
+    const clientAny = geminiLiveClient;
     
-    // NOTE: If SDK doesn't strictly type `auth_tokens`, we rely on dynamic access or similar.
-    // For safety with current @google/genai, we might need a workaround if it's not standard.
-    // However, following the prompt instructions:
-    
-    /* 
-       The prompt suggests: 
-       const token = await (geminiLiveClient as any).auth_tokens.create(...)
-    */
+    // Check if client supports authTokens (newer SDKs)
+    if (!clientAny['authTokens'] || !clientAny['authTokens'].create) {
+       console.error("Gemini SDK version might be too old to support authTokens.create");
+       // Attempt fallback or return error
+    }
 
-    // In JS:
-    const tokenResponse = await geminiLiveClient.authTokens.create({
+    const tokenResponse = await clientAny['authTokens'].create({
         config: {
             uses,
             expireTime: expireTime.toISOString(),
@@ -59,7 +50,7 @@ router.post("/live/ephemeral-token", async (req, res) => {
     });
 
     // The response structure might vary slightly by SDK version, handling robustly:
-    const tokenValue = tokenResponse.token || tokenResponse.value;
+    const tokenValue = tokenResponse.token || tokenResponse.value || tokenResponse.accessToken;
 
     return res.json({
       token: tokenValue,

@@ -102,7 +102,7 @@ export class GeminiLiveClient {
   private sendSetup() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
 
-    // Combine existing tools with the new playbook tools
+    // Flatten all configured tools into one declaration list
     const tools = [
       {
         functionDeclarations: [
@@ -164,9 +164,8 @@ export class GeminiLiveClient {
               required: ["symbol"],
             },
           },
-          // Merge in new playbook/journaling tools
-          ...(GEMINI_LIVE_TOOLS[0]?.functionDeclarations || []),
-          ...(GEMINI_LIVE_TOOLS[1]?.functionDeclarations || []),
+          // Spread all external tools (playbook, journal, autopilot)
+          ...GEMINI_LIVE_TOOLS.flatMap(t => t.functionDeclarations || []),
         ],
       },
     ];
@@ -194,7 +193,8 @@ export class GeminiLiveClient {
               text:
                 "You are a prop-firm style AI trading squad. " +
                 "You MUST call tools to get live trading context, recent chart structure, " +
-                "playbooks (get_chart_playbook), and to log trades (log_trade_journal) before suggesting heavy risk. " +
+                "playbooks (get_chart_playbook), autopilot proposals (get_autopilot_proposal), " +
+                "and to log trades (log_trade_journal) before suggesting heavy risk. " +
                 "Never hallucinate balances or trade history.",
             },
           ],

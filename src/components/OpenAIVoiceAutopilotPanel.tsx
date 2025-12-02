@@ -1,10 +1,14 @@
-// src/components/OpenAIVoiceAutopilotPanel.tsx
 import React, { useEffect, useRef, useState } from "react";
 import {
   OpenAIRealtimeClient,
   OpenAIToolSchema,
 } from "../services/OpenAIRealtimeClient";
 import { useRealtimeConfig } from "../context/RealtimeConfigContext";
+import AutopilotProposalCard, {
+  AutopilotProposal,
+} from "./AutopilotProposalCard";
+
+const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
 type Props = {
   wsUrl: string;
@@ -19,11 +23,14 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
   const [userInput, setUserInput] = useState("");
   const [connected, setConnected] = useState(false);
 
+  const [proposal, setProposal] = useState<AutopilotProposal | null>(null);
+  const [proposalStatus, setProposalStatus] = useState<string | null>(null);
+
   const pushLog = (line: string) => {
     setLog((prev) => [...prev, line].slice(-300));
   };
 
-  // Tools: playbook lookup, journaling, autopilot proposal
+  // Tools: playbook lookup, journaling, autopilot proposal (with vision hook)
   const tools: OpenAIToolSchema[] = [
     {
       type: "function",
@@ -216,9 +223,6 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
       },
       onToolCall: async (name, args, callId) => {
         try {
-          // Resolve backend URL
-          const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
-
           if (name === "get_chart_playbook") {
             pushLog(
               `🛠 Tool call: get_chart_playbook(${JSON.stringify(args)})`
@@ -250,12 +254,28 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             pushLog(
               `🛠 Tool call: get_autopilot_proposal(${JSON.stringify(args)})`
             );
+            setProposalStatus("Generating proposal…");
             const resp = await fetch(`${API_BASE_URL}/api/tools/autopilot-proposal`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(args),
             });
             const json = await resp.json();
+
+            // Surface into UI card
+            if (json?.proposal) {
+              setProposal(json.proposal as AutopilotProposal);
+              setProposalStatus(
+                json.ok
+                  ? "Proposal ready – risk engine status OK."
+                  : "Proposal ready – risk engine flagged issues. Review before sending."
+              );
+            } else {
+              setProposal(null);
+              setProposalStatus("No proposal returned from risk engine.");
+            }
+
+            // Also send back into the model
             client.sendToolResult(callId, json);
           } else {
             pushLog(`🛠 Unknown tool: ${name}`);
@@ -294,6 +314,59 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
     setUserInput("");
   };
 
+  // 🔗 This is where you hook in your TradeLocker connector.
+  const handleApproveProposal = async (p: AutopilotProposal) => {
+    try {
+      setProposalStatus("Sending order to broker…");
+
+      // Placeholder execution call
+      const resp = await fetch(`${API_BASE_URL}/api/autopilot/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: 'auto',
+          source: 'voice-autopilot-card',
+          command: {
+            type: 'open',
+            symbol: p.symbol,
+            side: p.direction === 'long' ? 'BUY' : 'SELL',
+            qty: p.positionSizeUnits ?? 0.01,
+            entryType: 'market',
+            price: p.entryPrice,
+            stopPrice: p.entryPrice, // for stop orders if needed
+            slPrice: p.stopLossPrice,
+            tpPrice: p.takeProfitPrice
+          }
+        }),
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        setProposalStatus(
+          `Broker error ${resp.status}: ${text || "failed to execute"}`
+        );
+        return;
+      }
+
+      const json = await resp.json();
+      setProposalStatus(
+        json.ok
+          ? "✅ Order sent to broker successfully."
+          : `⚠️ Broker response: ${json.error || "unknown status"}`
+      );
+    } catch (err: any) {
+      console.error("Autopilot approve error", err);
+      setProposalStatus(
+        `⚠️ Failed to send to broker: ${err?.message ?? String(err)}`
+      );
+    }
+  };
+
+  const handleRejectProposal = () => {
+    setProposal(null);
+    setProposalStatus("Proposal cleared. You can ask the squad to adjust it.");
+  };
+
   return (
     <div className="flex flex-col h-full bg-black/70 text-xs text-slate-200 p-3 rounded">
       <div className="flex items-center justify-between mb-2">
@@ -310,6 +383,22 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
         </div>
       </div>
 
+      {/* Autopilot proposal card (if present) */}
+      {proposal && (
+        <AutopilotProposalCard
+          proposal={proposal}
+          onApprove={handleApproveProposal}
+          onReject={handleRejectProposal}
+        />
+      )}
+
+      {proposalStatus && (
+        <div className="mb-2 text-[11px] opacity-80">
+          {proposalStatus}
+        </div>
+      )}
+
+      {/* Log console */}
       <div className="flex-1 overflow-auto bg-black/60 border border-white/10 rounded p-2 space-y-1 font-mono">
         {log.map((line, idx) => (
           <div key={idx}>{line}</div>

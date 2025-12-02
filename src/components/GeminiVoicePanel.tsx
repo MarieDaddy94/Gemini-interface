@@ -6,7 +6,6 @@ import {
 } from "../services/GeminiLiveClient";
 import { useTradingContextForAI } from "../hooks/useTradingContextForAI";
 import { useRealtimeConfig } from "../context/RealtimeConfigContext";
-import { handleGeminiToolCall } from "../services/geminiToolHandlers";
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 const GEMINI_TARGET_SAMPLE_RATE = 16000;
@@ -64,15 +63,6 @@ const GeminiVoicePanel: React.FC = () => {
       onToolCall: async (calls: GeminiLiveToolCall[]) => {
         const responses: GeminiLiveToolResponse[] = [];
 
-        // Wrapper to emulate session object for handleGeminiToolCall
-        const toolSession = {
-          sendToolResponse: (params: any) => {
-             // We won't use this callback directly here because we batch responses below
-             // But we need it for the shape match if we used it fully standalone.
-             // Instead we will await the result and push to responses array.
-          }
-        };
-
         for (const call of calls) {
           const name = call.name;
           pushLog(`🛠 ToolCall → ${name}`);
@@ -80,12 +70,6 @@ const GeminiVoicePanel: React.FC = () => {
           try {
             // Check for new tools first
             if (name === "get_chart_playbook" || name === "log_trade_journal") {
-               // Reuse the dedicated handler logic for backend calls
-               // We invoke it via a temporary adapter or direct logic call
-               // Since handleGeminiToolCall sends response immediately, we can't use it 1:1 inside this loop easily
-               // unless we refactor to return result. Let's just inline the logic or duplicate small fetch code here
-               // to stay consistent with existing loop structure.
-               
                let url = "";
                if (name === "get_chart_playbook") {
                   const params = new URLSearchParams();
