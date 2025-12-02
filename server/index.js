@@ -1,16 +1,4 @@
 
-
-
-
-
-
-
-
-
-
-
-
-
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -18,6 +6,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
+
+// Import Logger
+const logger = require('./logger');
 
 // Import Persistence
 const db = require('./persistence');
@@ -107,6 +98,17 @@ const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123';
 
 const server = http.createServer(app);
 
+// --- GLOBAL SERVER CRASH PROTECTION ---
+process.on('uncaughtException', (err) => {
+  logger.error('UNCAUGHT EXCEPTION - Server would have crashed', err);
+  // In a real production app, you might want to exit(1) here after logging, 
+  // but for stability in this demo we keep it alive if possible.
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('UNHANDLED REJECTION', { reason });
+});
+
 // --- SECURITY: Rate Limiting ---
 const aiLimiter = rateLimit({
 	windowMs: 15 * 60 * 1000, 
@@ -139,6 +141,19 @@ app.use(
 
 app.use(express.json({ limit: '10mb' }));
 
+// --- CLIENT LOGGING ENDPOINT ---
+app.post('/api/log', (req, res) => {
+  const { level, message, meta } = req.body;
+  if (level === 'ERROR') {
+    logger.error(`[CLIENT] ${message}`, meta);
+  } else if (level === 'WARN') {
+    logger.warn(`[CLIENT] ${message}`, meta);
+  } else {
+    logger.info(`[CLIENT] ${message}`, meta);
+  }
+  res.status(200).send('Logged');
+});
+
 // Mount Vision Router
 app.use('/api/vision', visionRouter);
 
@@ -160,8 +175,10 @@ app.use('/api', ttsRouter); // mounts at /api/gemini/tts and /api/openai/tts
 app.post('/api/auth/verify', (req, res) => {
   const { code } = req.body;
   if (code === ACCESS_CODE) {
+    logger.info('Access code verified successfully.');
     res.json({ ok: true });
   } else {
+    logger.warn('Invalid access code attempt.');
     res.status(401).json({ error: 'Invalid access code' });
   }
 });
@@ -191,7 +208,7 @@ app.get('/api/proxy', async (req, res) => {
       res.send(Buffer.from(buffer));
     }
   } catch (err) {
-    console.error('Proxy Error:', err.message);
+    logger.error('Proxy Error:', err.message);
     res.status(502).send(`Proxy Error: ${err.message}`);
   }
 });
@@ -213,7 +230,7 @@ app.get('/api/broker/snapshot', async (req, res) => {
       snapshot,
     });
   } catch (err) {
-    console.error('[API] /api/broker/snapshot error:', err);
+    logger.error('[API] /api/broker/snapshot error:', err);
     res.status(500).json({
       ok: false,
       error: 'BrokerSnapshotError',
@@ -228,7 +245,7 @@ app.post('/api/broker/snapshot', (req, res) => {
     const snapshot = setBrokerSnapshot('default', payload);
     res.json(snapshot);
   } catch (err) {
-    console.error('Error in POST /api/broker/snapshot:', err);
+    logger.error('Error in POST /api/broker/snapshot:', err);
     res.status(500).json({
       error: 'BrokerSnapshotError',
       message: err.message || 'Unknown error',
@@ -304,7 +321,7 @@ app.post('/api/broker/controls', async (req, res) => {
       const snapshot = await fetchTradeLockerSnapshot();
       brokerStateStore.updateSnapshot(snapshot);
     } catch (snapErr) {
-      console.warn(
+      logger.warn(
         '[API] /api/broker/controls – failed to refresh snapshot:',
         snapErr.message,
       );
@@ -316,7 +333,7 @@ app.post('/api/broker/controls', async (req, res) => {
       result,
     });
   } catch (err) {
-    console.error('[API] /api/broker/controls error:', err);
+    logger.error('[API] /api/broker/controls error:', err);
     res.status(500).json({
       ok: false,
       action,
@@ -335,7 +352,7 @@ app.get('/api/agents', (req, res) => {
     const list = getAgents();
     res.json({ agents: list });
   } catch (err) {
-    console.error('Error in GET /api/agents:', err);
+    logger.error('Error in GET /api/agents:', err);
     res.status(500).json({
       error: 'AgentListError',
       message: err.message || 'Unknown error',
@@ -376,7 +393,7 @@ app.post('/api/agents/:id', (req, res) => {
 
     res.json(updated);
   } catch (err) {
-    console.error('Error in POST /api/agents/:id:', err);
+    logger.error('Error in POST /api/agents/:id:', err);
     res.status(500).json({
       error: 'AgentUpdateError',
       message: err.message || 'Unknown error',
@@ -412,7 +429,7 @@ app.post('/api/agents', (req, res) => {
 
     res.json(agent);
   } catch (err) {
-    console.error('Error in POST /api/agents (create):', err);
+    logger.error('Error in POST /api/agents (create):', err);
     if (err.code === 'Conflict') {
       return res.status(409).json({
         error: 'Conflict',
@@ -457,7 +474,7 @@ app.delete('/api/agents/:id', (req, res) => {
 
     res.json({ ok: true, removedId: id });
   } catch (err) {
-    console.error('Error in DELETE /api/agents/:id:', err);
+    logger.error('Error in DELETE /api/agents/:id:', err);
     res.status(500).json({
       error: 'AgentDeleteError',
       message: err.message || 'Unknown error',
@@ -497,7 +514,7 @@ app.post("/api/agents/chat", async (req, res) => {
 
     res.json({ ok: true, agents: results });
   } catch (err) {
-    console.error("Error in /api/agents/chat:", err);
+    logger.error("Error in /api/agents/chat:", err);
     res.status(500).json({ error: "LLM router error", details: err.message });
   }
 });
@@ -527,7 +544,7 @@ app.post("/api/agents/debrief", async (req, res) => {
 
     res.json({ ok: true, insights: results });
   } catch (err) {
-    console.error("Error in /api/agents/debrief:", err);
+    logger.error("Error in /api/agents/debrief:", err);
     res.status(500).json({ error: "LLM debrief error", details: err.message });
   }
 });
@@ -538,7 +555,7 @@ app.post('/api/ai/route', async (req, res) => {
     const result = await handleAiRoute(req.body, db);
     res.json(result);
   } catch (err) {
-    console.error('AI Route Error:', err);
+    logger.error('AI Route Error:', err);
     res.status(500).json({ 
       error: err.message || 'Internal AI Error',
       message: { role: 'assistant', content: 'I encountered an error processing your request.' }
@@ -553,7 +570,7 @@ app.post('/api/agent-router', async (req, res) => {
     const result = await handleAgentRequest({ agentId, userMessage, sessionState, history });
     res.json(result);
   } catch (err) {
-    console.error('Error in /api/agent-router:', err);
+    logger.error('Error in /api/agent-router:', err);
     res.status(500).json({ error: 'Agent router error', message: err.message || 'Unknown error' });
   }
 });
@@ -565,7 +582,7 @@ app.post('/api/risk/preview-trade', async (req, res) => {
     const result = await handleAutopilotProposedTrade(sessionState, proposedTrade);
     res.json(result);
   } catch (err) {
-    console.error('Error in /api/risk/preview-trade:', err);
+    logger.error('Error in /api/risk/preview-trade:', err);
     res.status(500).json({ error: 'Risk preview error', message: err.message || 'Unknown error' });
   }
 });
@@ -579,7 +596,7 @@ app.post('/api/autopilot/plan-trade', async (req, res) => {
     const result = await handleAutopilotExecutionPlan(sessionState, proposedTrade);
     res.json(result);
   } catch (err) {
-    console.error('Error in /api/autopilot/plan-trade:', err);
+    logger.error('Error in /api/autopilot/plan-trade:', err);
     res.status(500).json({ error: 'Autopilot planning error', message: err.message || 'Unknown error' });
   }
 });
@@ -675,7 +692,7 @@ app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('[API] /api/autopilot/plan-from-roundtable error:', err);
+    logger.error('[API] /api/autopilot/plan-from-roundtable error:', err);
     res.status(500).json({
       ok: false,
       error: 'RoundTableAutopilotPlanError',
@@ -690,7 +707,7 @@ app.post('/api/autopilot/voice-parse', async (req, res) => {
     const parsed = await parseVoiceAutopilotCommand({ transcript, sessionState });
     res.json(parsed);
   } catch (err) {
-    console.error('Error in /api/autopilot/voice-parse:', err);
+    logger.error('Error in /api/autopilot/voice-parse:', err);
     res.status(500).json({ error: 'VoiceParseError', message: err.message || 'Unknown error' });
   }
 });
@@ -726,7 +743,7 @@ app.post('/api/autopilot/execute', async (req, res) => {
       result,
     });
   } catch (err) {
-    console.error('[API] /api/autopilot/execute error:', err);
+    logger.error('[API] /api/autopilot/execute error:', err);
     res.status(500).json({
       ok: false,
       error: 'AutopilotExecuteError',
@@ -757,7 +774,7 @@ app.post('/api/roundtable/plan', async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error('Error in /api/roundtable/plan:', err);
+    logger.error('Error in /api/roundtable/plan:', err);
     res.status(500).json({
       error: 'RoundTableError',
       message: err.message || 'Unknown error',
@@ -778,7 +795,7 @@ app.post('/api/history/autopilot/log', (req, res) => {
     const rec = appendAutopilotHistory(entry, sessionState);
     res.json(rec);
   } catch (err) {
-    console.error('Error in /api/history/autopilot/log:', err);
+    logger.error('Error in /api/history/autopilot/log:', err);
     res.status(500).json({
       error: 'HistoryLogError',
       message: err.message || 'Unknown error',
@@ -799,7 +816,7 @@ app.post('/api/history/autopilot/coach', async (req, res) => {
     const result = await runAutopilotCoach(sessionState);
     res.json(result);
   } catch (err) {
-    console.error('Error in /api/history/autopilot/coach:', err);
+    logger.error('Error in /api/history/autopilot/coach:', err);
     res.status(500).json({
       error: 'CoachError',
       message: err.message || 'Unknown error',
@@ -819,7 +836,7 @@ app.post('/api/vision/analyze', async (req, res) => {
     const summary = await analyzeChartImage({ fileBase64, mimeType, sessionState, question });
     res.json({ visionSummary: summary });
   } catch (err) {
-    console.error('Error in /api/vision/analyze:', err);
+    logger.error('Error in /api/vision/analyze:', err);
     res.status(500).json({ error: 'VisionError', message: err.message || 'Unknown error' });
   }
 });
@@ -830,7 +847,7 @@ app.get('/api/broker/sim/account', (_req, res) => {
     const account = getSimAccount();
     res.json(account);
   } catch (err) {
-    console.error('Error in /api/broker/sim/account:', err);
+    logger.error('Error in /api/broker/sim/account:', err);
     res.status(500).json({ error: 'Sim account error', message: err.message || 'Unknown error' });
   }
 });
@@ -840,7 +857,7 @@ app.get('/api/broker/sim/positions', (_req, res) => {
     const positions = getSimPositions();
     res.json(positions);
   } catch (err) {
-    console.error('Error in /api/broker/sim/positions:', err);
+    logger.error('Error in /api/broker/sim/positions:', err);
     res.status(500).json({ error: 'Sim positions error', message: err.message || 'Unknown error' });
   }
 });
@@ -854,7 +871,7 @@ app.post('/api/broker/sim/close-position', (req, res) => {
     const pos = closeSimPosition(positionId, closePrice);
     res.json(pos);
   } catch (err) {
-    console.error('Error in /api/broker/sim/close-position:', err);
+    logger.error('Error in /api/broker/sim/close-position:', err);
     res.status(500).json({ error: 'Sim close position error', message: err.message || 'Unknown error' });
   }
 });
@@ -865,7 +882,7 @@ app.post('/api/autopilot/execute-plan-sim', async (req, res) => {
     const result = await executeAutopilotTradeSim(sessionState, tradeRequest, executionParams);
     res.json(result);
   } catch (err) {
-    console.error('Error in /api/autopilot/execute-plan-sim:', err);
+    logger.error('Error in /api/autopilot/execute-plan-sim:', err);
     res.status(500).json({ error: 'Autopilot sim exec error', message: err.message || 'Unknown error' });
   }
 });
@@ -878,7 +895,7 @@ function readLogFile() {
     if (!data.trim()) return [];
     return JSON.parse(data);
   } catch (err) {
-    console.error('Error reading playbook log file:', err);
+    logger.error('Error reading playbook log file:', err);
     return [];
   }
 }
@@ -887,7 +904,7 @@ function writeLogFile(entries) {
   try {
     fs.writeFileSync(LOG_FILE, JSON.stringify(entries, null, 2), 'utf8');
   } catch (err) {
-    console.error('Error writing playbook log file:', err);
+    logger.error('Error writing playbook log file:', err);
   }
 }
 
@@ -899,7 +916,7 @@ app.post('/api/playbooks', (req, res) => {
   const entries = readLogFile();
   entries.push(entry);
   writeLogFile(entries);
-  console.log(`[Playbook] Logged ${entry.focusSymbol || 'UnknownSymbol'} @ ${entry.timestamp}`);
+  logger.info(`[Playbook] Logged ${entry.focusSymbol || 'UnknownSymbol'} @ ${entry.timestamp}`);
   res.status(201).json({ ok: true });
 });
 
@@ -995,7 +1012,7 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     res.json({ sessionId, accounts, accountId, accNum });
   } catch (err) {
-    console.error('TradeLocker login fatal error', err);
+    logger.error('TradeLocker login fatal error', err);
     res.status(500).send('Internal error while connecting to TradeLocker');
   }
 });
@@ -1072,7 +1089,7 @@ app.post('/api/tradelocker/order', async (req, res) => {
 
     res.json({ ok: true, orderId: positionId, entryPrice });
   } catch (err) {
-    console.error('Order execution error', err);
+    logger.error('Order execution error', err);
     res.status(500).json({ error: 'Failed to execute order' });
   }
 });
@@ -1223,7 +1240,7 @@ app.get('/api/tradelocker/overview', async (req, res) => {
 
     res.json({ isConnected: true, balance, equity: adjustedEquity, marginUsed, positions, recentEvents: events });
   } catch (err) {
-    console.error('TradeLocker overview fatal error', err);
+    logger.error('TradeLocker overview fatal error', err);
     res.status(500).send('Internal error while fetching broker data');
   }
 });
