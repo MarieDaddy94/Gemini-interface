@@ -23,7 +23,14 @@ Each agent has a specialty and should speak in that persona.
 - You are NOT here to force trades. You are here to protect the user's capital.
 - If the setup is C-grade or the market is choppy, explicitly advise "NO TRADE".
 - NEVER suggest a trade with less than 1.5R (Risk:Reward).
-- ALWAYS identify the Invalidtion Level (Stop Loss) before the Entry.
+- ALWAYS identify the Invalidation Level (Stop Loss) before the Entry.
+
+**UI CONTROL & NAVIGATION:**
+- You have the ability to control the user's screen using the \`control_app_ui\` tool.
+- If the user asks to see the "Journal", "Settings", "Autopilot", or "Terminal", use the tool to navigate them.
+- If a major risk event occurs (like a massive drawdown), use the tool to show a "toast" notification.
+- Valid rooms: 'terminal', 'command', 'autopilot', 'journal', 'analysis', 'analytics'.
+- Valid overlays: 'broker', 'settings'.
 
 You always:
 - Explain your reasoning step by step using data.
@@ -37,6 +44,30 @@ You always:
  * IMPORTANT: keep names in sync with the UI (QuantBot, TrendMaster AI, Pattern_GPT, etc.).
  */
 const agentsById = {
+  // --- STRATEGIST (The Boss) ---
+  // Can navigate the app, execute trades, and see everything.
+  "strategist-main": {
+    id: "strategist-main",
+    name: "Strategist",
+    provider: "openai", // Usually best for orchestration
+    model: "gpt-4o",
+    temperature: 0.4,
+    vision: true,
+    journalStyle: `
+Executive Summary style:
+- title: "Market Regime Update"
+- summary: High-level narrative (Risk On/Off, HTF Bias).
+- sentiment: "bullish","bearish","neutral"
+    `.trim(),
+    tools: [
+      "get_broker_overview", 
+      "get_open_positions", 
+      "get_recent_trades", 
+      "get_playbooks",
+      "control_app_ui" // ENABLED
+    ]
+  },
+
   quant_bot: {
     id: "quant_bot",
     name: "QuantBot",
@@ -70,7 +101,7 @@ Focus on higher-timeframe structure and trend:
 - sentiment: "bullish","bearish","neutral","mixed"
 - tags: include timeframe tags like ["4h","1h","structure"]
     `.trim(),
-    tools: ["get_recent_trades", "get_playbooks"]
+    tools: ["get_recent_trades", "get_playbooks", "control_app_ui"]
   },
 
   pattern_gpt: {
@@ -122,8 +153,32 @@ Logic:
 - Planning buys -> "direction": "long"
 - Planning sells -> "direction": "short"
     `.trim(),
-    tools: ["get_recent_trades", "append_journal_entry"]
+    tools: ["get_recent_trades", "append_journal_entry", "control_app_ui"]
   },
+  
+  // Execution Bot (Roundtable participant)
+  "execution-bot": {
+    id: "execution-bot",
+    name: "Execution Bot",
+    provider: "openai",
+    model: "gpt-4o-mini",
+    temperature: 0.2,
+    vision: false,
+    journalStyle: "Execution details only.",
+    tools: ["get_broker_overview", "get_open_positions", "execute_order"]
+  },
+  
+  // Risk Manager (Roundtable participant)
+  "risk-manager": {
+    id: "risk-manager",
+    name: "Risk Manager",
+    provider: "openai",
+    model: "gpt-4o",
+    temperature: 0.2,
+    vision: false,
+    journalStyle: "Risk compliance notes only.",
+    tools: ["get_broker_overview", "get_open_positions", "control_app_ui"]
+  }
 };
 
 /**
