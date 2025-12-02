@@ -3,16 +3,6 @@
 
 /**
  * Agent configuration for your AI trading team.
- *
- * Each agent gets:
- *  - id: internal slug
- *  - name: display name (should match what you show in the UI)
- *  - provider: "openai" or "gemini"
- *  - model: LLM model ID
- *  - temperature: creativity level
- *  - journalStyle: guidance for journaling JSON
- *  - vision: whether this agent cares about screenshots
- *  - tools: explicit list of allowed tools (optional, otherwise uses default set)
  */
 
 const GLOBAL_ANALYST_SYSTEM_PROMPT = `
@@ -29,8 +19,13 @@ Each agent has a specialty and should speak in that persona.
 - You have the ability to control the user's screen using the \`control_app_ui\` tool.
 - If the user asks to see the "Journal", "Settings", "Autopilot", or "Terminal", use the tool to navigate them.
 - If a major risk event occurs (like a massive drawdown), use the tool to show a "toast" notification.
-- Valid rooms: 'terminal', 'command', 'autopilot', 'journal', 'analysis', 'analytics'.
+- Valid rooms: 'terminal', 'tradingRoomFloor', 'command', 'autopilot', 'journal', 'analysis', 'analytics'.
 - Valid overlays: 'broker', 'settings'.
+
+**DESK OPERATIONS:**
+- You can change the desk configuration using \`configure_trading_desk\`.
+- You can ask the desk for status using \`desk_roundup\`.
+- You can generate and stage Autopilot plans using \`run_autopilot_review\` then \`commit_autopilot_proposal\`.
 
 You always:
 - Explain your reasoning step by step using data.
@@ -38,18 +33,11 @@ You always:
 - Respect the user's timeframe and instrument.
 `.trim();
 
-/**
- * Map of agentId -> config.
- *
- * IMPORTANT: keep names in sync with the UI (QuantBot, TrendMaster AI, Pattern_GPT, etc.).
- */
 const agentsById = {
-  // --- STRATEGIST (The Boss) ---
-  // Can navigate the app, execute trades, and see everything.
   "strategist-main": {
     id: "strategist-main",
     name: "Strategist",
-    provider: "openai", // Usually best for orchestration
+    provider: "openai", 
     model: "gpt-4o",
     temperature: 0.4,
     vision: true,
@@ -64,7 +52,10 @@ Executive Summary style:
       "get_open_positions", 
       "get_recent_trades", 
       "get_playbooks",
-      "control_app_ui" // ENABLED
+      "control_app_ui",
+      "configure_trading_desk",
+      "run_autopilot_review",
+      "commit_autopilot_proposal"
     ]
   },
 
@@ -73,8 +64,8 @@ Executive Summary style:
     name: "QuantBot",
     provider: "gemini", 
     model: "gemini-2.5-flash",
-    temperature: 0.3, // Low temp for precision
-    thinkingBudget: 2048, // HIGH thinking budget for math/risk verification
+    temperature: 0.3,
+    thinkingBudget: 2048,
     vision: true,
     journalStyle: `
 Short, quantified summary focused on statistics and risk:
@@ -83,7 +74,7 @@ Short, quantified summary focused on statistics and risk:
 - sentiment: one of ["bullish","bearish","neutral","mixed"]
 - tags: array like ["US30","scalp","NY","1m","news-avoid"]
     `.trim(),
-    tools: ["get_broker_overview", "get_open_positions", "get_recent_trades", "append_journal_entry", "execute_order"]
+    tools: ["get_broker_overview", "get_open_positions", "get_recent_trades", "append_journal_entry", "execute_order", "desk_roundup"]
   },
 
   trend_master: {
@@ -92,7 +83,7 @@ Short, quantified summary focused on statistics and risk:
     provider: "gemini",
     model: "gemini-2.5-flash", 
     temperature: 0.5,
-    thinkingBudget: 1024, // Enable thinking for structure analysis
+    thinkingBudget: 1024, 
     vision: true,
     journalStyle: `
 Focus on higher-timeframe structure and trend:
@@ -130,33 +121,11 @@ Focus on chart patterns and liquidity grabs:
     vision: true,
     journalStyle: `
 You are the Journal Coach, a trading psychologist + journaling assistant.
-
-GOAL:
 Turn the user's message and chart context into a clean, structured TRADING JOURNAL ENTRY.
-
-You MUST always respond with your coaching advice text, followed by the JSON block.
-
-JSON Fields required:
-- "title": Playbook / setup name, e.g. "US30 – NY Open Liquidity Grab Long"
-- "summary": 3–8 sentences summarizing context, reasoning, and lessons
-- "tags": short tags like ["US30","NYO","liquidity","FVG","management"]
-- "sentiment": "Bullish", "Bearish", or "Neutral"
-- "symbol": e.g. "US30", "NAS100", "XAUUSD"
-- "direction": "long" | "short" | null
-- "outcome": "Open" | "Win" | "Loss" | "BE"
-
-Logic:
-- If the trade has NOT happened yet -> "outcome": "Open"
-- Winning trade -> "outcome": "Win"
-- Losing trade -> "outcome": "Loss"
-- Breakeven -> "outcome": "BE"
-- Planning buys -> "direction": "long"
-- Planning sells -> "direction": "short"
     `.trim(),
     tools: ["get_recent_trades", "append_journal_entry", "control_app_ui"]
   },
   
-  // Execution Bot (Roundtable participant)
   "execution-bot": {
     id: "execution-bot",
     name: "Execution Bot",
@@ -165,10 +134,9 @@ Logic:
     temperature: 0.2,
     vision: false,
     journalStyle: "Execution details only.",
-    tools: ["get_broker_overview", "get_open_positions", "execute_order"]
+    tools: ["get_broker_overview", "get_open_positions", "execute_order", "run_autopilot_review", "commit_autopilot_proposal"]
   },
   
-  // Risk Manager (Roundtable participant)
   "risk-manager": {
     id: "risk-manager",
     name: "Risk Manager",
@@ -177,13 +145,10 @@ Logic:
     temperature: 0.2,
     vision: false,
     journalStyle: "Risk compliance notes only.",
-    tools: ["get_broker_overview", "get_open_positions", "control_app_ui"]
+    tools: ["get_broker_overview", "get_open_positions", "control_app_ui", "configure_trading_desk", "desk_roundup"]
   }
 };
 
-/**
- * Helper to look up by UI name if needed.
- */
 function findAgentByName(name) {
   return Object.values(agentsById).find(
     (agent) => agent.name.toLowerCase() === String(name).toLowerCase()

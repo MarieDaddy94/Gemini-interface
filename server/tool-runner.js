@@ -2,18 +2,17 @@
 // server/tool-runner.js
 const { getPrice } = require('./marketData');
 const { runDeskCoordinator } = require('./routes/deskRouter');
+const { generateAutopilotPlan, reviewAutopilotPlan } = require('./services/autopilotOrchestrator');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
  * to execute tool handlers.
- * 
- * Updated to support Async DB Access (SQLite).
  */
 function createRuntimeContext(db, reqContext) {
   const { brokerSessionId, journalSessionId, symbol, deskState } = reqContext || {};
 
   return {
-    accountId: brokerSessionId, // Treat sessionId as primary account lookup for now
+    accountId: brokerSessionId,
     symbol: symbol || "US30",
 
     log: (msg, data) => console.log(`[ContextLog] ${msg}`, data),
@@ -27,7 +26,6 @@ function createRuntimeContext(db, reqContext) {
       const session = await db.getSession(id);
       if (!session) return "No broker session found.";
       
-      // Use cached state from polling, fallback to initial account info
       const state = session.latestState || {};
       const acc = session.accounts?.[0] || {};
       
@@ -60,7 +58,6 @@ function createRuntimeContext(db, reqContext) {
 
     executeOrder: async (args) => {
       const { symbol, side, size, stopLoss, takeProfit } = args;
-      // use context brokerSessionId
       if (!brokerSessionId) return "Error: No active broker session to execute trade.";
       
       const session = await db.getSession(brokerSessionId);
@@ -82,13 +79,12 @@ function createRuntimeContext(db, reqContext) {
           openTime: new Date().toISOString(),
           sl: stopLoss,
           tp: takeProfit,
-          isSimulated: true // Flag as simulated/autopilot
+          isSimulated: true
         };
 
         if (!session.simulatedPositions) session.simulatedPositions = [];
         session.simulatedPositions.push(newPosition);
         
-        // SAVE DB (Async)
         await db.setSession(brokerSessionId, session);
 
         console.log(`[Autopilot] Executed ${side} ${size} ${symbol} @ ${entryPrice}`);
@@ -101,7 +97,6 @@ function createRuntimeContext(db, reqContext) {
 
     getRecentTrades: async ({ limit }) => {
       const entries = await db.getJournal(journalSessionId);
-      // Map journal entries to a "trade" like structure if they have outcomes
       const trades = entries.slice(0, limit).map(e => ({
         timestamp: e.timestamp,
         symbol: e.symbol || e.focusSymbol,
@@ -115,7 +110,6 @@ function createRuntimeContext(db, reqContext) {
     },
 
     getPlaybooks: async ({ symbol }) => {
-      // Return mock playbooks or filter from a store
       return [
         { name: "Trend_Pullback_V1", symbol: symbol || "General", winRate: 0.60 },
         { name: "Breakout_Rejection", symbol: symbol || "General", winRate: 0.45 }
@@ -123,36 +117,29 @@ function createRuntimeContext(db, reqContext) {
     },
 
     appendJournalEntry: async (entry) => {
-      // We can push to the journal for this session
       const list = await db.getJournal(journalSessionId);
       
       const newEntry = {
         id: `ai-${Date.now()}`,
         timestamp: entry.createdAt || new Date().toISOString(),
-        
-        // Structured Fields
         symbol: entry.symbol,
         direction: entry.direction,
         timeframe: entry.timeframe,
         session: entry.session,
-        
         size: entry.size,
         netPnl: entry.netPnl,
         rMultiple: entry.rMultiple,
-        
         playbook: entry.playbook,
         preTradePlan: entry.preTradePlan,
         postTradeNotes: entry.postTradeNotes,
         sentiment: entry.sentiment,
-        
-        // Map Tags
         tags: Array.isArray(entry.tags) ? entry.tags : (entry.tag ? [entry.tag] : []),
-        
-        // Fallbacks / Legacy
         focusSymbol: entry.symbol || symbol || 'AI-Note',
         bias: entry.direction === 'long' ? 'Bullish' : entry.direction === 'short' ? 'Bearish' : 'Neutral',
         note: entry.note || entry.postTradeNotes || entry.preTradePlan || "AI Entry",
-        outcome: 'Open'
+        outcome: 'Open',
+        rr: typeof entry.rr === 'number' ? entry.rr : (typeof entry.rMultiple === 'number' ? entry.rMultiple : null),
+        pnl: typeof entry.pnl === 'number' ? entry.pnl : (typeof entry.netPnl === 'number' ? entry.netPnl : null),
       };
       
       if (journalSessionId) {
@@ -173,17 +160,58 @@ function createRuntimeContext(db, reqContext) {
         }
         const question = args.question || "Give a short desk status for the current goal.";
         
-        // Reuse logic from desk router
         try {
             const result = await runDeskCoordinator(question, deskState);
             return {
                 messageFromDesk: result.message
-                // We don't apply updates here, just informative text. 
-                // To apply updates, the agent should have used configure_trading_desk or frontend needs to poll.
             };
         } catch (e) {
             return `Error running desk coordinator: ${e.message}`;
         }
+    },
+
+    // --- PHASE E: Autopilot Orchestrator Handler ---
+    runAutopilotReview: async (args) => {
+      // 1. Get broker snapshot from DB
+      let brokerSnapshot = null;
+      if (brokerSessionId) {
+        const session = await db.getSession(brokerSessionId);
+        if (session) {
+           brokerSnapshot = {
+             equity: session.latestState?.equity ?? session.accounts?.[0]?.balance ?? 0,
+             dailyPnl: session.latestState?.dailyPnl ?? 0,
+             openPositionsCount: Object.keys(session.lastPositionsById || {}).length
+           };
+        }
+      }
+
+      // 2. Generate Plan
+      const generated = await generateAutopilotPlan({
+        symbol: args.symbol,
+        timeframe: args.timeframe,
+        mode: "auto", // Assume auto-ready for review
+        question: args.notes || `Proposed by Desk Agent (${args.sidePreference || 'any'} side)`,
+        brokerSnapshot,
+        riskProfile: "balanced"
+      });
+
+      // 3. Review Plan
+      // We reconstruct a session-like object for the legacy risk engine function
+      const sessionStateForRisk = {
+        riskConfig: {
+          maxRiskPerTradePercent: args.maxRiskPct || 0.5,
+          maxDailyLossPercent: 3, // Default hardcoded or fetched if we had full session state
+          maxTradesPerDay: 5
+        },
+        riskRuntime: {
+          tradesTakenToday: 0,
+          realizedPnlTodayPercent: 0
+        },
+        autopilotMode: 'semi'
+      };
+
+      const review = reviewAutopilotPlan(generated, sessionStateForRisk);
+      return review;
     }
   };
 }

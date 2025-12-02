@@ -4,7 +4,6 @@ const router = express.Router();
 const { callLLM } = require("../llmRouter");
 const { getBrokerSnapshot } = require("../broker/brokerStateStore");
 
-// Helper to clean LLM output if it wraps in markdown
 function cleanAndParseJson(text) {
   try {
     const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -15,34 +14,19 @@ function cleanAndParseJson(text) {
   }
 }
 
-/**
- * Core Logic: The "Brain" of the Trading Room Floor.
- * 1. Reads current desk state (roles, goal).
- * 2. Reads live broker state (equity, PnL).
- * 3. Processes user instruction via LLM.
- * 4. Returns structured updates.
- */
 async function runDeskCoordinator(input, deskState) {
     if (!deskState) {
       throw new Error("deskState is required");
     }
 
-    // 1. Get Context
-    const brokerSnapshot = getBrokerSnapshot("default"); // Default user session
+    const brokerSnapshot = getBrokerSnapshot("default");
     const accountContext = brokerSnapshot
       ? `Equity: ${brokerSnapshot.equity}, Balance: ${brokerSnapshot.balance}, Daily PnL: ${brokerSnapshot.dailyPnl}, Open Positions: ${brokerSnapshot.openPositions?.length || 0}`
       : "Broker disconnected";
 
-    // 2. Build System Prompt
     const systemPrompt = `
 You are the **Trading Desk Coordinator** (The Boss).
-You manage a team of AI agents on a trading floor:
-- **Strategist**: HTF bias & narrative.
-- **Pattern**: Technical setups & triggers.
-- **Risk**: Sizing, drawdown limits, stops.
-- **Execution**: Entry precision & management.
-- **Quant**: Statistics & probability.
-- **News**: Calendar & macro events.
+You manage a team of AI agents and the Autopilot system.
 
 **Current Desk Context:**
 - Goal: "${deskState.goal || "None"}"
@@ -52,20 +36,22 @@ You manage a team of AI agents on a trading floor:
 **Your Job:**
 1. Read the user's input.
 2. Decide how the desk should react.
-3. Update agent statuses (IDLE, SCANNING, ALERT, BUSY, COOLDOWN) and "lastUpdate" text to reflect what they should be doing.
-4. Reply to the user clearly.
+3. Update agent statuses and reply to the user.
 
-**Rules:**
-- If the user asks to "Scan", set relevant agents (Strategist, Pattern) to SCANNING.
-- If the user asks to "Stop", set everyone to COOLDOWN or IDLE.
-- If the user asks for a "Status Report", check the account PnL and give a summary.
-- Keep "lastUpdate" short (max 10 words).
-- Output STRICT JSON.
+**Autopilot Operations:**
+If the trader asks to "run autopilot" or "scan for trades":
+1. Call \`run_autopilot_review\` with the symbol/timeframe matching the goal.
+2. If the plan is ALLOWED (risk check passes):
+   - Call \`commit_autopilot_proposal\` to stage it.
+   - Tell the user: "I've staged a [Direction] plan for [Symbol] in the Autopilot tab. Please review."
+3. If BLOCKED:
+   - Do NOT commit.
+   - Explain why risk blocked it.
 
 **JSON Response Format:**
 {
-  "message": "Your natural language reply to the trader.",
-  "goal": "Updated goal string (optional, null to keep current)",
+  "message": "Your natural language reply.",
+  "goal": "Updated goal string (optional)",
   "sessionPhase": "preSession" | "live" | "cooldown" | "postSession" (optional),
   "roleUpdates": [
     {
@@ -77,7 +63,6 @@ You manage a team of AI agents on a trading floor:
 }
 `;
 
-    // 3. Build User Prompt
     const userPrompt = `
 User Input: "${input}"
 
@@ -89,7 +74,6 @@ ${Object.values(deskState.roles)
 Respond with JSON updates.
 `;
 
-    // 4. Call LLM (Gemini 2.5 Flash or GPT-4o)
     const llmOutput = await callLLM({
       provider: "auto", 
       model: "gemini-2.5-flash",
@@ -99,7 +83,6 @@ Respond with JSON updates.
       maxTokens: 1000,
     });
 
-    // 5. Parse & Fallback
     let parsed = cleanAndParseJson(llmOutput);
 
     if (!parsed) {
@@ -117,9 +100,6 @@ Respond with JSON updates.
     };
 }
 
-/**
- * POST /api/desk/roundup
- */
 router.post("/roundup", async (req, res) => {
   try {
     const { input, deskState } = req.body || {};

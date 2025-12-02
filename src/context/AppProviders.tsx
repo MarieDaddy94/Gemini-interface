@@ -11,17 +11,14 @@ import { TradeEventsProvider } from './TradeEventsContext';
 import { VoiceActivityProvider } from './VoiceActivityContext';
 import { RealtimeConfigProvider } from './RealtimeConfigContext';
 import { ToolActivityProvider } from './ToolActivityContext';
-import { DeskProvider } from './DeskContext'; // NEW
+import { DeskProvider } from './DeskContext'; 
+import { AutopilotProvider } from './AutopilotContext'; // NEW
 import TradeEventsToJournal from '../components/TradeEventsToJournal';
 
 interface Props {
   children: ReactNode;
 }
 
-/**
- * AppProviders consolidates all application contexts in the correct dependency order.
- * This prevents "Provider Hell" in App.tsx and ensures index.tsx is clean.
- */
 export const AppProviders: React.FC<Props> = ({ children }) => {
   return (
     <AppWorldProvider>
@@ -36,13 +33,10 @@ export const AppProviders: React.FC<Props> = ({ children }) => {
                       <RealtimeConfigProvider>
                         <ToolActivityProvider>
                           <DeskProvider>
-                            {/* 
-                               TradeEventsToJournal is a background component that listens 
-                               to events and logs them. It needs to be inside the providers.
-                            */}
-                            <TradeEventsToJournal />
-                            
-                            {children}
+                            <AutopilotProvider>
+                              <TradeEventsToJournal />
+                              {children}
+                            </AutopilotProvider>
                           </DeskProvider>
                         </ToolActivityProvider>
                       </RealtimeConfigProvider>

@@ -609,12 +609,59 @@ const brokerAndJournalTools = [
       additionalProperties: false,
     },
     handler: async (args, ctx) => {
-        // Echoes back to frontend dispatch
         return {
             status: "dispatched",
             command: "configure_trading_desk",
             details: args
         };
+    }
+  },
+  {
+    name: "run_autopilot_review",
+    description:
+      "Generate an Autopilot trade plan for the current desk context and run it through the risk engine. Use this to propose potential trades.",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string" },
+        timeframe: { type: "string" },
+        maxRiskPct: { type: "number" },
+        sidePreference: { type: "string", enum: ["long", "short", "either"] },
+        notes: { type: "string" }
+      },
+      required: ["symbol", "timeframe"]
+    },
+    handler: async (args, ctx) => {
+      if (!ctx.runAutopilotReview) throw new Error("Missing runAutopilotReview handler");
+      return ctx.runAutopilotReview(args);
+    }
+  },
+  {
+    name: "commit_autopilot_proposal",
+    description:
+      "Take a previously reviewed Autopilot plan and stage it to the frontend Autopilot Panel. Does NOT execute, just stages.",
+    parameters: {
+      type: "object",
+      properties: {
+        plan: {
+          type: "object",
+          description: "The full JSON plan returned by run_autopilot_review.",
+        },
+        source: {
+          type: "string",
+          enum: ["desk", "agent"],
+          description: "Who is committing this proposal.",
+        },
+      },
+      required: ["plan", "source"],
+    },
+    handler: async (args, ctx) => {
+      // Just echo back, the frontend dispatcher will pick it up
+      return {
+        status: "dispatched",
+        command: "autopilot_proposal",
+        details: args
+      };
     }
   }
 ];
