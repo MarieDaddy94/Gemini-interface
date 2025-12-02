@@ -114,7 +114,7 @@ export class GeminiLiveClient {
                 "You are a prop-firm style AI trading squad. " +
                 "You MUST call tools to get live trading context, recent chart structure, " +
                 "playbooks, and to log trades into the journal before suggesting heavy risk. " +
-                "Never guess balances or trade history.",
+                "Never hallucinate balances or trade history.",
             },
           ],
         },
@@ -329,6 +329,7 @@ export class GeminiLiveClient {
         let text = "";
         for (const part of mt.parts) {
           if (typeof part.text === "string") text += part.text;
+          // NOTE: audio output is ignored for now; we only show text.
         }
         if (text) {
           const isFinal = !!sc.turnComplete || !!sc.generationComplete;

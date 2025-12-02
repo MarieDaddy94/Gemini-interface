@@ -191,6 +191,8 @@ const GeminiVoicePanel: React.FC = () => {
   const handleDisconnect = () => {
       clientRef.current?.close();
       stopMic();
+      setConnected(false);
+      pushLog("Disconnected");
   };
 
   // ---- Text send -------------------------------------------------------------
@@ -284,13 +286,6 @@ const GeminiVoicePanel: React.FC = () => {
     setMicActive(false);
     pushLog("⏹️ Mic streaming stopped");
   };
-
-  useEffect(() => {
-    return () => {
-      stopMic();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // ---- Render ---------------------------------------------------------------
 
