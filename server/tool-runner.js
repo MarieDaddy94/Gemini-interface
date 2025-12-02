@@ -4,6 +4,7 @@ const { getPrice } = require('./marketData');
 const { runDeskCoordinator } = require('./routes/deskRouter');
 const { generateAutopilotPlan, reviewAutopilotPlan } = require('./services/autopilotOrchestrator');
 const journalService = require('./services/journalService');
+const playbookPerformanceService = require('./services/playbookPerformanceService');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -16,8 +17,9 @@ function createRuntimeContext(db, reqContext) {
     accountId: brokerSessionId,
     symbol: symbol || "US30",
     
-    // Inject the robust service
+    // Inject services
     journalService,
+    playbookPerformanceService,
 
     log: (msg, data) => console.log(`[ContextLog] ${msg}`, data),
 
@@ -100,7 +102,6 @@ function createRuntimeContext(db, reqContext) {
     },
 
     getRecentTrades: async ({ limit }) => {
-      // Use the new service instead of raw DB calls
       const entries = await journalService.listEntries({}, journalSessionId);
       const trades = entries.slice(0, limit).map(e => ({
         timestamp: e.createdAt,
@@ -115,10 +116,45 @@ function createRuntimeContext(db, reqContext) {
     },
 
     getPlaybooks: async ({ symbol }) => {
+      // Return definition templates (static or DB based)
       return [
-        { name: "Trend_Pullback_V1", symbol: symbol || "General", winRate: 0.60 },
-        { name: "Breakout_Rejection", symbol: symbol || "General", winRate: 0.45 }
+        { name: "Trend_Pullback_V1", symbol: symbol || "General" },
+        { name: "Breakout_Rejection", symbol: symbol || "General" },
+        { name: "NY_Liquidity_Sweep", symbol: symbol || "General" }
       ];
+    },
+
+    getPlaybookPerformance: async ({ playbookName, symbol, lookbackDays }) => {
+        const profile = await playbookPerformanceService.getProfileForPlaybook(
+            playbookName, 
+            symbol
+        );
+        if (!profile) return `No data found for playbook '${playbookName}' on ${symbol}. Status: GRAY (Insufficient Data).`;
+        
+        return {
+            playbook: profile.playbook,
+            symbol: profile.symbol,
+            health: profile.health.toUpperCase(),
+            winRate: (profile.winRate * 100).toFixed(1) + '%',
+            avgR: profile.avgR.toFixed(2),
+            sampleSize: profile.sampleSize,
+            lastTrade: profile.lastTradeAt
+        };
+    },
+
+    listBestPlaybooks: async ({ symbol, limit, lookbackDays }) => {
+        const profiles = await playbookPerformanceService.getPlaybookProfiles({
+            symbol, 
+            lookbackDays
+        });
+        
+        // Return simplified list
+        return profiles.slice(0, limit).map(p => ({
+            name: p.playbook,
+            health: p.health.toUpperCase(),
+            winRate: (p.winRate * 100).toFixed(0) + '%',
+            avgR: p.avgR.toFixed(2) + 'R'
+        }));
     },
 
     // Legacy support wrapper
@@ -187,7 +223,7 @@ function createRuntimeContext(db, reqContext) {
         autopilotMode: 'semi'
       };
 
-      const review = reviewAutopilotPlan(generated, sessionStateForRisk);
+      const review = await reviewAutopilotPlan(generated, sessionStateForRisk);
       return review;
     }
   };

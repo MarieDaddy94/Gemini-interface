@@ -1,29 +1,5 @@
-
-import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { MOCK_CHARTS } from './constants';
-import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
-import WebBrowser from './components/WebBrowser';
-import ConnectBrokerModal from './components/ConnectBrokerModal';
-import SettingsModal from './components/SettingsModal';
-import JournalPanel from './components/JournalPanel';
-import PlaybookArchive from './components/PlaybookArchive';
-import AnalyticsPanel from './components/AnalyticsPanel';
-import AutopilotPanel from './components/AutopilotPanel';
-import RiskAutopilotPanel from './components/RiskAutopilotPanel';
-import AutopilotJournalTab from './components/AutopilotJournalTab';
-import RoundTablePanel from './components/RoundTablePanel';
-import ChartVisionAgentPanel from './components/ChartVisionAgentPanel';
-import VoiceCommander from './components/VoiceCommander';
-import TraderCoachPanel from './components/TraderCoachPanel';
-import AgentSettingsPanel from './components/AgentSettingsPanel';
-import AccessGate from './components/AccessGate';
-import { JournalProvider, useJournal } from './context/JournalContext';
-import { TradeEventsProvider, useTradeEvents } from './context/TradeEventsContext';
-import { AgentConfigProvider } from './context/AgentConfigContext';
-import { TradingSessionProvider } from './context/TradingSessionContext';
-import { AutopilotJournalProvider } from './context/AutopilotJournalContext';
-import { VisionProvider } from './context/VisionContext';
-import TradeEventsToJournal from './components/TradeEventsToJournal';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
 import {
   TradeLockerCredentials,
   BrokerAccountInfo,
@@ -35,49 +11,47 @@ import {
   AutopilotCommand,
   RiskVerdict
 } from './types';
-import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
-import {
-  connectToTradeLocker,
-  fetchBrokerData,
-  selectTradeLockerAccount
-} from './services/tradeLockerService';
-import {
-  detectFocusSymbolFromPositions,
-  FocusSymbol
-} from './symbolMap';
+import { detectFocusSymbolFromPositions, FocusSymbol } from './symbolMap';
+import { useJournal } from './context/JournalContext';
+import { useTradeEvents } from './context/TradeEventsContext';
+import { fetchBrokerData, connectToTradeLocker, selectTradeLockerAccount } from './services/tradeLockerService';
 import { fetchJournalEntries } from './services/journalService';
+import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
 
-type MainTab = 'terminal' | 'journal' | 'analysis' | 'analytics' | 'autopilot' | 'command';
+import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
+import ConnectBrokerModal from './components/ConnectBrokerModal';
+import SettingsModal from './components/SettingsModal';
+import WebBrowser from './components/WebBrowser';
+import AutopilotPanel from './components/AutopilotPanel';
+import RiskAutopilotPanel from './components/RiskAutopilotPanel';
+import VoiceCommander from './components/VoiceCommander';
+import TraderCoachPanel from './components/TraderCoachPanel';
+import AgentSettingsPanel from './components/AgentSettingsPanel';
+import RoundTablePanel from './components/RoundTablePanel';
+import ChartVisionAgentPanel from './components/ChartVisionAgentPanel';
+import JournalPanel from './components/JournalPanel';
+import PlaybookArchive from './components/PlaybookArchive';
+import AnalyticsPanel from './components/AnalyticsPanel';
+
+import AccessGate from './components/AccessGate';
+import { AgentConfigProvider } from './context/AgentConfigContext';
+import { TradingSessionProvider, useTradingSession } from './context/TradingSessionContext';
+import { JournalProvider } from './context/JournalContext';
+import { AutopilotJournalProvider } from './context/AutopilotJournalContext';
+import { VisionProvider } from './context/VisionContext';
+import { TradeEventsProvider } from './context/TradeEventsContext';
+import TradeEventsToJournal from './components/TradeEventsToJournal';
+import { VisionSettingsProvider } from './context/VisionSettingsContext';
+
+type MainTab = 'terminal' | 'command' | 'autopilot' | 'journal' | 'analysis' | 'analytics';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
     const url = new URL(rawUrl);
-    const symbolParam = url.searchParams.get('symbol') || undefined;
-    const intervalParam = url.searchParams.get('interval') || undefined;
-    let pathSymbol: string | undefined;
-    const parts = url.pathname.split('/').filter(Boolean);
-    const symIdx = parts.findIndex(p =>
-      p.toLowerCase() === 'symbols' || p.toLowerCase() === 'symbol'
-    );
-    if (symIdx >= 0 && parts[symIdx + 1]) {
-      pathSymbol = parts[symIdx + 1];
-    }
-    const symbol = symbolParam ?? pathSymbol;
-    let timeframe: string | undefined;
-    if (intervalParam) {
-      const n = Number(intervalParam);
-      if (!Number.isNaN(n)) {
-        if (n < 60) timeframe = `${n}m`;
-        else if (n === 60) timeframe = '1h';
-        else timeframe = `${n}m`;
-      } else {
-        timeframe = intervalParam;
-      }
-    }
-    return { symbol, timeframe };
-  } catch {
-    return {};
-  }
+    const symbolParam = url.searchParams.get('symbol');
+    const intervalParam = url.searchParams.get('interval');
+    return { symbol: symbolParam || undefined, timeframe: intervalParam || undefined };
+  } catch { return {}; }
 }
 
 // Inner App Component that uses Contexts
@@ -311,7 +285,7 @@ const Dashboard: React.FC = () => {
 
   const marketContext = useMemo(() => {
     const liveDataStr = Object.values(marketData)
-      .map(tick => 
+      .map((tick: MarketTick) => 
         `${tick.symbol}: ${tick.price.toFixed(2)} ` +
         `(${tick.change >= 0 ? '+' : ''}${tick.changePercent.toFixed(2)}%) ` +
         `| RSI(14): ${tick.rsi?.toFixed(1) || '-'} ` +
@@ -547,8 +521,10 @@ const App: React.FC = () => {
             <AutopilotJournalProvider>
               <VisionProvider>
                 <TradeEventsProvider>
-                  <TradeEventsToJournal />
-                  <Dashboard />
+                  <VisionSettingsProvider>
+                    <TradeEventsToJournal />
+                    <Dashboard />
+                  </VisionSettingsProvider>
                 </TradeEventsProvider>
               </VisionProvider>
             </AutopilotJournalProvider>

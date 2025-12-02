@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState } from 'react';
 import { useJournal } from '../context/JournalContext';
 import { 
@@ -151,7 +150,7 @@ const AnalyticsPanel: React.FC = () => {
 
   const pnlData = useMemo(() => {
     return Object.entries(stats.bySymbolWinLoss)
-      .map(([symbol, data]) => ({
+      .map(([symbol, data]: [string, { pnl: number; closed: number }]) => ({
         symbol,
         pnl: data.pnl,
         closed: data.closed
@@ -170,7 +169,7 @@ const AnalyticsPanel: React.FC = () => {
 
   const agentPerformanceData = useMemo(() => {
     return Object.entries(stats.agentStats)
-      .map(([name, data]) => ({
+      .map(([name, data]: [string, { pnl: number; count: number }]) => ({
         name,
         pnl: data.pnl,
         count: data.count
@@ -182,7 +181,7 @@ const AnalyticsPanel: React.FC = () => {
     Object.entries(rec).sort((a, b) => b[1] - a[1]);
 
   const sortSymbolsByClosed = Object.entries(stats.bySymbolWinLoss).sort(
-    (a, b) => b[1].closed - a[1].closed
+    (a: [string, { closed: number }], b: [string, { closed: number }]) => b[1].closed - a[1].closed
   );
 
   const formatNumber = (n: number, digits = 2) =>
@@ -458,7 +457,7 @@ const AnalyticsPanel: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-2">
-              {sortSymbolsByClosed.map(([sym, perf]) => {
+              {sortSymbolsByClosed.map(([sym, perf]: [string, { wins: number; losses: number; be: number; closed: number; pnl: number }]) => {
                 const { wins, losses, be, closed, pnl } = perf;
                 const winrate = closed ? (wins / closed) * 100 : 0;
 

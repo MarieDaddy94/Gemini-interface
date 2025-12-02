@@ -1,18 +1,10 @@
 
 const { gemini, GEMINI_AUTOPILOT_MODEL, GEMINI_THINKING_CONFIG } = require("../geminiClient");
 const { evaluateProposedTrade } = require("../risk/riskEngine");
+const playbookPerformanceService = require("./playbookPerformanceService");
 
 /**
  * Generates a structured trade plan using Gemini.
- * @param {object} params
- * @param {string} params.symbol
- * @param {string} params.timeframe
- * @param {string} params.mode
- * @param {string} [params.question]
- * @param {object} params.brokerSnapshot
- * @param {string} [params.visionSummary]
- * @param {string} [params.riskProfile]
- * @param {string} [params.notes]
  */
 async function generateAutopilotPlan({
   symbol,
@@ -30,6 +22,8 @@ Your job:
 - Read the account snapshot, risk context, and question.
 - Propose ONE structured trade plan as JSON.
 - Respect strict risk: never exceed requested risk% or blow daily drawdown.
+- **IMPORTANT**: You must assign a "playbook" name to this trade (e.g. "NY Liquidity Sweep", "Trend Pullback").
+  This will be used to check historical performance stats.
 
 Context:
 - Symbol: ${symbol}
@@ -58,7 +52,8 @@ You MUST respond in this exact JSON structure:
     "entryPrice": number | null,
     "stopLoss": number | null,
     "takeProfits": [{ "level": number, "sizePct": number }],
-    "riskPct": number
+    "riskPct": number,
+    "playbook": string  // REQUIRED: Name of the setup
   },
   "checklist": string[],
   "warnings": string[]
@@ -85,11 +80,9 @@ You MUST respond in this exact JSON structure:
 }
 
 /**
- * Runs the plan through the Risk Engine.
- * @param {object} plan - The JSON output from generateAutopilotPlan
- * @param {object} sessionState - Minimal session state for risk engine
+ * Runs the plan through the Risk Engine AND checks Playbook Performance.
  */
-function reviewAutopilotPlan(plan, sessionState) {
+async function reviewAutopilotPlan(plan, sessionState) {
   const tradePlan = plan.jsonTradePlan;
   
   if (!tradePlan || !tradePlan.direction || !tradePlan.riskPct) {
@@ -101,6 +94,7 @@ function reviewAutopilotPlan(plan, sessionState) {
     };
   }
 
+  // 1. Basic Risk Engine Check
   const proposedTrade = {
     direction: tradePlan.direction.toLowerCase(), // 'long' | 'short'
     riskPercent: tradePlan.riskPct,
@@ -108,13 +102,40 @@ function reviewAutopilotPlan(plan, sessionState) {
   };
 
   const riskResult = evaluateProposedTrade(sessionState, proposedTrade);
+  const reasons = [...riskResult.reasons];
+  const warnings = [...riskResult.warnings];
+  let allowed = riskResult.allowed;
+
+  // 2. Playbook Performance Check
+  let playbookProfile = null;
+  if (tradePlan.playbook && tradePlan.symbol) {
+     playbookProfile = await playbookPerformanceService.getProfileForPlaybook(tradePlan.playbook, tradePlan.symbol);
+     
+     if (playbookProfile) {
+        if (playbookProfile.health === 'red') {
+           allowed = false; // Block RED strategies automatically
+           reasons.push(`Playbook '${tradePlan.playbook}' is marked RED (Health Check Failed).`);
+           reasons.push(`Stats: Win ${Math.round(playbookProfile.winRate*100)}%, Avg ${playbookProfile.avgR.toFixed(2)}R.`);
+        } else if (playbookProfile.health === 'amber') {
+           warnings.push(`Playbook '${tradePlan.playbook}' is AMBER. Proceed with caution.`);
+           // Optional: Cap risk for amber
+           if (tradePlan.riskPct > 0.25) {
+              warnings.push("Risk capped to 0.25% due to Amber health status.");
+              // In a real implementation, we'd mutate the plan riskPct here
+           }
+        }
+     } else {
+        warnings.push(`New or unknown playbook '${tradePlan.playbook}'. No historical data.`);
+     }
+  }
 
   return {
-    allowed: riskResult.allowed,
-    reasons: riskResult.reasons,
-    warnings: riskResult.warnings,
+    allowed,
+    reasons,
+    warnings,
     plan,
-    riskDetails: riskResult
+    riskDetails: riskResult,
+    playbookProfile // Pass back to UI
   };
 }
 

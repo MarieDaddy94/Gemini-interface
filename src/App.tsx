@@ -37,10 +37,9 @@ const Dashboard: React.FC = () => {
   const { currentRoom, activeOverlay, toast } = worldState;
   const { openRoom, openOverlay, closeOverlay } = worldActions;
 
-  const { brokerSessionId, brokerData, accounts, activeAccount, connect: connectBroker, disconnect: disconnectBroker, switchAccount } = useBrokerSystem();
-  const { marketData, isConnected: isMarketConnected } = useMarketDataFeed();
+  const { brokerSessionId, brokerData, connect: connectBroker } = useBrokerSystem();
+  const { marketData } = useMarketDataFeed();
 
-  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [chartSymbol, setChartSymbol] = useState<string>('US30');
   const [chartTimeframe, setChartTimeframe] = useState<string>('15m');
   const [autoFocusSymbol, setAutoFocusSymbol] = useState<FocusSymbol>('Auto');
@@ -64,11 +63,8 @@ const Dashboard: React.FC = () => {
   };
 
   const marketContext = useMemo(() => {
-    // ... logic remains same ...
-    return `Account: ${brokerData?.equity ?? 0}`;
-  }, [brokerData]);
-
-  const openPnl = brokerData && brokerData.isConnected ? brokerData.equity - brokerData.balance : 0;
+    return `Account: ${brokerData?.equity?.toFixed(2) ?? 0} | Live Feed: ${Object.keys(marketData).length} ticks`;
+  }, [brokerData, marketData]);
 
   const tabs: { id: AppRoom; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
@@ -109,8 +105,8 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button onClick={() => openOverlay('settings')} className="text-gray-400">Settings</button>
-             {/* Broker connection UI logic here */}
+             <button onClick={() => openOverlay('settings')} className="text-gray-400 hover:text-white transition-colors">Settings</button>
+             {/* Broker connection UI logic could go here */}
           </div>
         </header>
 

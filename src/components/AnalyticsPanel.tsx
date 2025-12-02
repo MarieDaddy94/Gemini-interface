@@ -1,6 +1,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { apiClient } from '../utils/apiClient';
+import { performanceApi, PlaybookProfile } from '../services/performanceApi';
 import { 
   BarChart, 
   Bar, 
@@ -22,13 +23,18 @@ interface JournalStats {
 
 const AnalyticsPanel: React.FC = () => {
   const [stats, setStats] = useState<JournalStats | null>(null);
+  const [profiles, setProfiles] = useState<PlaybookProfile[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const loadStats = async () => {
+  const loadData = async () => {
     setLoading(true);
     try {
-      const data = await apiClient.get<JournalStats>('/api/journal/stats');
-      setStats(data);
+      const [statsData, profilesData] = await Promise.all([
+        apiClient.get<JournalStats>('/api/journal/stats'),
+        performanceApi.getPlaybooks()
+      ]);
+      setStats(statsData);
+      setProfiles(profilesData);
     } catch (e) {
       console.error("Stats load failed", e);
     } finally {
@@ -37,23 +43,17 @@ const AnalyticsPanel: React.FC = () => {
   };
 
   useEffect(() => {
-    loadStats();
+    loadData();
   }, []);
 
-  if (loading) return <div className="p-4 text-xs text-gray-500">Loading stats...</div>;
+  if (loading) return <div className="p-4 text-xs text-gray-500">Loading analytics...</div>;
   if (!stats) return <div className="p-4 text-xs text-gray-500">No data available.</div>;
-
-  const playbookData = Object.entries(stats.playbookStats).map(([name, s]) => ({
-    name,
-    count: s.count,
-    avgR: s.count > 0 ? Number((s.totalR / s.count).toFixed(2)) : 0
-  })).sort((a,b) => b.count - a.count);
 
   return (
     <div className="h-full w-full flex flex-col bg-slate-950 text-slate-50 relative p-4 overflow-auto">
       <div className="flex justify-between items-center mb-4">
          <h2 className="text-sm font-bold">Performance Analytics</h2>
-         <button onClick={loadStats} className="text-[10px] text-blue-400">Refresh</button>
+         <button onClick={loadData} className="text-[10px] text-blue-400">Refresh</button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -77,27 +77,45 @@ const AnalyticsPanel: React.FC = () => {
         </div>
       </div>
 
-      <div className="bg-[#161a25] border border-white/10 rounded p-4 h-64 flex flex-col">
-         <h3 className="text-xs font-bold text-gray-400 mb-2 uppercase">Performance by Playbook (Avg R)</h3>
-         {playbookData.length > 0 ? (
-           <ResponsiveContainer width="100%" height="100%">
-             <BarChart data={playbookData} layout="vertical" margin={{ left: 10, right: 30 }}>
-               <XAxis type="number" hide />
-               <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 10, fill: '#9ca3af'}} />
-               <RechartsTooltip 
-                 contentStyle={{ backgroundColor: '#1e222d', borderColor: '#2a2e39', color: '#d1d4dc', fontSize: '11px' }}
-                 cursor={{fill: 'rgba(255,255,255,0.05)'}}
-               />
-               <Bar dataKey="avgR" barSize={20} radius={[0, 4, 4, 0]}>
-                 {playbookData.map((entry, index) => (
-                   <Cell key={`cell-${index}`} fill={entry.avgR >= 0 ? '#3b82f6' : '#f23645'} />
-                 ))}
-               </Bar>
-             </BarChart>
-           </ResponsiveContainer>
-         ) : (
-           <div className="flex-1 flex items-center justify-center text-gray-500 text-xs">No playbooks logged yet.</div>
-         )}
+      {/* Playbook Health Table */}
+      <div className="bg-[#161a25] border border-white/10 rounded p-4 mb-6">
+         <h3 className="text-xs font-bold text-gray-400 mb-3 uppercase">Playbook Health (90 Days)</h3>
+         <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+               <thead className="text-[10px] text-gray-500 uppercase border-b border-gray-700">
+                  <tr>
+                     <th className="pb-2">Playbook</th>
+                     <th className="pb-2">Symbol</th>
+                     <th className="pb-2 text-right">Trades</th>
+                     <th className="pb-2 text-right">Win%</th>
+                     <th className="pb-2 text-right">Avg R</th>
+                     <th className="pb-2 text-right">Status</th>
+                  </tr>
+               </thead>
+               <tbody className="divide-y divide-gray-800">
+                  {profiles.map((p, idx) => (
+                     <tr key={idx} className="hover:bg-white/5">
+                        <td className="py-2 font-medium text-white">{p.playbook}</td>
+                        <td className="py-2 text-gray-400">{p.symbol}</td>
+                        <td className="py-2 text-right">{p.sampleSize}</td>
+                        <td className="py-2 text-right text-gray-300">{(p.winRate * 100).toFixed(0)}%</td>
+                        <td className={`py-2 text-right ${p.avgR > 0 ? 'text-blue-400' : 'text-red-400'}`}>{p.avgR.toFixed(2)}</td>
+                        <td className="py-2 text-right">
+                           <span className={`px-2 py-0.5 rounded text-[9px] uppercase font-bold ${
+                              p.health === 'green' ? 'bg-emerald-500/20 text-emerald-400' :
+                              p.health === 'red' ? 'bg-red-500/20 text-red-400' :
+                              p.health === 'amber' ? 'bg-amber-500/20 text-amber-400' :
+                              'bg-gray-700 text-gray-400'
+                           }`}>
+                              {p.health}
+                           </span>
+                        </td>
+                     </tr>
+                  ))}
+               </tbody>
+            </table>
+            {profiles.length === 0 && <div className="text-center text-gray-500 py-4 text-xs">No enough data to profile playbooks yet.</div>}
+         </div>
       </div>
     </div>
   );

@@ -466,7 +466,7 @@ const brokerAndJournalTools = [
   },
   {
     name: "get_playbooks",
-    description: "Fetch saved playbooks / setups for the current symbol.",
+    description: "Fetch saved playbooks / setups definition templates.",
     parameters: {
       type: "object",
       properties: {
@@ -477,6 +477,39 @@ const brokerAndJournalTools = [
       if (!ctx.getPlaybooks) throw new Error("Missing getPlaybooks ctx");
       return ctx.getPlaybooks({ symbol: args.symbol });
     },
+  },
+  {
+    name: "get_playbook_performance",
+    description: "Get real-world performance stats (Green/Amber/Red health) for a specific playbook based on journal data.",
+    parameters: {
+      type: "object",
+      properties: {
+        playbookName: { type: "string", description: "Exact name of the playbook/setup to check." },
+        symbol: { type: "string" },
+        lookbackDays: { type: "number", description: "How far back to check (default 60)." }
+      },
+      required: ["playbookName"]
+    },
+    handler: async (args, ctx) => {
+      if (!ctx.getPlaybookPerformance) throw new Error("Missing getPlaybookPerformance ctx");
+      return ctx.getPlaybookPerformance(args);
+    }
+  },
+  {
+    name: "list_best_playbooks",
+    description: "List the top-performing playbooks for a symbol based on recent journal stats.",
+    parameters: {
+      type: "object",
+      properties: {
+        symbol: { type: "string" },
+        limit: { type: "number", default: 5 },
+        lookbackDays: { type: "number", default: 60 }
+      }
+    },
+    handler: async (args, ctx) => {
+      if (!ctx.listBestPlaybooks) throw new Error("Missing listBestPlaybooks ctx");
+      return ctx.listBestPlaybooks(args);
+    }
   },
   {
     name: "control_app_ui",
