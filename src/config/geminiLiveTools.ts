@@ -1,3 +1,4 @@
+
 // src/config/geminiLiveTools.ts
 import { Tool, Type } from "@google/genai";
 
@@ -165,8 +166,50 @@ export const autopilotProposalTool: Tool = {
   ],
 };
 
+/**
+ * Tool: control_app_ui
+ * Allows the voice model to navigate the app.
+ */
+export const controlAppUiTool: Tool = {
+  functionDeclarations: [
+    {
+      name: "control_app_ui",
+      description:
+        "Control the application UI: switch tabs (rooms), open overlays (broker, settings), or show toast notifications. " +
+        "Use this when the user asks to 'go to' a section or 'show settings'.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          action: {
+            type: Type.STRING,
+            enum: ["navigate", "overlay", "toast"],
+            description: "The UI action to perform.",
+          },
+          target: {
+            type: Type.STRING,
+            description:
+              "For navigate: 'terminal', 'command', 'autopilot', 'journal', 'analysis', 'analytics'. " +
+              "For overlay: 'broker', 'settings'.",
+          },
+          message: {
+            type: Type.STRING,
+            description: "Message text for toasts.",
+          },
+          type: {
+            type: Type.STRING,
+            enum: ["success", "info", "error"],
+            description: "Type of toast notification.",
+          },
+        },
+        required: ["action"],
+      },
+    },
+  ],
+};
+
 export const GEMINI_LIVE_TOOLS: Tool[] = [
   chartPlaybookTool,
   logTradeJournalTool,
   autopilotProposalTool,
+  controlAppUiTool,
 ];

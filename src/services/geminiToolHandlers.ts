@@ -31,10 +31,20 @@ async function callBackendTool(
 ): Promise<any> {
   const body = args ?? {};
 
-  // Default logging for tools we don't explicitly override logic for below
-  // We can refine this logic to catch the start of known tools.
-  // For simplicity, let's record 'pending' for known tools here if we want generic coverage
-  // OR rely on specific blocks below. Specific blocks are cleaner.
+  // --- UI CONTROL TOOL (Client Side) ---
+  if (fnName === "control_app_ui") {
+    // We log it as 'ok' immediately because the AgentActionDispatcher
+    // subscribes to the bus and will execute the React state update.
+    recordToolActivity({
+      provider: "gemini",
+      name: fnName,
+      status: "ok",
+      args: body,
+    });
+    return { ok: true, message: "UI action dispatched" };
+  }
+
+  // --- BACKEND TOOLS ---
 
   if (fnName === "get_chart_playbook") {
     recordToolActivity({
