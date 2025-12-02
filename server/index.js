@@ -15,6 +15,9 @@ const globalErrorHandler = require('./middleware/errorMiddleware');
 // Import Persistence
 const db = require('./persistence');
 
+// Import Tools Data
+const { getPlaybooks, addJournalEntry } = require("./toolsData");
+
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
@@ -134,6 +137,7 @@ app.use('/api/openai/', aiLimiter);
 app.use('/api/gemini/', aiLimiter);
 app.use('/api/playbooks', aiLimiter);
 app.use('/api/journal', aiLimiter);
+app.use('/api/tools/', aiLimiter);
 
 app.use(
   cors({
@@ -156,6 +160,72 @@ app.post('/api/log', (req, res) => {
     logger.info(`[CLIENT] ${message}`, meta);
   }
   res.status(200).send('Logged');
+});
+
+// ---------- AI Squad Tool Endpoints ----------
+
+// GET /api/tools/playbooks?symbol=US30&timeframe=15m&direction=long
+app.get("/api/tools/playbooks", (req, res) => {
+  try {
+    const { symbol, timeframe, direction } = req.query;
+    const result = getPlaybooks({
+      symbol: typeof symbol === "string" ? symbol : undefined,
+      timeframe: typeof timeframe === "string" ? timeframe : undefined,
+      direction: typeof direction === "string" ? direction : undefined,
+    });
+
+    res.json({
+      ok: true,
+      count: result.length,
+      playbooks: result,
+    });
+  } catch (err) {
+    console.error("Error in /api/tools/playbooks", err);
+    res.status(500).json({
+      ok: false,
+      error: "Failed to fetch playbooks",
+    });
+  }
+});
+
+// POST /api/tools/journal-entry
+// Body: {
+//   symbol, timeframe, direction, entryPrice, stopLoss, takeProfit,
+//   size, accountEquity, resultRMultiple, outcome, notes,
+//   agentName, autopilotMode, meta?: { [key: string]: any }
+// }
+app.post("/api/tools/journal-entry", (req, res) => {
+  try {
+    const payload = req.body || {};
+
+    const entry = addJournalEntry({
+      symbol: payload.symbol || null,
+      timeframe: payload.timeframe || null,
+      direction: payload.direction || null,
+      entryPrice: payload.entryPrice ?? null,
+      stopLoss: payload.stopLoss ?? null,
+      takeProfit: payload.takeProfit ?? null,
+      size: payload.size ?? null,
+      accountEquity: payload.accountEquity ?? null,
+      resultRMultiple: payload.resultRMultiple ?? null,
+      outcome: payload.outcome || null, // win / loss / BE / planned / canceled
+      notes: payload.notes || "",
+      agentName: payload.agentName || "OpenAI Squad",
+      autopilotMode: payload.autopilotMode || "confirm", // confirm / auto / sim
+      meta: payload.meta || {},
+    });
+
+    res.json({
+      ok: true,
+      entry,
+    });
+  } catch (err) {
+    console.error("Error in /api/tools/journal-entry", err);
+    res.status(500).json({
+      ok: false,
+      error: "Failed to log journal entry",
+    });
+  }
 });
 
 // Mount Vision Router
