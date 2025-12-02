@@ -1,4 +1,5 @@
 
+
 const express = require('express');
 
 const visionRouter = express.Router();
@@ -77,6 +78,153 @@ Requirements:
 - "confidence" must be a number between 0 and 1.
 - Do NOT include explanations outside of JSON.
 - Do NOT wrap the JSON in backticks or any markdown, just plain JSON.
+`.trim();
+}
+
+function buildMtfVisionPrompt(payload) {
+  const {
+    symbol,
+    frames, // [{ timeframe: string, note?: string }]
+    sessionContext,
+    question,
+  } = payload;
+
+  const frameLines = (frames || []).map((f, idx) => {
+    return `Frame ${idx + 1}: timeframe="${f.timeframe}", note="${f.note || ''}"`;
+  });
+
+  return `
+You are a professional multi-timeframe price action trader.
+You will receive multiple chart screenshots for the SAME symbol "${symbol}" across different timeframes.
+
+Frames provided:
+${frameLines.join('\n') || '(none listed)'}
+
+Session context: ${sessionContext || '(not specified)'}
+
+User question or goal:
+${question || '(none provided)'}
+
+You MUST respond ONLY with a single JSON object that conforms to this TypeScript interface:
+
+interface ChartVisionAnalysis {
+  symbol: string;
+  timeframe: string;             // choose the primary execution TF (e.g. 1m/5m/15m)
+  sessionContext?: string;
+
+  marketBias: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  confidence: number;            // 0–1
+
+  structureNotes: string;        // narrative tying HTF and LTF together
+  liquidityNotes: string;        // comment on where liquidity sits across TFs
+  fvgNotes: string;              // imbalances / FVGs that matter across TFs
+  keyZones: string[];            // labels for key HTF/LTF zones
+  patternNotes: string;          // any clear playbook-level patterns
+  riskWarnings: string[];        // actionable warnings
+
+  suggestedPlaybookTags: string[];
+
+  // Multi-timeframe-specific fields:
+  htfBias?: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  ltfBias?: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  alignmentScore?: number;       // 0–1, how well LTF aligns with HTF
+
+  notesByTimeframe?: {
+    timeframe: string;
+    notes: string;
+  }[];
+}
+
+Requirements:
+- All non-optional fields must be present.
+- confidence and alignmentScore (if provided) must be between 0 and 1.
+- Do NOT output anything except plain JSON (no markdown, no prose).
+`.trim();
+}
+
+function buildLiveWatchPrompt(payload) {
+  const { plan, lastStatus } = payload;
+  const {
+    symbol,
+    timeframe,
+    direction,
+    entryPrice,
+    entryZoneLow,
+    entryZoneHigh,
+    stopLossPrice,
+    takeProfitPrice,
+  } = plan;
+
+  return `
+You are a precise execution assistant monitoring a live chart for a single trade idea.
+
+The user has a trade PLAN:
+
+interface LiveWatchPlan {
+  direction: 'long' | 'short';
+  entryPrice?: number;
+  entryZoneLow?: number;
+  entryZoneHigh?: number;
+  stopLossPrice: number;
+  takeProfitPrice?: number;
+  symbol: string;
+  timeframe: string;
+}
+
+Plan details:
+- Symbol: ${symbol}
+- Timeframe: ${timeframe}
+- Direction: ${direction}
+- Entry price (mid): ${entryPrice || '(n/a)'}
+- Entry zone: [${entryZoneLow || '(n/a)'} .. ${entryZoneHigh || '(n/a)'}]
+- Stop loss: ${stopLossPrice}
+- Take profit: ${takeProfitPrice || '(n/a)'}
+
+You are also told the last status of the trade idea:
+${lastStatus || 'not_reached'}
+
+You will see a live chart screenshot that shows current price relative to these levels.
+
+Your job:
+- Determine whether price has:
+  - not reached the entry yet
+  - just touched the entry zone
+  - is actively in the trade (in_play)
+  - invalidated the idea (e.g., blew through SL or structurally broken)
+  - hit take profit
+  - hit stop loss
+
+You MUST respond ONLY with a single JSON object of this shape:
+
+type LiveWatchStatus =
+  | 'not_reached'
+  | 'just_touched'
+  | 'in_play'
+  | 'invalidated'
+  | 'tp_hit'
+  | 'sl_hit';
+
+interface LiveWatchAnalysis {
+  status: LiveWatchStatus;
+  comment: string;
+  autopilotHint?: string;
+}
+
+Rules:
+- "just_touched": price is just entering the zone / tag of entry.
+- "in_play": trade would be active and not yet invalidated or at TP/SL.
+- "invalidated": idea is no longer valid even if trade not in yet.
+- "tp_hit": price clearly passed target area.
+- "sl_hit": price clearly passed stop level.
+
+comment: one or two sentences explaining the situation.
+autopilotHint: short directive like:
+- "Arm the trade now"
+- "Do not enter, idea dead"
+- "Move to break-even"
+- "Take partials or trail"
+
+Do NOT output anything except JSON. No markdown, no prose around it.
 `.trim();
 }
 
@@ -291,7 +439,121 @@ visionRouter.post('/run', async (req, res) => {
       });
     }
 
-    // ------- Branch 2: Generic vision (fallback) -------
+    // ------- Branch 2: Multi-Timeframe Chart Vision -------
+    if (mode === 'mtf_vision_v1' && payload && Array.isArray(payload.frames)) {
+      const mtfTask = 'chart_mtf';
+
+      const prompt = buildMtfVisionPrompt(payload);
+
+      // payload.frames: [{ imageBase64, timeframe, note? }]
+      const imageArr = (payload.frames || [])
+        .map(f => f.imageBase64)
+        .filter(Boolean);
+
+      let rawText;
+      if (provider === 'gemini') {
+        rawText = await callGeminiVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else if (provider === 'openai') {
+        rawText = await callOpenAIVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+
+      const parsed = safeExtractJsonObject(rawText);
+
+      const analysis =
+        parsed && typeof parsed === 'object'
+          ? parsed
+          : {
+              symbol: payload.symbol,
+              timeframe:
+                (payload.frames && payload.frames[0]?.timeframe) || 'unknown',
+              sessionContext: payload.sessionContext,
+              marketBias: 'unclear',
+              confidence: 0,
+              structureNotes: rawText || '',
+              liquidityNotes: '',
+              fvgNotes: '',
+              keyZones: [],
+              patternNotes: '',
+              riskWarnings: [],
+              suggestedPlaybookTags: [],
+            };
+
+      const summary = `MTF VISION: Bias=${analysis.marketBias.toUpperCase()} (conf ${
+        Math.round((analysis.confidence || 0) * 100)
+      }%), HTF=${analysis.htfBias || 'n/a'}, LTF=${analysis.ltfBias || 'n/a'}, alignment=${
+        typeof analysis.alignmentScore === 'number'
+          ? Math.round(analysis.alignmentScore * 100) + '%'
+          : 'n/a'
+      }`;
+
+      return res.json({
+        provider,
+        modelId: resolvedModelId,
+        task: mtfTask,
+        createdAt: new Date().toISOString(),
+        rawText,
+        summary,
+        analysis,
+      });
+    }
+
+    // ------- Branch 3: Live Watch status for a single plan -------
+    if (mode === 'live_watch_v1' && payload && payload.plan && payload.imageBase64) {
+      const liveTask = 'live_watch';
+
+      const prompt = buildLiveWatchPrompt(payload);
+      const imageArr = [payload.imageBase64];
+
+      let rawText;
+      if (provider === 'gemini') {
+        rawText = await callGeminiVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else if (provider === 'openai') {
+        rawText = await callOpenAIVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+
+      const parsed = safeExtractJsonObject(rawText);
+
+      const analysis =
+        parsed && typeof parsed === 'object'
+          ? parsed
+          : {
+              status: 'not_reached',
+              comment: rawText || 'Could not parse structured live-watch status.',
+              autopilotHint: undefined,
+            };
+
+      return res.json({
+        provider,
+        modelId: resolvedModelId,
+        task: liveTask,
+        createdAt: new Date().toISOString(),
+        rawText,
+        plan: payload.plan,
+        analysis,
+      });
+    }
+
+    // ------- Branch 4: Generic vision (fallback) -------
     const contextSummary = visionContext
       ? `\n\nContext JSON:\n${JSON.stringify(visionContext)}`
       : '';

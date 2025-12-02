@@ -660,7 +660,8 @@ export type VisionTask =
   | 'chart_single'
   | 'chart_mtf'
   | 'live_watch'
-  | 'journal';
+  | 'journal'
+  | 'chart_vision_v1';
 
 // Basic vision settings for the current session
 export interface VisionSettings {
@@ -737,6 +738,16 @@ export interface ChartVisionAnalysis {
   patternNotes: string;          // classic patterns, internal structure
   riskWarnings: string[];        // “extended move, late long”, “news nearby”
   suggestedPlaybookTags: string[]; // e.g. ["PDH sweep", "NY reversal"]
+
+  // --- Multi-timeframe extensions (optional) ---
+  htfBias?: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  ltfBias?: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  alignmentScore?: number; // 0–1: how well LTF aligns with HTF idea
+
+  notesByTimeframe?: {
+    timeframe: string;
+    notes: string;
+  }[];
 }
 
 // Normalized result format for any provider
@@ -760,4 +771,41 @@ export interface VisionResult {
   rawText?: string;
   summary?: string;
   analysis?: ChartVisionAnalysis;
+  
+  // For live watch specifically
+  plan?: LiveWatchPlan;
+  liveAnalysis?: LiveWatchAnalysis;
+}
+
+// --- Live Watch Types ---
+
+export type LiveWatchStatus =
+  | 'not_reached'
+  | 'just_touched'
+  | 'in_play'
+  | 'invalidated'
+  | 'tp_hit'
+  | 'sl_hit';
+
+export interface LiveWatchPlan {
+  direction: 'long' | 'short';
+  entryPrice?: number;
+  entryZoneLow?: number;
+  entryZoneHigh?: number;
+  stopLossPrice: number;
+  takeProfitPrice?: number;
+  symbol: string;
+  timeframe: string;
+}
+
+export interface LiveWatchAnalysis {
+  status: LiveWatchStatus;
+  comment: string;
+  autopilotHint?: string;
+}
+
+export interface LiveWatchResult {
+  rawText: string;
+  plan: LiveWatchPlan;
+  analysis: LiveWatchAnalysis;
 }
