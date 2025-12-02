@@ -2,52 +2,14 @@
 // server/agents/orchestrator.js
 //
 // Central orchestration for agent requests.
-// This is what the /api/agent-router endpoint will call.
+// Updated to use the advanced 'runAgentWithTools' runner to support tools like control_app_ui.
 
-const { callLLM } = require('../llmRouter');
+const { runAgentWithTools, brokerAndJournalTools } = require('../ai-providers');
+const { createRuntimeContext } = require('../tool-runner');
 const { getAgentById } = require('./agents');
 
 /**
- * @typedef {{
- *   environment: 'sim' | 'live',
- *   autopilotMode: 'off' | 'advisor' | 'semi' | 'full',
- *   instrument: { symbol: string, displayName: string, brokerSymbol?: string },
- *   timeframe: { currentTimeframe: string, higherTimeframes: string[] },
- *   account: {
- *     accountId?: string,
- *     accountName?: string,
- *     equity?: number,
- *     balance?: number,
- *     currency?: string,
- *     isFundedAccount: boolean,
- *     fundedSize?: number,
- *   },
- *   agents: Array<{
- *     id: string,
- *     name: string,
- *     role: string,
- *     description: string,
- *     modelHint?: string,
- *     isEnabled: boolean,
- *   }>,
- *   messages: Array<{
- *     id: string,
- *     agentId?: string,
- *     sender: 'user' | 'agent',
- *     content: string,
- *     createdAt: string,
- *     metadata?: any
- *   }>,
- *   isBrokerConnected: boolean,
- *   isNewsHighImpactNow: boolean,
- *   isVisionActive: boolean,
- * }} TradingSessionState
- */
-
-/**
  * Build a short, compact summary of the current session state for system prompts.
- * @param {TradingSessionState} session
- * @returns {string}
  */
 function summarizeSession(session) {
   const { environment, autopilotMode, instrument, timeframe, account } =
@@ -90,11 +52,8 @@ function summarizeSession(session) {
 
 /**
  * Convert frontend AgentMessage[] into generic chat messages for LLM.
- * @param {Array<{sender: 'user'|'agent', content: string}>} history
- * @param {string} agentName
- * @returns {Array<{role: 'user'|'assistant', content: string}>}
  */
-function historyToChatMessages(history, agentName) {
+function historyToChatMessages(history) {
   if (!Array.isArray(history) || history.length === 0) return [];
 
   return history.map((msg) => {
@@ -110,11 +69,12 @@ function historyToChatMessages(history, agentName) {
  * @param {{
  *   agentId?: string,
  *   userMessage: string,
- *   sessionState: TradingSessionState,
- *   history?: Array<{sender: 'user'|'agent', content: string, agentId?: string}>
+ *   sessionState: any,
+ *   history?: Array<any>
  * }} payload
+ * @param {object} db - Database instance required for tools
  */
-async function handleAgentRequest(payload) {
+async function handleAgentRequest(payload, db) {
   const { agentId, userMessage, sessionState, history } = payload || {};
 
   if (!userMessage || typeof userMessage !== 'string') {
@@ -123,12 +83,16 @@ async function handleAgentRequest(payload) {
 
   // Default agent = strategist-main for now
   const chosenAgentId = agentId || 'strategist-main';
-  const agent = getAgentById(chosenAgentId);
+  const agentConfig = getAgentById(chosenAgentId);
+
+  if (!agentConfig) {
+    throw new Error(`Agent ${chosenAgentId} not found`);
+  }
 
   const sessionSummary = summarizeSession(sessionState || {});
 
   const systemPrompt =
-    (agent.systemPrompt || '') +
+    (agentConfig.systemPrompt || '') +
     `
 
 ---
@@ -137,26 +101,43 @@ ${sessionSummary}
 `;
 
   // Build conversation history for this agent
-  const chatHistory = historyToChatMessages(history || [], agent.name);
+  const chatHistory = historyToChatMessages(history || []);
 
-  // Append the new user message
-  const messages = [
-    ...chatHistory,
-    { role: 'user', content: userMessage },
-  ];
+  // Prepare the request object for runAgentWithTools
+  // We include ALL broker/journal tools by default for the orchestrator
+  // You can restrict this if needed based on agent capabilities
+  const request = {
+    agent: {
+      ...agentConfig,
+      systemPrompt
+    },
+    messages: [
+      ...chatHistory,
+      { role: 'user', content: userMessage }
+    ],
+    tools: brokerAndJournalTools
+  };
 
-  const replyText = await callLLM({
-    model: agent.model,
-    provider: agent.provider,
-    systemPrompt,
-    messages,
-    temperature: 0.25,
-    maxTokens: 800,
+  // Create runtime context (needs accountId from sessionState)
+  // We use accountId as the session key for DB lookups
+  const accountId = sessionState?.account?.accountId || 'default-session';
+  const ctx = createRuntimeContext(db, {
+    brokerSessionId: accountId,
+    journalSessionId: accountId,
+    symbol: sessionState?.instrument?.symbol || 'US30'
   });
+
+  // Execute
+  const result = await runAgentWithTools(request, ctx);
 
   return {
     agentId: chosenAgentId,
-    content: replyText,
+    content: result.finalText,
+    toolCalls: result.toolResults.map(t => ({
+      toolName: t.toolName,
+      args: t.args,
+      result: t.result
+    }))
   };
 }
 

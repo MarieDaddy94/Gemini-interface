@@ -15,6 +15,7 @@ import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
 import SettingsModal from './components/SettingsModal';
 import AccessGate from './components/AccessGate';
+import AgentActionDispatcher from './components/AgentActionDispatcher'; // Import Dispatcher
 
 // Views
 import TerminalView from './views/TerminalView';
@@ -23,6 +24,7 @@ import AutopilotView from './views/AutopilotView';
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
+import { fetchJournalEntries } from './services/journalService';
 
 function extractChartContextFromUrl(rawUrl: string): { symbol?: string; timeframe?: string } {
   try {
@@ -89,18 +91,9 @@ const Dashboard: React.FC = () => {
   const [agentRiskVerdict, setAgentRiskVerdict] = useState<RiskVerdict | null>(null);
   const [agentRiskComment, setAgentRiskComment] = useState<string | null>(null);
 
+  const effectiveJournalSessionId = brokerSessionId || 'local';
   const chatOverlayRef = useRef<ChatOverlayHandle | null>(null);
-
-  // Auto-focus symbol detection
-  useEffect(() => {
-    if (brokerData && brokerData.isConnected) {
-      const detected = detectFocusSymbolFromPositions(brokerData.positions);
-      setAutoFocusSymbol(detected);
-    } else {
-      setAutoFocusSymbol('Auto');
-    }
-  }, [brokerData]);
-
+  
   // Handlers
   const handleBrowserUrlChange = (url: string) => {
     const { symbol, timeframe } = extractChartContextFromUrl(url);
@@ -179,7 +172,10 @@ const Dashboard: React.FC = () => {
 
   return (
     <div className="flex h-screen w-full bg-[#131722] text-[#d1d4dc] overflow-hidden relative">
-      {/* Global Toast */}
+      {/* LISTEN FOR AGENT UI ACTIONS */}
+      <AgentActionDispatcher />
+
+      {/* Toast Notification */}
       {toast && (
         <div className={`absolute top-16 right-4 z-[999] px-4 py-3 rounded-md shadow-lg border animate-fade-in-down flex items-center gap-3 ${
            toast.type === 'success' ? 'bg-[#1e222d] border-green-500/50 text-green-400' : 

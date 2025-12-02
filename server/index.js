@@ -533,7 +533,8 @@ app.post('/api/ai/route', async (req, res, next) => {
 app.post('/api/agent-router', async (req, res, next) => {
   try {
     const { agentId, userMessage, sessionState, history } = req.body || {};
-    const result = await handleAgentRequest({ agentId, userMessage, sessionState, history });
+    // Updated to pass db to handleAgentRequest
+    const result = await handleAgentRequest({ agentId, userMessage, sessionState, history }, db);
     res.json(result);
   } catch (err) {
     next(err);

@@ -507,6 +507,42 @@ const brokerAndJournalTools = [
        }
        return "Playbook variant saved (simulated).";
     }
+  },
+  {
+    name: "control_app_ui",
+    description: "Control the application UI: switch tabs (rooms), open overlays, or show toasts.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { 
+          type: "string", 
+          enum: ["navigate", "overlay", "toast"],
+          description: "What UI action to perform."
+        },
+        target: { 
+          type: "string", 
+          description: "Target room ID (e.g. 'journal', 'autopilot') or overlay ID ('broker', 'settings')."
+        },
+        message: { 
+          type: "string",
+          description: "Message content for toasts or notifications."
+        },
+        type: {
+          type: "string",
+          enum: ["success", "info", "error"],
+          description: "Toast type."
+        }
+      },
+      required: ["action"]
+    },
+    handler: async (args, ctx) => {
+        // Backend just echoes this back. The frontend 'AgentActionDispatcher' will intercept it via the tool bus.
+        return { 
+            status: "dispatched", 
+            command: "control_app_ui", 
+            details: args 
+        };
+    }
   }
 ];
 

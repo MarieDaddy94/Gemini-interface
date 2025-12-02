@@ -1,0 +1,1154 @@
+
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { callAgentRouter, AgentId, TradeMeta, ToolCall } from '../services/agentApi';
+import { useJournal } from '../context/JournalContext';
+import { useAgentConfig } from '../context/AgentConfigContext';
+import { useTradingSession } from '../context/TradingSessionContext';
+import { BrokerPosition, AgentMessage } from '../types';
+import { executeTrade } from '../services/tradeLockerService';
+import { recordToolActivity } from '../services/toolActivityBus'; // Import Bus
+
+// UI Metadata for styling specific agents
+const AGENT_UI_META: Record<string, { avatar: string, color: string }> = {
+  quant_bot: { avatar: '🤖', color: 'bg-blue-100 text-blue-800' },
+  "quant-analyst": { avatar: '🤖', color: 'bg-blue-100 text-blue-800' }, // New ID mapping
+  
+  trend_master: { avatar: '📈', color: 'bg-purple-100 text-purple-800' },
+  "strategist-main": { avatar: '🧠', color: 'bg-purple-100 text-purple-800' }, // New ID mapping
+  
+  pattern_gpt: { avatar: '🧠', color: 'bg-green-100 text-green-800' },
+  
+  journal_coach: { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' },
+  "journal-coach": { avatar: '🎓', color: 'bg-indigo-100 text-indigo-800' }, // New ID mapping
+  
+  "risk-manager": { avatar: '🛡️', color: 'bg-red-100 text-red-800' },
+  "execution-bot": { avatar: '⚡', color: 'bg-yellow-100 text-yellow-800' },
+
+  // Fallbacks
+  default: { avatar: '🤖', color: 'bg-gray-100 text-gray-800' }
+};
+
+export interface ChatOverlayHandle {
+  sendSystemMessageToAgent: (params: { prompt: string; agentId: string }) => Promise<void>;
+}
+
+// UI-Specific Message Type (Mapping layer)
+interface UIChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  author?: string; 
+  agentId?: string; 
+  text: string;
+  isError?: boolean;
+  tradeMeta?: TradeMeta;
+  toolCalls?: ToolCall[];
+}
+
+interface ChatOverlayProps {
+  chartContext: string;
+  isBrokerConnected?: boolean;
+  sessionId: string;
+  autoFocusSymbol?: string;
+  brokerSessionId?: string | null;
+  chartSymbol?: string;
+  chartTimeframe?: string;
+  openPositions?: BrokerPosition[];
+}
+
+// --- Annotation Modal Helper ---
+
+interface AnnotationModalProps {
+  imageSrc: string;
+  onConfirm: (base64NoPrefix: string) => void;
+  onCancel: () => void;
+}
+
+const AnnotationModal: React.FC<AnnotationModalProps> = ({ imageSrc, onConfirm, onCancel }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [tool, setTool] = useState<'rect' | 'pen'>('rect');
+  const [color, setColor] = useState('#f23645'); // Default Red
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
+  const [snapshot, setSnapshot] = useState<ImageData | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new Image();
+    img.src = imageSrc;
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+    };
+  }, [imageSrc]);
+
+  const getPos = (e: React.MouseEvent | React.TouchEvent) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    
+    let clientX, clientY;
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = (e as React.MouseEvent).clientX;
+      clientY = (e as React.MouseEvent).clientY;
+    }
+    
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    return {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY
+    };
+  };
+
+  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    const pos = getPos(e);
+    setStartPos(pos);
+    setIsDrawing(true);
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (ctx && canvas) {
+      setSnapshot(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      
+      if (tool === 'pen') {
+        ctx.beginPath();
+        ctx.moveTo(pos.x, pos.y);
+      }
+    }
+  };
+
+  const draw = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!ctx || !canvas || !snapshot) return;
+
+    const currentPos = getPos(e);
+
+    if (tool === 'rect') {
+      ctx.putImageData(snapshot, 0, 0);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(startPos.x, startPos.y, currentPos.x - startPos.x, currentPos.y - startPos.y);
+    } else if (tool === 'pen') {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      ctx.lineTo(currentPos.x, currentPos.y);
+      ctx.stroke();
+    }
+  };
+
+  const stopDrawing = () => {
+    setIsDrawing(false);
+  };
+
+  const handleDone = () => {
+    if (canvasRef.current) {
+      const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.9);
+      onConfirm(dataUrl.split(',')[1]);
+    }
+  };
+
+  const handleReset = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const img = new Image();
+    img.src = imageSrc;
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-black/90 backdrop-blur-sm animate-fade-in select-none">
+      <div className="flex items-center justify-between px-6 py-4 bg-[#1e222d] border-b border-[#2a2e39]">
+        <div className="flex items-center gap-4">
+          <h3 className="text-white font-medium">Annotate Image</h3>
+          <div className="h-6 w-[1px] bg-[#2a2e39]"></div>
+          
+          <div className="flex bg-[#131722] rounded-md p-1 border border-[#2a2e39]">
+            <button 
+              onClick={() => setTool('rect')} 
+              className={`p-1.5 rounded ${tool === 'rect' ? 'bg-[#2962ff] text-white' : 'text-gray-400 hover:text-white'}`}
+              title="Draw Box"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+            </button>
+            <button 
+              onClick={() => setTool('pen')} 
+              className={`p-1.5 rounded ${tool === 'pen' ? 'bg-[#2962ff] text-white' : 'text-gray-400 hover:text-white'}`}
+              title="Freehand Pen"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"></path><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path><path d="M2 2l7.586 7.586"></path><circle cx="11" cy="11" r="2"></circle></svg>
+            </button>
+          </div>
+          
+          <div className="flex gap-2">
+            {['#f23645', '#089981', '#2962ff', '#e0b0ff', '#ffffff'].map(c => (
+              <button 
+                key={c} 
+                onClick={() => setColor(c)}
+                className={`w-6 h-6 rounded-full border-2 ${color === c ? 'border-white scale-110' : 'border-transparent opacity-70 hover:opacity-100'}`}
+                style={{ backgroundColor: c }}
+              />
+            ))}
+          </div>
+          
+           <button 
+              onClick={handleReset} 
+              className="text-xs text-gray-400 hover:text-white border border-[#2a2e39] px-2 py-1 rounded hover:bg-[#2a2e39] transition-colors"
+           >
+              Reset
+           </button>
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="px-4 py-2 text-gray-400 hover:text-white transition-colors">Cancel</button>
+          <button onClick={handleDone} className="px-4 py-2 bg-[#2962ff] text-white rounded font-medium hover:bg-[#1e53e5]">Done</button>
+        </div>
+      </div>
+
+      <div className="flex-1 flex items-center justify-center overflow-auto p-4 bg-[#0a0c10] touch-none">
+        <canvas 
+          ref={canvasRef}
+          className="max-h-full max-w-full shadow-2xl border border-gray-800 cursor-crosshair"
+          onMouseDown={startDrawing}
+          onMouseMove={draw}
+          onMouseUp={stopDrawing}
+          onMouseLeave={stopDrawing}
+          onTouchStart={startDrawing}
+          onTouchMove={draw}
+          onTouchEnd={stopDrawing}
+        />
+      </div>
+    </div>
+  );
+};
+
+// --- Crop Modal Helper ---
+interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const CropModal: React.FC<{
+  imageSrc: string;
+  onConfirm: (croppedBase64: string) => void;
+  onCancel: () => void;
+}> = ({ imageSrc, onConfirm, onCancel }) => {
+  const [selection, setSelection] = useState<CropRect | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const getClientCoordinates = (e: React.MouseEvent | React.TouchEvent) => {
+    if ('touches' in e) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    return { x: (e as React.MouseEvent).clientX, y: (e as React.MouseEvent).clientY };
+  };
+
+  const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const coords = getClientCoordinates(e);
+    const x = coords.x - rect.left;
+    const y = coords.y - rect.top;
+    
+    setStartPos({ x, y });
+    setSelection({ x, y, width: 0, height: 0 });
+    setIsDragging(true);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!isDragging || !startPos || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const coords = getClientCoordinates(e);
+    const currentX = Math.max(0, Math.min(coords.x - rect.left, rect.width));
+    const currentY = Math.max(0, Math.min(coords.y - rect.top, rect.height));
+
+    const width = Math.abs(currentX - startPos.x);
+    const height = Math.abs(currentY - startPos.y);
+    const x = Math.min(currentX, startPos.x);
+    const y = Math.min(currentY, startPos.y);
+
+    setSelection({ x, y, width, height });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleConfirm = () => {
+    if (!selection || !imgRef.current || selection.width < 10 || selection.height < 10) {
+      if (!selection) alert("Please select a region to capture.");
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    const scaleX = imgRef.current.naturalWidth / imgRef.current.width;
+    const scaleY = imgRef.current.naturalHeight / imgRef.current.height;
+
+    canvas.width = selection.width * scaleX;
+    canvas.height = selection.height * scaleY;
+    const ctx = canvas.getContext('2d');
+
+    if (ctx) {
+      ctx.drawImage(
+        imgRef.current,
+        selection.x * scaleX,
+        selection.y * scaleY,
+        selection.width * scaleX,
+        selection.height * scaleY,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      onConfirm(dataUrl.split(',')[1]); 
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-black/90 backdrop-blur-sm animate-fade-in select-none">
+      <div className="flex items-center justify-between px-6 py-4 bg-[#1e222d] border-b border-[#2a2e39]">
+        <h3 className="text-white font-medium">Select Region to Analyze</h3>
+        <div className="flex gap-3">
+          <button 
+            onClick={onCancel}
+            className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={handleConfirm}
+            disabled={!selection || selection.width < 10}
+            className="px-4 py-2 bg-[#2962ff] text-white rounded font-medium hover:bg-[#1e53e5] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Crop & Annotate
+          </button>
+        </div>
+      </div>
+      
+      <div className="flex-1 flex items-center justify-center overflow-hidden p-8 touch-none">
+        <div 
+          ref={containerRef}
+          className="relative inline-block shadow-2xl border border-gray-700/50 cursor-crosshair"
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onTouchStart={handleMouseDown}
+          onTouchMove={handleMouseMove}
+          onTouchEnd={handleMouseUp}
+        >
+          <img 
+            ref={imgRef}
+            src={imageSrc} 
+            alt="Original" 
+            className="max-h-[80vh] max-w-[90vw] object-contain pointer-events-none select-none"
+            draggable={false}
+          />
+          {selection && (
+            <>
+               <div className="absolute bg-black/60 inset-0 pointer-events-none" style={{
+                 clipPath: `polygon(0% 0%, 0% 100%, ${selection.x}px 100%, ${selection.x}px ${selection.y}px, ${selection.x + selection.width}px ${selection.y}px, ${selection.x + selection.width}px ${selection.y + selection.height}px, ${selection.x}px ${selection.y + selection.height}px, ${selection.x}px 100%, 100% 100%, 100% 0%)`
+               }}></div>
+               <div 
+                 className="absolute border-2 border-[#2962ff] bg-transparent pointer-events-none"
+                 style={{
+                   left: selection.x,
+                   top: selection.y,
+                   width: selection.width,
+                   height: selection.height,
+                   boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.6)'
+                 }}
+               >
+                 <div className="absolute -top-6 left-0 bg-[#2962ff] text-white text-[10px] px-1.5 py-0.5 rounded shadow">
+                    {Math.round(selection.width * (imgRef.current?.naturalWidth ? imgRef.current.naturalWidth / imgRef.current.width : 1))} x {Math.round(selection.height * (imgRef.current?.naturalHeight ? imgRef.current.naturalHeight / imgRef.current.height : 1))}
+                 </div>
+               </div>
+            </>
+          )}
+        </div>
+      </div>
+      
+      <div className="bg-[#1e222d] py-2 text-center text-xs text-gray-400 border-t border-[#2a2e39]">
+         Click and drag to crop the chart area you want the AI to analyze.
+      </div>
+    </div>
+  );
+};
+
+
+// --- Trade Ticket Component ---
+const TradeTicket: React.FC<{ 
+  meta: TradeMeta; 
+  sessionId: string | null;
+}> = ({ meta, sessionId }) => {
+  const [stopLoss, setStopLoss] = useState<string>(meta.stopLoss ? String(meta.stopLoss) : '');
+  const [takeProfit, setTakeProfit] = useState<string>(meta.takeProfit1 ? String(meta.takeProfit1) : '');
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
+
+  const handleExecute = async () => {
+    if (!sessionId || !meta.symbol) return;
+    setLoading(true);
+    setStatus('idle');
+    try {
+       await executeTrade({
+         sessionId,
+         symbol: meta.symbol,
+         side: meta.direction === 'short' ? 'sell' : 'buy',
+         size: 0.1, // Default lot size
+         stopLoss: parseFloat(stopLoss) || undefined,
+         takeProfit: parseFloat(takeProfit) || undefined
+       });
+       setStatus('success');
+    } catch (e) {
+       console.error(e);
+       setStatus('error');
+    } finally {
+       setLoading(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg overflow-hidden w-full max-w-[280px] shadow-sm">
+      <div className="bg-slate-100 px-3 py-2 border-b border-slate-200 flex justify-between items-center">
+        <div className="font-bold text-slate-700 flex items-center gap-2">
+          <span>{meta.symbol || 'SYMBOL'}</span>
+          {meta.direction && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${meta.direction === 'long' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+              {meta.direction}
+            </span>
+          )}
+        </div>
+        <div className="text-[10px] font-mono text-slate-500">{meta.timeframe || 'TF'}</div>
+      </div>
+
+      <div className="p-3 grid grid-cols-2 gap-y-3 gap-x-4 text-xs">
+          <div className="flex justify-between items-baseline">
+            <span className="text-slate-500 text-[10px] uppercase tracking-wider">Entry</span>
+            <span className="font-mono font-medium text-slate-800">Market</span>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <span className="text-slate-500 text-[10px] uppercase tracking-wider">Conf</span>
+            <span className="font-mono font-medium text-slate-800">{meta.confidence || '?'}%</span>
+          </div>
+
+          <div className="col-span-2 space-y-2 pt-2 border-t border-slate-200">
+             <div>
+                <label className="block text-[9px] uppercase text-slate-500 font-bold mb-1">Stop Loss</label>
+                <div className="relative">
+                   <input 
+                     type="number" 
+                     value={stopLoss} 
+                     onChange={e => setStopLoss(e.target.value)}
+                     className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs font-mono text-red-600 focus:border-red-500 focus:ring-1 focus:ring-red-500 outline-none transition-all"
+                     placeholder="Price"
+                   />
+                </div>
+             </div>
+             <div>
+                <label className="block text-[9px] uppercase text-slate-500 font-bold mb-1">Take Profit</label>
+                <div className="relative">
+                   <input 
+                     type="number" 
+                     value={takeProfit} 
+                     onChange={e => setTakeProfit(e.target.value)}
+                     className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs font-mono text-green-600 focus:border-green-500 focus:ring-1 focus:ring-green-500 outline-none transition-all"
+                     placeholder="Price"
+                   />
+                </div>
+             </div>
+          </div>
+          
+          <div className="col-span-2 mt-2">
+            {!sessionId ? (
+               <div className="text-center text-[10px] text-slate-400 py-1 border border-dashed border-slate-300 rounded">
+                  Connect Broker to Execute
+               </div>
+            ) : status === 'success' ? (
+              <div className="w-full bg-green-500/10 text-green-600 text-[10px] font-bold py-1.5 rounded flex items-center justify-center gap-1 border border-green-500/20">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                <span>ORDER FILLED</span>
+              </div>
+            ) : (
+              <div>
+                <button 
+                  onClick={handleExecute}
+                  disabled={loading}
+                  className={`w-full py-2 rounded text-[10px] font-bold text-white transition-all shadow-sm flex items-center justify-center gap-2 ${
+                     meta.direction === 'short' 
+                       ? 'bg-red-500 hover:bg-red-600 disabled:bg-red-300' 
+                       : 'bg-green-500 hover:bg-green-600 disabled:bg-green-300'
+                  }`}
+                >
+                  {loading ? (
+                     <>
+                       <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+                       <span>EXECUTING...</span>
+                     </>
+                  ) : (
+                     <>
+                       <span>EXECUTE {meta.direction?.toUpperCase()}</span>
+                       <span className="opacity-70 font-normal ml-1">(0.10)</span>
+                     </>
+                  )}
+                </button>
+                {status === 'error' && (
+                  <div className="text-[9px] text-red-500 text-center mt-1">Failed to place order.</div>
+                )}
+              </div>
+            )}
+          </div>
+      </div>
+    </div>
+  );
+};
+
+
+const ChatOverlay = forwardRef<ChatOverlayHandle, ChatOverlayProps>((props, ref) => {
+  const { 
+    isBrokerConnected, 
+    autoFocusSymbol,
+    brokerSessionId,
+    openPositions = []
+  } = props;
+
+  // Global Session State via Context (Replaces local state for persistence)
+  const { state: sessionState, addMessage } = useTradingSession();
+
+  // UI State
+  const [isOpen, setIsOpen] = useState(true);
+  const [inputValue, setInputValue] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [showPositions, setShowPositions] = useState(true);
+
+  // Vision / File State
+  const [isVisionActive, setIsVisionActive] = useState(false);
+  const [pendingFileImage, setPendingFileImage] = useState<{ mimeType: string; data: string } | null>(null);
+  
+  // Voice Input State
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  // Region Selection & Annotation State
+  const [showCropModal, setShowCropModal] = useState(false);
+  const [tempSnapshotForCrop, setTempSnapshotForCrop] = useState<string | null>(null);
+  const [showAnnotationModal, setShowAnnotationModal] = useState(false);
+  const [tempCroppedImage, setTempCroppedImage] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const { addEntry } = useJournal(); 
+  const { agentConfigs } = useAgentConfig(); 
+
+  // --- Map Session Messages to UI Format ---
+  const messages = useMemo<UIChatMessage[]>(() => {
+    return sessionState.messages.map(msg => ({
+      id: msg.id,
+      role: msg.sender === 'user' ? 'user' : 'assistant',
+      author: msg.sender === 'user' ? 'You' : (msg.agentId ? (AGENT_UI_META[msg.agentId]?.avatar + ' ' + (msg.agentId.replace(/[-_]/g, ' '))) : 'AI Agent'),
+      agentId: msg.agentId,
+      text: msg.content,
+      // Pass-through metadata if present
+      isError: false, 
+      tradeMeta: undefined, 
+      toolCalls: undefined 
+    }));
+  }, [sessionState.messages]);
+
+  // --- Voice Logic ---
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
+        recognition.onerror = (event: any) => {
+          console.error("Speech Recognition Error:", event.error);
+          setIsListening(false);
+        };
+        recognition.onresult = (event: any) => {
+          const transcript = event.results[0][0].transcript;
+          if (transcript) {
+            setInputValue(prev => {
+              const trimmed = prev.trim();
+              return trimmed ? `${trimmed} ${transcript}` : transcript;
+            });
+          }
+        };
+        recognitionRef.current = recognition;
+      }
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+      alert("Voice input is not supported in this browser.");
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current.stop();
+    } else {
+      recognitionRef.current.start();
+    }
+  };
+
+  useImperativeHandle(ref, () => ({
+    sendSystemMessageToAgent: async ({ prompt, agentId }) => {
+      // Direct pass-through logic for system messages
+      // This can be enhanced later to use the router too
+      handleSendMessageRaw(prompt, agentId);
+    }
+  }));
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+  
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isSending, isOpen]);
+
+  // --- Vision Logic ---
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  const toggleVision = async () => {
+    if (isVisionActive) {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      setIsVisionActive(false);
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: { displaySurface: 'browser' }, 
+          audio: false 
+        });
+        streamRef.current = stream;
+        stream.getVideoTracks()[0].onended = () => {
+          setIsVisionActive(false);
+          streamRef.current = null;
+        };
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setIsVisionActive(true);
+      } catch (err) {
+        console.error("Error starting screen capture:", err);
+        setIsVisionActive(false);
+      }
+    }
+  };
+
+  const captureFrame = (scale: number = 0.5): string | undefined => {
+    if (!videoRef.current || !isVisionActive) return undefined;
+    const canvas = document.createElement('canvas');
+    const video = videoRef.current;
+    if (video.videoWidth === 0 || video.videoHeight === 0) return undefined;
+    
+    canvas.width = video.videoWidth * scale;
+    canvas.height = video.videoHeight * scale;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return undefined;
+    
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+    return dataUrl; 
+  };
+
+  const handleCaptureRegion = () => {
+    const fullFrame = captureFrame(1.0); 
+    if (fullFrame) {
+      setTempSnapshotForCrop(fullFrame);
+      setShowCropModal(true);
+    }
+  };
+
+  const handleCropConfirm = (croppedBase64: string) => {
+    setTempCroppedImage(`data:image/jpeg;base64,${croppedBase64}`);
+    setShowCropModal(false);
+    setTempSnapshotForCrop(null);
+    setShowAnnotationModal(true);
+  };
+
+  const handleCropCancel = () => {
+    setShowCropModal(false);
+    setTempSnapshotForCrop(null);
+  };
+
+  const handleAnnotationConfirm = (finalBase64: string) => {
+    setPendingFileImage({ mimeType: 'image/jpeg', data: finalBase64 });
+    setShowAnnotationModal(false);
+    setTempCroppedImage(null);
+  };
+
+  const handleAnnotationCancel = () => {
+    setShowAnnotationModal(false);
+    setTempCroppedImage(null);
+  };
+
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === "string") {
+        const commaIndex = result.indexOf(",");
+        const base64 = commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
+        setPendingFileImage({ mimeType: file.type, data: base64 });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // --- Main Message Logic (Wired to Router) ---
+
+  const handleSendMessageRaw = async (text: string, agentId?: string) => {
+    if (!text.trim() && !pendingFileImage) return;
+    
+    // Add user message to context immediately
+    addMessage({
+      sender: 'user',
+      content: text,
+      agentId: undefined
+    });
+    
+    setIsSending(true);
+
+    try {
+      // Build history for API
+      // We take the current context state, plus the message we just added (conceptually)
+      // Note: addMessage updates state asynchronously, so we construct the history explicitly here
+      const historyForApi: AgentMessage[] = [
+        ...sessionState.messages,
+        {
+          id: `temp_user_${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          sender: 'user',
+          content: text,
+          agentId: undefined
+        }
+      ];
+
+      // Call Agent Router (Orchestrator)
+      // Default to strategist-main if no specific agent targeted
+      const targetAgentId = agentId || 'strategist-main';
+      
+      const response = await callAgentRouter({
+        agentId: targetAgentId,
+        userMessage: text,
+        sessionState: sessionState,
+        history: historyForApi
+      });
+
+      // Add agent response to context
+      addMessage({
+        sender: 'agent',
+        content: response.content,
+        agentId: response.agentId
+      });
+
+      // --- TOOL ACTIVITY HANDLING ---
+      // Check for structured tool calls returned by the new orchestrator
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        response.toolCalls.forEach(tc => {
+          recordToolActivity({
+            provider: 'gemini', // assuming default for now, purely for UI labeling
+            name: tc.toolName,
+            status: 'ok',
+            args: tc.args
+          });
+        });
+      }
+
+    } catch (e: any) {
+      console.error("Router Error", e);
+      addMessage({
+        sender: 'agent',
+        content: `Error: ${e.message || 'Failed to contact agent router.'}`,
+        agentId: 'system'
+      });
+    } finally {
+      setIsSending(false);
+      setPendingFileImage(null);
+    }
+  };
+
+  const handleSendMessage = () => {
+    handleSendMessageRaw(inputValue);
+    setInputValue('');
+  };
+
+  // --- RENDER ---
+
+  if (!isOpen) {
+    return (
+      <div className="w-12 h-full bg-[#1e222d] border-l border-[#2a2e39] flex flex-col items-center py-4 gap-4 z-30 shrink-0">
+        <button 
+          onClick={() => setIsOpen(true)}
+          className="w-8 h-8 rounded-lg bg-[#2962ff] text-white flex items-center justify-center hover:bg-[#1e53e5] transition-colors"
+          title="Open AI Team"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+        </button>
+        {isVisionActive && (
+           <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" title="Vision Active"></div>
+        )}
+        <div className="flex-1 w-[1px] bg-[#2a2e39]/50"></div>
+        <div className="writing-vertical-rl text-xs font-bold text-gray-400 tracking-wider uppercase rotate-180">
+          AI Squad
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="w-[400px] h-full bg-white flex flex-col border-l border-[#2a2e39] shadow-xl relative z-30 animate-fade-in-right shrink-0">
+        <video ref={videoRef} autoPlay playsInline muted className="hidden" />
+        <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
+        
+        {/* Header */}
+        <div className="h-14 px-4 border-b border-gray-100 flex justify-between items-center bg-white shadow-sm shrink-0">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+            <div>
+              <h2 className="font-bold text-gray-800 text-sm">AI Trading Squad</h2>
+              <p className="text-[10px] text-gray-400 font-medium">
+                Strategist · Risk · Quant · Execution
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button 
+              onClick={() => {
+                if (window.confirm("Clear all chat history?")) {
+                  // Not strictly clearing global context, but conceptually handled by context reset if implemented
+                  // For now, this is a placeholder or requires context clear capability
+                  console.warn("Clear history requested via UI");
+                }
+              }} 
+              className="text-gray-400 hover:text-red-500 p-1 rounded-md hover:bg-gray-100"
+              title="Clear Chat History"
+            >
+               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+            </button>
+
+            <button 
+              onClick={toggleVision}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors border ${
+                isVisionActive 
+                  ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100' 
+                  : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+              }`}
+              title={isVisionActive ? "Stop Watching Screen" : "Watch Screen"}
+            >
+              {isVisionActive ? (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                    </span>
+                    <span>Active</span>
+                  </>
+              ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <span>Vision</span>
+                  </>
+              )}
+            </button>
+            <button onClick={() => setIsOpen(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-md hover:bg-gray-100">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
+            </button>
+          </div>
+        </div>
+        
+        {/* Open Positions Panel (Collapsible) */}
+        {isBrokerConnected && openPositions.length > 0 && (
+          <div className="border-b border-gray-100 bg-slate-50 shrink-0">
+             <button 
+               onClick={() => setShowPositions(!showPositions)}
+               className="w-full flex items-center justify-between px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+             >
+               <div className="flex items-center gap-2">
+                 <span className="flex items-center justify-center w-5 h-5 bg-blue-100 text-blue-600 rounded-full text-[10px] font-bold">
+                   {openPositions.length}
+                 </span>
+                 <span>Active Positions</span>
+                 {openPositions.reduce((acc, p) => acc + p.pnl, 0) >= 0 
+                    ? <span className="text-green-600 font-bold ml-1">+${openPositions.reduce((acc, p) => acc + p.pnl, 0).toFixed(2)}</span>
+                    : <span className="text-red-500 font-bold ml-1">-${Math.abs(openPositions.reduce((acc, p) => acc + p.pnl, 0)).toFixed(2)}</span>
+                 }
+               </div>
+               <svg 
+                 xmlns="http://www.w3.org/2000/svg" 
+                 width="14" 
+                 height="14" 
+                 viewBox="0 0 24 24" 
+                 fill="none" 
+                 stroke="currentColor" 
+                 strokeWidth="2" 
+                 strokeLinecap="round" 
+                 strokeLinejoin="round"
+                 className={`transition-transform duration-200 ${showPositions ? 'rotate-180' : ''}`}
+               >
+                 <polyline points="6 9 12 15 18 9"></polyline>
+               </svg>
+             </button>
+             
+             {showPositions && (
+                <div className="max-h-40 overflow-y-auto border-t border-gray-100">
+                   {openPositions.map((pos) => (
+                      <div key={pos.id} className="px-4 py-2 border-b border-gray-100 last:border-0 hover:bg-white text-xs flex justify-between items-center group">
+                         <div>
+                            <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                               <span className={`text-[10px] px-1 rounded uppercase ${pos.side === 'buy' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                 {pos.side}
+                               </span>
+                               <span>{pos.symbol}</span>
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-0.5">
+                               Size: {pos.size} • Entry: {pos.entryPrice}
+                            </div>
+                         </div>
+                         <div className={`font-mono font-bold ${pos.pnl >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {pos.pnl >= 0 ? '+' : ''}{pos.pnl.toFixed(2)}
+                         </div>
+                      </div>
+                   ))}
+                </div>
+             )}
+          </div>
+        )}
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 bg-[#f8f9fa] space-y-4 scrollbar-thin">
+          {messages.length === 0 && (
+            <div className="text-center mt-10 p-4">
+              <div className="text-3xl mb-3">🤖 📈 🛡️ ⚡</div>
+              <p className="text-gray-500 text-sm font-medium">Ask your AI Team</p>
+              <p className="text-gray-400 text-xs mt-1">
+                Strategist, Risk Manager, and Quant Analyst are ready to assist.
+              </p>
+            </div>
+          )}
+
+          {messages.map((msg, idx) => {
+            const isUser = msg.role === 'user';
+            const uiMeta = (msg.agentId && AGENT_UI_META[msg.agentId]) 
+              ? AGENT_UI_META[msg.agentId] 
+              : AGENT_UI_META.default;
+
+            return (
+              <div key={idx} className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shadow-sm flex-shrink-0 ${isUser ? 'bg-[#131722] text-white' : 'bg-white border border-gray-100'}`}>
+                  {isUser ? '👤' : uiMeta.avatar}
+                </div>
+                
+                <div className={`flex flex-col max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
+                  {!isUser && msg.author && (
+                    <span className="text-[10px] font-bold text-gray-500 mb-1 ml-1 uppercase tracking-wider">
+                      {msg.author}
+                    </span>
+                  )}
+                  <div className={`p-3 rounded-2xl text-sm leading-relaxed shadow-sm whitespace-pre-wrap ${
+                    isUser 
+                      ? 'bg-[#2962ff] text-white rounded-tr-none' 
+                      : `bg-white text-gray-700 border border-gray-200 rounded-tl-none ${msg.isError ? 'border-red-200 bg-red-50 text-red-700' : ''}`
+                  }`}>
+                    {msg.text}
+
+                    {/* Trade Ticket (Interactive) */}
+                    {msg.tradeMeta && (
+                        <TradeTicket 
+                          meta={msg.tradeMeta} 
+                          sessionId={brokerSessionId || null} 
+                        />
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          
+          {isSending && (
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-full bg-white border border-gray-100 flex items-center justify-center">
+                <span className="animate-spin">⏳</span>
+              </div>
+              <div className="bg-white p-3 rounded-2xl rounded-tl-none border border-gray-100 shadow-sm flex items-center gap-2">
+                  <span className="text-xs text-gray-500 font-medium">Squad thinking...</span>
+                  <span className="flex space-x-1">
+                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></span>
+                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-75"></span>
+                    <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
+                  </span>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Vision Preview Area */}
+        {isVisionActive && (
+          <div className="px-4 pt-2 bg-white border-t border-gray-100">
+            <div className="bg-gray-900 rounded-lg p-2 flex items-center gap-3 shadow-inner">
+               <div className="relative w-16 h-10 bg-black rounded overflow-hidden flex-shrink-0 border border-gray-700">
+                 <video 
+                   ref={(ref) => {
+                     if (ref && streamRef.current) ref.srcObject = streamRef.current;
+                   }} 
+                   autoPlay 
+                   muted 
+                   className="w-full h-full object-cover opacity-80"
+                 />
+                 <div className="absolute inset-0 flex items-center justify-center">
+                   <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-red-500/50 shadow-lg"></div>
+                 </div>
+               </div>
+               <div className="flex-1 min-w-0">
+                  <div className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Live Feed Active</div>
+                  <div className="text-[10px] text-gray-500 truncate">Sharing window/screen</div>
+               </div>
+               <button 
+                 onClick={handleCaptureRegion}
+                 className="text-[10px] bg-[#2962ff] hover:bg-[#1e53e5] text-white px-2 py-1.5 rounded flex items-center gap-1 transition-colors font-medium shadow"
+               >
+                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                 Capture
+               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Input */}
+        <div className="p-4 bg-white border-t border-gray-100 shrink-0">
+          <div className="relative">
+            <textarea
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              placeholder={`Ask the team...`}
+              className="w-full bg-gray-50 border border-gray-200 rounded-2xl py-3 px-4 pr-24 text-sm focus:outline-none focus:border-[#2962ff] focus:ring-1 focus:ring-[#2962ff] transition-all text-gray-800 placeholder-gray-400 resize-none h-12 max-h-32 pl-10" 
+            />
+            {/* Attachment Button */}
+            <button 
+              onClick={handleFileClick}
+              className="absolute left-2 top-3 text-gray-400 hover:text-[#2962ff] p-1 transition-colors"
+              title="Attach Screenshot"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+
+            {/* Microphone Button */}
+            <button 
+              onClick={toggleListening}
+              className={`absolute right-12 top-2 p-1.5 rounded-xl transition-colors shadow-sm ${
+                isListening 
+                  ? 'bg-red-100 text-red-600 animate-pulse border border-red-200' 
+                  : 'bg-white text-gray-400 hover:text-gray-700 hover:bg-gray-100 border border-transparent'
+              }`}
+              title={isListening ? "Stop Listening" : "Voice Input"}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </button>
+
+            <button 
+              onClick={handleSendMessage}
+              disabled={(!inputValue.trim() && !pendingFileImage && !isVisionActive) || isSending}
+              className="absolute right-2 top-2 p-1.5 bg-[#2962ff] text-white rounded-xl hover:bg-[#1e53e5] disabled:opacity-50 transition-colors shadow-sm"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+          </div>
+          <div className="mt-2 px-1 flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] text-gray-400">
+                {isBrokerConnected ? 'Broker Connected' : 'Simulated Environment'}
+              </p>
+              {pendingFileImage && (
+                <div className="flex items-center gap-1 bg-blue-50 text-blue-600 px-2 py-0.5 rounded text-[10px] border border-blue-100">
+                  <span>📎 Image Attached</span>
+                  <button onClick={(e) => { e.stopPropagation(); setPendingFileImage(null); }} className="hover:text-blue-800">×</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      {/* CROP MODAL OVERLAY */}
+      {showCropModal && tempSnapshotForCrop && (
+        <CropModal 
+           imageSrc={tempSnapshotForCrop} 
+           onConfirm={handleCropConfirm} 
+           onCancel={handleCropCancel} 
+        />
+      )}
+
+      {/* ANNOTATION MODAL OVERLAY */}
+      {showAnnotationModal && tempCroppedImage && (
+        <AnnotationModal
+          imageSrc={tempCroppedImage}
+          onConfirm={handleAnnotationConfirm}
+          onCancel={handleAnnotationCancel}
+        />
+      )}
+    </>
+  );
+});
+
+export default ChatOverlay;

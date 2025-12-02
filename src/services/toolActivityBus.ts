@@ -9,6 +9,7 @@ export interface ToolActivityEvent {
   provider: ToolProvider;
   name: string;
   status: ToolStatus;
+  args?: any;
   argsSummary?: string;
   errorMessage?: string;
 }
@@ -44,6 +45,7 @@ export function recordToolActivity(params: {
     provider: params.provider,
     name: params.name,
     status: params.status,
+    args: params.args,
     argsSummary: makeArgsSummary(params.args),
     errorMessage: params.errorMessage,
   };
