@@ -1,6 +1,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
-import { GeminiLiveClient, GeminiLiveEvent } from "../services/GeminiLiveClient";
+import { GeminiLiveClient, GeminiLiveEvent, GeminiLiveToolResponse } from "../services/GeminiLiveClient";
+import { useTradingContextForAI } from "../hooks/useTradingContextForAI";
+
+const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
 const GeminiVoicePanel: React.FC = () => {
   const [connected, setConnected] = useState(false);
@@ -8,11 +11,17 @@ const GeminiVoicePanel: React.FC = () => {
   const [pendingInput, setPendingInput] = useState("");
   const clientRef = useRef<GeminiLiveClient | null>(null);
 
+  // We can grab client-side context (e.g. journal insights) here
+  const { journalInsights } = useTradingContextForAI();
+  // We'll store a ref to journalInsights so the callback can access the latest
+  const journalRef = useRef(journalInsights);
+  useEffect(() => { journalRef.current = journalInsights; }, [journalInsights]);
+
   useEffect(() => {
     const client = new GeminiLiveClient({
       systemPrompt:
-        "You are the Gemini side of Ant's AI trading squad. You help analyze US30/NAS100/XAU, explain confluence between HTF/LTF structure and the user's account risk. Keep answers tight.",
-      onEvent(evt: GeminiLiveEvent) {
+        "You are the Gemini Live side of the AI trading squad. You help analyze US30/NAS100/XAU, explain confluence between HTF/LTF structure and the user's account risk. You MUST use tools to get real data.",
+      onEvent: async (evt: GeminiLiveEvent) => {
         if (evt.type === "open") {
           setConnected(true);
           pushLog("✅ Gemini Live connected");
@@ -24,22 +33,105 @@ const GeminiVoicePanel: React.FC = () => {
         } else if (evt.type === "text") {
           pushLog(`Gemini: ${evt.text}`);
         } else if (evt.type === "tool_call") {
-          // Later: route to your backend tools (get account snapshot, autopilot review, etc.)
-          pushLog(`🛠 Tool call: ${evt.toolName} ${JSON.stringify(evt.args)}`);
+          const calls = evt.calls;
+          pushLog(`🛠 Tool call(s): ${calls.map(c => c.name).join(', ')}`);
+          
+          const responses: GeminiLiveToolResponse[] = [];
+
+          for (const call of calls) {
+            if (call.name === 'get_trading_context') {
+               try {
+                 // Fetch broker snapshot from backend
+                 const res = await fetch(`${API_BASE_URL}/api/broker/snapshot`);
+                 const json = await res.json();
+                 
+                 // Combine with local journal insights
+                 const combinedContext = {
+                    brokerSnapshot: json.snapshot,
+                    journalInsights: journalRef.current,
+                    scope: call.args.scope
+                 };
+                 
+                 responses.push({
+                   id: call.id,
+                   name: call.name,
+                   result: combinedContext
+                 });
+                 pushLog('Fetched trading context.');
+               } catch (e) {
+                 responses.push({
+                   id: call.id,
+                   name: call.name,
+                   result: { error: "Failed to fetch context" }
+                 });
+               }
+            } else if (call.name === 'run_autopilot_review') {
+               try {
+                 const { symbol, side, entry, stopLoss, takeProfit, riskPct, reasoningSummary } = call.args as any;
+                 
+                 // Construct a candidate plan object for the backend
+                 const candidatePlan = {
+                    symbol: symbol || "UNKNOWN",
+                    direction: String(side).toLowerCase() === "buy" ? "long" : "short",
+                    entry: Number(entry),
+                    stopLoss: Number(stopLoss),
+                    takeProfits: [Number(takeProfit)],
+                    riskPct: Number(riskPct),
+                    rationale: reasoningSummary || "Voice review request",
+                    timeframe: (call.args.timeFrame as string) || "15m"
+                 };
+
+                 // Fetch latest snapshot again for fresh check
+                 const snapRes = await fetch(`${API_BASE_URL}/api/broker/snapshot`);
+                 const snapJson = await snapRes.json();
+
+                 const reviewPayload = {
+                    brokerSnapshot: snapJson.snapshot,
+                    candidatePlan,
+                    journalInsights: journalRef.current,
+                    riskProfile: 'balanced'
+                 };
+
+                 const reviewRes = await fetch(`${API_BASE_URL}/api/openai/autopilot/review`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(reviewPayload)
+                 });
+                 
+                 const reviewJson = await reviewRes.json();
+                 
+                 responses.push({
+                   id: call.id,
+                   name: call.name,
+                   result: reviewJson
+                 });
+                 pushLog(`Autopilot review complete. Approved: ${reviewJson.approved}`);
+               } catch (e: any) {
+                 responses.push({
+                   id: call.id,
+                   name: call.name,
+                   result: { error: `Review failed: ${e.message}` }
+                 });
+               }
+            } else {
+               responses.push({
+                 id: call.id,
+                 name: call.name,
+                 result: { error: `Unknown tool: ${call.name}` }
+               });
+            }
+          }
+          
+          client.sendToolResponse(responses);
         }
       },
     });
 
     clientRef.current = client;
-    // Don't auto-connect to save cost/tokens, let user click connect if preferred, 
-    // but per prompt instructions we can auto-start or provide a button. 
-    // Let's provide a button for better UX inside the panel.
     
     return () => {
       client.close();
     };
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleConnect = () => {
@@ -103,13 +195,13 @@ const GeminiVoicePanel: React.FC = () => {
 
       {/* Log */}
       <div className="flex-1 overflow-auto bg-[#0a0c10] border border-gray-800 rounded p-2 space-y-1 mb-3 min-h-[150px] font-mono text-gray-300">
-        {log.length === 0 && <span className="text-gray-600 italic">Session log empty...</span>}
+        {log.length === 0 && <span className="text-gray-600 italic">Session log empty... Try saying "What is my account status?" or "Review a long on US30".</span>}
         {log.map((line, idx) => (
           <div key={idx} className="break-words">{line}</div>
         ))}
       </div>
 
-      {/* Text input for now – audio controls can go beside it later */}
+      {/* Text input */}
       <div className="flex gap-2">
         <input
           className="flex-1 bg-[#0a0c10] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#2962ff]"

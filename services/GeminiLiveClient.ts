@@ -2,12 +2,24 @@
 const LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
+export type GeminiLiveToolCall = {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+};
+
+export type GeminiLiveToolResponse = {
+  id: string;
+  name: string;
+  result: unknown;
+};
+
 export type GeminiLiveEvent =
   | { type: "open" }
   | { type: "close"; code: number; reason: string }
   | { type: "error"; error: any }
-  | { type: "text"; text: string }
-  | { type: "tool_call"; toolName: string; args: any }
+  | { type: "text"; text: string; isFinal?: boolean }
+  | { type: "tool_call"; calls: GeminiLiveToolCall[] }
   | { type: "raw"; data: any };
 
 export interface GeminiLiveClientOptions {
@@ -73,7 +85,6 @@ export class GeminiLiveClient {
     this.ws.onmessage = (evt) => {
       if (evt.data instanceof ArrayBuffer || evt.data instanceof Blob) {
         // This will be audio bytes when using native audio models.
-        // For now we just expose it as raw; you can hook it to an AudioContext later.
         this.emit({ type: "raw", data: evt.data });
         return;
       }
@@ -98,17 +109,82 @@ export class GeminiLiveClient {
         model: "models/gemini-2.0-flash-exp",
         generationConfig: {
           responseModalities: ["AUDIO", "TEXT"],
-          // You can add temperature, topP, etc.
+          maxOutputTokens: 1024,
+          temperature: 0.3,
         },
-        // This is where we make it your *trading squad*:
         systemInstruction: {
           parts: [{
             text: this.options.systemPrompt ??
-              "You are an AI trading co-pilot specialized in US30/NAS100/XAU, risk-managed prop firm style. You speak briefly and always consider account risk and daily drawdown before suggesting trades."
+              "You are the lead AI in a multi-agent trading squad. You MUST use tools when you need live trading context or when the user asks you to validate or execute a trade. Never guess account numbers or balances."
           }]
         },
         tools: [
-          // We’ll wire tools later (get_account_snapshot, run_autopilot_review, etc).
+          {
+            functionDeclarations: [
+              {
+                name: 'get_trading_context',
+                description:
+                  'Get the latest trading context: connected broker snapshot, current equity, open positions, journal stats, and app mode (sim/live).',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    scope: {
+                      type: 'string',
+                      enum: ['minimal', 'full'],
+                      description:
+                        'How much context to fetch. "minimal" = just equity + open trades. "full" = include journal stats and recent trade history.',
+                    },
+                  },
+                  required: ['scope'],
+                },
+              },
+              {
+                name: 'run_autopilot_review',
+                description:
+                  'Given a proposed trade from the squad, call the backend risk engine to evaluate if it passes risk rules and return a structured verdict.',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    symbol: {
+                      type: 'string',
+                      description: 'Symbol to trade, e.g. US30, NAS100, XAUUSD.',
+                    },
+                    side: {
+                      type: 'string',
+                      enum: ['buy', 'sell'],
+                      description: 'Direction of the trade.',
+                    },
+                    entry: {
+                      type: 'number',
+                      description: 'Planned entry price.',
+                    },
+                    stopLoss: {
+                      type: 'number',
+                      description: 'Stop loss price.',
+                    },
+                    takeProfit: {
+                      type: 'number',
+                      description: 'Take profit price or first target.',
+                    },
+                    riskPct: {
+                      type: 'number',
+                      description: 'Percent of account equity to risk on this trade (0–100).',
+                    },
+                    timeFrame: {
+                      type: 'string',
+                      description: 'Primary timeframe used for this setup, e.g. 1m, 15m, 1h.',
+                    },
+                    reasoningSummary: {
+                      type: 'string',
+                      description:
+                        'Short natural-language summary of why this trade makes sense (pattern, liquidity, narrative).',
+                    },
+                  },
+                  required: ['symbol', 'side', 'entry', 'stopLoss', 'riskPct'],
+                },
+              },
+            ],
+          },
         ],
       },
     };
@@ -119,7 +195,7 @@ export class GeminiLiveClient {
   /**
    * Send a user text message into the live session.
    */
-  sendText(text: string) {
+  sendText(text: string, endOfTurn = true) {
     const msg = {
       clientContent: {
         turns: [
@@ -128,7 +204,7 @@ export class GeminiLiveClient {
             parts: [{ text }],
           },
         ],
-        turnComplete: true
+        turnComplete: endOfTurn
       },
     };
 
@@ -136,52 +212,58 @@ export class GeminiLiveClient {
   }
 
   /**
-   * Placeholder for audio frames (16-bit PCM, 16kHz mono).
-   * Once you wire Web Audio to capture PCM16, you can send chunks here:
+   * Send tool responses back to Gemini.
    */
-  sendAudioPcm16(chunk: ArrayBuffer) {
-    // Helper to convert array buffer to base64 in browser
-    let binary = '';
-    const bytes = new Uint8Array(chunk);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const b64 = window.btoa(binary);
+  sendToolResponse(responses: GeminiLiveToolResponse[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!responses.length) return;
 
-    const msg = {
-      realtimeInput: {
-        mediaChunks: [
-          {
-            data: b64,
-            mimeType: "audio/pcm;rate=16000",
-          },
-        ],
+    const payload = {
+      toolResponse: {
+        functionResponses: responses.map((r) => ({
+          id: r.id,
+          name: r.name,
+          response: r.result,
+        })),
       },
     };
-    this.send(msg);
+
+    this.send(payload);
   }
 
   private handleServerMessage(msg: any) {
-    // Server messages have exactly one of: toolCall, candidate, serverContent, etc. 
-    if (msg.toolCall) {
-      const { name, args } = msg.toolCall;
-      this.emit({ type: "tool_call", toolName: name, args });
-      return;
-    }
-
     if (msg.serverContent) {
-        if (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) {
-            for (const part of msg.serverContent.modelTurn.parts) {
+        const serverContent = msg.serverContent;
+        if (serverContent.modelTurn && serverContent.modelTurn.parts) {
+            for (const part of serverContent.modelTurn.parts) {
                 if (part.text) {
-                    this.emit({ type: "text", text: part.text });
+                    const isFinal = !!serverContent.turnComplete;
+                    this.emit({ type: "text", text: part.text, isFinal });
                 }
             }
         }
         return;
     }
 
-    // Fallback: just bubble up raw if it has content we haven't handled specifically
+    if (msg.toolCall) {
+      const toolCall = msg.toolCall;
+      const functionCalls = Array.isArray(toolCall.functionCalls)
+        ? toolCall.functionCalls
+        : [];
+
+      const calls: GeminiLiveToolCall[] = functionCalls.map((fc: any) => ({
+        id: String(fc.id ?? ''),
+        name: String(fc.name ?? ''),
+        args: fc.args ?? {},
+      }));
+
+      if (calls.length > 0) {
+        this.emit({ type: "tool_call", calls });
+      }
+      return;
+    }
+
+    // Fallback
     this.emit({ type: "raw", data: msg });
   }
 
@@ -189,5 +271,6 @@ export class GeminiLiveClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.close();
     }
+    this.ws = null;
   }
 }
