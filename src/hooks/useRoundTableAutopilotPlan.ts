@@ -67,7 +67,7 @@ export function useRoundTableAutopilotPlan() {
         setLastResponse(data);
         return data;
       } catch (err: any) {
-        console.error('[useRoundTableAutopilotPlan] error:', err);
+        // Log handled by apiClient
         setError(err?.message ?? 'Unknown error');
         throw err;
       } finally {

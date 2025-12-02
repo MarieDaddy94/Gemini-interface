@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from "react";
 import {
   GeminiLiveClient,
@@ -6,8 +7,8 @@ import {
 } from "../services/GeminiLiveClient";
 import { useTradingContextForAI } from "../hooks/useTradingContextForAI";
 import { useRealtimeConfig } from "../context/RealtimeConfigContext";
+import { apiClient } from "../utils/apiClient";
 
-const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 const GEMINI_TARGET_SAMPLE_RATE = 16000;
 
 const GeminiVoicePanel: React.FC = () => {
@@ -26,12 +27,9 @@ const GeminiVoicePanel: React.FC = () => {
   const journalRef = useRef(journalInsights);
   useEffect(() => { journalRef.current = journalInsights; }, [journalInsights]);
 
-  // Use Realtime Config to get voice settings
   const { getVoiceProfile } = useRealtimeConfig();
-  // Using strategist profile as the main voice for the squad lead in this session
   const voiceProfile = getVoiceProfile("strategist");
 
-  // Optional: Allow manual override of API key from localStorage if needed
   const [apiKey, setApiKey] = useState("");
   useEffect(() => {
     const stored = localStorage.getItem("gemini_api_key");
@@ -42,11 +40,9 @@ const GeminiVoicePanel: React.FC = () => {
     setLog((prev) => [...prev, line].slice(-300));
   };
 
-  // ---- Gemini Live wiring ----------------------------------------------------
-
   useEffect(() => {
     const client = new GeminiLiveClient({
-      apiKey: apiKey, // If empty, client will fetch ephemeral token
+      apiKey: apiKey, 
       voiceName: voiceProfile.geminiPreset ?? "Aoede",
       onSetupComplete: () => {
         pushLog("✅ Gemini Live setup complete");
@@ -68,36 +64,22 @@ const GeminiVoicePanel: React.FC = () => {
           pushLog(`🛠 ToolCall → ${name}`);
 
           try {
-            // Check for new tools first
-            if (name === "get_chart_playbook" || name === "log_trade_journal") {
-               let url = "";
-               if (name === "get_chart_playbook") {
-                  const params = new URLSearchParams();
-                  if (call.args.symbol) params.set("symbol", String(call.args.symbol));
-                  if (call.args.timeframe) params.set("timeframe", String(call.args.timeframe));
-                  if (call.args.direction) params.set("direction", String(call.args.direction));
-                  url = `${API_BASE_URL}/api/tools/playbooks?${params.toString()}`;
-                  const res = await fetch(url);
-                  const json = await res.json();
-                  responses.push({ id: call.id, name, result: json });
-               } else {
-                  url = `${API_BASE_URL}/api/tools/journal-entry`;
-                  const res = await fetch(url, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(call.args),
-                  });
-                  const json = await res.json();
-                  responses.push({ id: call.id, name, result: json });
-               }
-               continue;
-            }
+            if (name === "get_chart_playbook") {
+               const params = new URLSearchParams();
+               if (call.args.symbol) params.set("symbol", String(call.args.symbol));
+               if (call.args.timeframe) params.set("timeframe", String(call.args.timeframe));
+               if (call.args.direction) params.set("direction", String(call.args.direction));
+               
+               const json = await apiClient.get<any>(`/api/tools/playbooks?${params.toString()}`);
+               responses.push({ id: call.id, name, result: json });
 
-            if (name === "get_trading_context") {
-              const res = await fetch(`${API_BASE_URL}/api/broker/snapshot`);
-              const json = await res.json();
+            } else if (name === "log_trade_journal") {
+               const json = await apiClient.post<any>('/api/tools/journal-entry', call.args);
+               responses.push({ id: call.id, name, result: json });
+
+            } else if (name === "get_trading_context") {
+              const json = await apiClient.get<{ snapshot: any }>('/api/broker/snapshot');
               
-              // Combine with journal stats
               const result = {
                  brokerSnapshot: json.snapshot,
                  journalInsights: journalRef.current,
@@ -108,9 +90,7 @@ const GeminiVoicePanel: React.FC = () => {
             } else if (name === "run_autopilot_review") {
               const { symbol, side, entry, stopLoss, takeProfit, riskPct, reasoningSummary } = call.args as any;
               
-              // Use broker snapshot for current balance context
-              const snapRes = await fetch(`${API_BASE_URL}/api/broker/snapshot`);
-              const snapJson = await snapRes.json();
+              const snapJson = await apiClient.get<{ snapshot: any }>('/api/broker/snapshot');
 
               const reviewPayload = {
                  brokerSnapshot: snapJson.snapshot,
@@ -128,25 +108,15 @@ const GeminiVoicePanel: React.FC = () => {
                  riskProfile: 'balanced'
               };
 
-              const res = await fetch(`${API_BASE_URL}/api/openai/autopilot/review`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(reviewPayload),
-              });
-              const json = await res.json();
+              const json = await apiClient.post<any>('/api/openai/autopilot/review', reviewPayload);
               responses.push({ id: call.id, name, result: json });
 
             } else if (name === "get_recent_vision_summary") {
-              const res = await fetch(`${API_BASE_URL}/api/gemini/vision/recent-summary`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
+              const json = await apiClient.post<any>('/api/gemini/vision/recent-summary', {
                   symbol: call.args.symbol,
                   timeframe: call.args.timeframe,
                   days: call.args.days ?? 3,
-                }),
               });
-              const json = await res.json();
               responses.push({ id: call.id, name, result: json });
 
             } else {
@@ -175,19 +145,13 @@ const GeminiVoicePanel: React.FC = () => {
 
     clientRef.current = client;
     
-    // Connect automatically on mount if desired, or let user click Connect.
-    // Here we wait for user to click "Connect".
-
     return () => {
       stopMic();
       client.close();
       clientRef.current = null;
       setConnected(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKey, voiceProfile]); // Re-init if voice profile changes
-
-  // ---- Connection Handlers --------------------------------------------------
+  }, [apiKey, voiceProfile]);
 
   const handleConnect = () => {
       pushLog("Connecting...");
@@ -204,8 +168,6 @@ const GeminiVoicePanel: React.FC = () => {
       pushLog("Disconnected");
   };
 
-  // ---- Text send -------------------------------------------------------------
-
   const handleSend = () => {
     const text = userInput.trim();
     if (!text || !clientRef.current) return;
@@ -213,8 +175,6 @@ const GeminiVoicePanel: React.FC = () => {
     clientRef.current.sendUserText(text, true);
     setUserInput("");
   };
-
-  // ---- Mic streaming ---------------------------------------------------------
 
   const startMic = async () => {
     if (micActive) return;
@@ -238,10 +198,7 @@ const GeminiVoicePanel: React.FC = () => {
       await audioCtx.resume();
 
       const source = audioCtx.createMediaStreamSource(stream);
-
-      // ScriptProcessorNode is deprecated but works everywhere; simple for now.
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0;
 
@@ -251,9 +208,7 @@ const GeminiVoicePanel: React.FC = () => {
 
       processor.onaudioprocess = (event: AudioProcessingEvent) => {
         if (!clientRef.current || !clientRef.current.isConnected) return;
-        const input = event.inputBuffer.getChannelData(0); // Float32 [-1,1]
-
-        // Convert Float32 -> Int16 PCM
+        const input = event.inputBuffer.getChannelData(0);
         const pcm16 = new Int16Array(input.length);
         for (let i = 0; i < input.length; i++) {
           let s = input[i];
@@ -261,7 +216,6 @@ const GeminiVoicePanel: React.FC = () => {
           else if (s < -1) s = -1;
           pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
-
         clientRef.current.sendRealtimeAudio(pcm16);
       };
 
@@ -269,7 +223,7 @@ const GeminiVoicePanel: React.FC = () => {
       processorRef.current = processor;
       streamRef.current = stream;
       setMicActive(true);
-      pushLog("🎙️ Mic streaming started (16kHz PCM → Gemini Live)");
+      pushLog("🎙️ Mic streaming started");
     } catch (err) {
       console.error("Mic start error", err);
       pushLog(`⚠️ Could not start microphone: ${String((err as any)?.message ?? err)}`);
@@ -278,25 +232,19 @@ const GeminiVoicePanel: React.FC = () => {
 
   const stopMic = () => {
     if (!micActive) return;
-
     processorRef.current?.disconnect();
     processorRef.current = null;
-
     if (audioCtxRef.current) {
       audioCtxRef.current.close().catch(() => {});
       audioCtxRef.current = null;
     }
-
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-
     setMicActive(false);
     pushLog("⏹️ Mic streaming stopped");
   };
-
-  // ---- Render ---------------------------------------------------------------
 
   return (
     <div className="flex flex-col h-full bg-[#161a25] text-xs p-4 rounded border border-[#2a2e39]">

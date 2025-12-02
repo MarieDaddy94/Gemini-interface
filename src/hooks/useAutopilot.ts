@@ -6,27 +6,8 @@ import {
   AutopilotExecuteResponse,
   BrokerSnapshot,
 } from '../types';
+import { apiClient } from '../utils/apiClient';
 import { logger } from '../services/logger';
-
-const API_BASE_URL =
-  (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
-
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE_URL}${url}`, {
-    ...(options || {}),
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`[useAutopilot] ${url} failed: ${res.status} ${res.statusText} – ${text}`);
-  }
-
-  return res.json() as Promise<T>;
-}
 
 export function useBrokerSnapshot(pollMs: number = 10_000) {
   const [snapshot, setSnapshot] = useState<BrokerSnapshot | null>(null);
@@ -38,7 +19,7 @@ export function useBrokerSnapshot(pollMs: number = 10_000) {
       // Only set loading true if we don't have data yet to avoid UI flicker on polling
       setLoading((prev) => !prev && !snapshot); 
       setError(null);
-      const data = await fetchJson<{ ok: boolean; snapshot: BrokerSnapshot }>('/api/broker/snapshot');
+      const data = await apiClient.get<{ ok: boolean; snapshot: BrokerSnapshot }>('/api/broker/snapshot');
       if (!data.ok) {
         throw new Error('Snapshot response ok=false');
       }
@@ -83,13 +64,14 @@ export function useAutopilotExecute() {
 
         logger.info(`Executing Autopilot Command [${mode}]`, { command, source });
 
-        const data = await fetchJson<AutopilotExecuteResponse>('/api/autopilot/execute', {
-          method: 'POST',
-          body: JSON.stringify({ mode, source, command }),
+        const data = await apiClient.post<AutopilotExecuteResponse>('/api/autopilot/execute', {
+          mode, 
+          source, 
+          command 
         });
 
         if (!data.ok) {
-          throw new Error(data as any);
+          throw new Error('Execute response ok=false'); // Should be caught by apiClient but double check
         }
 
         setLastResponse(data);

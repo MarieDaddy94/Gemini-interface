@@ -3,6 +3,7 @@ import {
   TradingSessionState,
   AgentMessage,
 } from '../types';
+import { apiClient } from '../utils/apiClient';
 
 export type AgentId = "quant_bot" | "trend_master" | "pattern_gpt" | "journal_coach";
 
@@ -97,31 +98,21 @@ export async function fetchAgentInsights(params: {
   accountId?: string | null;
   deskState?: any; // NEW: Desk Context
 }): Promise<AgentInsight[]> {
-  const response = await fetch(`${API_BASE_URL}/api/agents/chat`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: JSON.stringify({
-      agentIds: params.agentIds,
-      userMessage: params.userMessage,
-      chartContext: params.chartContext || {},
-      journalContext: params.journalContext || [],
-      screenshot: params.screenshot || null,
-      journalMode: params.journalMode || "live",
-      agentOverrides: params.agentOverrides,
-      accountId: params.accountId,
-      deskState: params.deskState
-    }),
+  const response = await apiClient.post<{ agents: any[] }>('/api/agents/chat', {
+    agentIds: params.agentIds,
+    userMessage: params.userMessage,
+    chartContext: params.chartContext || {},
+    journalContext: params.journalContext || [],
+    screenshot: params.screenshot || null,
+    journalMode: params.journalMode || "live",
+    agentOverrides: params.agentOverrides,
+    accountId: params.accountId,
+    deskState: params.deskState
+  }, {
+    headers: getAuthHeaders()
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `Agent API error (${response.status}): ${text || response.statusText}`
-    );
-  }
-
-  const json = await response.json();
-  const agents = Array.isArray(json.agents) ? json.agents : [];
+  const agents = Array.isArray(response.agents) ? response.agents : [];
 
   return agents.map((a: any) => ({
     agentId: a.agentId,
@@ -145,28 +136,18 @@ export async function fetchAgentDebrief(params: {
   accountId?: string | null;
   deskState?: any;
 }): Promise<AgentInsight[]> {
-  const response = await fetch(`${API_BASE_URL}/api/agents/debrief`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: JSON.stringify({
-      previousInsights: params.previousInsights,
-      chartContext: params.chartContext || {},
-      journalContext: params.journalContext || [],
-      agentOverrides: params.agentOverrides,
-      accountId: params.accountId,
-      deskState: params.deskState
-    }),
+  const response = await apiClient.post<{ insights: any[] }>('/api/agents/debrief', {
+    previousInsights: params.previousInsights,
+    chartContext: params.chartContext || {},
+    journalContext: params.journalContext || [],
+    agentOverrides: params.agentOverrides,
+    accountId: params.accountId,
+    deskState: params.deskState
+  }, {
+    headers: getAuthHeaders()
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `Agent Debrief error (${response.status}): ${text || response.statusText}`
-    );
-  }
-
-  const json = await response.json();
-  const insights = Array.isArray(json.insights) ? json.insights : [];
+  const insights = Array.isArray(response.insights) ? response.insights : [];
 
   return insights.map((a: any) => ({
     agentId: a.agentId,
@@ -205,19 +186,7 @@ export interface AgentRouterResponse {
 export async function callAgentRouter(
   payload: AgentRouterRequest
 ): Promise<AgentRouterResponse> {
-  const resp = await fetch(`${API_BASE_URL}/api/agent-router`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: JSON.stringify(payload),
+  return apiClient.post<AgentRouterResponse>('/api/agent-router', payload, {
+    headers: getAuthHeaders()
   });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(
-      `Agent router request failed (${resp.status}): ${resp.statusText} - ${text}`
-    );
-  }
-
-  const json = (await resp.json()) as AgentRouterResponse;
-  return json;
 }

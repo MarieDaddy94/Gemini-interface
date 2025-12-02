@@ -1,7 +1,7 @@
-import { voiceBus } from "./voiceBus";
-import type { VoiceProfile } from "../config/squadVoices";
 
-const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+import { voiceBus } from "./voiceBus";
+import { apiClient } from "../utils/apiClient";
+import type { VoiceProfile } from "../config/squadVoices";
 
 export async function speakAgentLine(
   roleLabel: string,
@@ -11,48 +11,29 @@ export async function speakAgentLine(
   const provider = profile.provider;
 
   try {
+    let json: any;
+    
     if (provider === "gemini") {
-      const res = await fetch(`${API_BASE_URL}/api/gemini/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          voicePreset: profile.geminiPreset,
-        }),
+      json = await apiClient.post<{ base64Pcm: string, sampleRate: number }>('/api/gemini/tts', {
+        text,
+        voicePreset: profile.geminiPreset,
       });
-      
-      if (!res.ok) throw new Error("Gemini TTS failed");
-      
-      const json = await res.json();
-      if (json.base64Pcm) {
-        voiceBus.enqueue({
-          speakerId: roleLabel as any,
-          base64Pcm: json.base64Pcm,
-          sampleRate: json.sampleRate ?? 24000,
-        });
-      }
     } else {
-      const res = await fetch(`${API_BASE_URL}/api/openai/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text,
-          voice: profile.openaiVoice,
-        }),
+      json = await apiClient.post<{ base64Pcm: string, sampleRate: number }>('/api/openai/tts', {
+        text,
+        voice: profile.openaiVoice,
       });
+    }
 
-      if (!res.ok) throw new Error("OpenAI TTS failed");
-
-      const json = await res.json();
-      if (json.base64Pcm) {
-        voiceBus.enqueue({
-          speakerId: roleLabel as any,
-          base64Pcm: json.base64Pcm,
-          sampleRate: json.sampleRate ?? 24000,
-        });
-      }
+    if (json.base64Pcm) {
+      voiceBus.enqueue({
+        speakerId: roleLabel as any,
+        base64Pcm: json.base64Pcm,
+        sampleRate: json.sampleRate ?? 24000,
+      });
     }
   } catch (e) {
-    console.error(`Failed to speak agent line (${roleLabel}):`, e);
+    // We already log in apiClient, but here we might want to just suppress UI alerts for TTS failure
+    console.warn(`Failed to speak agent line (${roleLabel})`, e);
   }
 }
