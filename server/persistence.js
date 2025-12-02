@@ -33,7 +33,7 @@ class PersistenceLayer {
         )
       `);
 
-      // Journals Table: Stores the entire journal array as JSON (for now, to match existing logic)
+      // Journals Table: Stores the entire journal array as JSON (legacy compat)
       this.db.run(`
         CREATE TABLE IF NOT EXISTS journals (
           sessionId TEXT PRIMARY KEY,
@@ -50,6 +50,33 @@ class PersistenceLayer {
           createdAt TEXT,
           source TEXT,
           summaryJson TEXT
+        )
+      `);
+
+      // --- PHASE K NEW TABLES ---
+
+      // Model Policy Table: Stores the active lineup of models per role
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS model_policies (
+          id TEXT PRIMARY KEY,
+          createdAt TEXT,
+          activeLineupJson TEXT,
+          recommendationsJson TEXT,
+          isActive INTEGER DEFAULT 0
+        )
+      `);
+
+      // Desk Sessions Table: Narratives and daily stats
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS desk_sessions (
+          id TEXT PRIMARY KEY,
+          date TEXT,
+          startTime TEXT,
+          endTime TEXT,
+          summary TEXT,
+          tags TEXT,
+          statsJson TEXT,
+          rawEventsJson TEXT
         )
       `);
     });
@@ -170,6 +197,62 @@ class PersistenceLayer {
             ...rest 
         };
     });
+  }
+
+  // --- MODEL POLICIES ---
+
+  async getActiveModelPolicy() {
+    const row = await this.get('SELECT * FROM model_policies WHERE isActive = 1 ORDER BY createdAt DESC LIMIT 1');
+    if (!row) return null;
+    try {
+      return {
+        id: row.id,
+        createdAt: row.createdAt,
+        lineup: JSON.parse(row.activeLineupJson),
+        recommendations: JSON.parse(row.recommendationsJson || '[]')
+      };
+    } catch (e) { return null; }
+  }
+
+  async saveModelPolicy(policy) {
+    // Set all others inactive first
+    await this.run('UPDATE model_policies SET isActive = 0');
+    
+    const lineupJson = JSON.stringify(policy.lineup);
+    const recsJson = JSON.stringify(policy.recommendations || []);
+    
+    await this.run(
+      `INSERT INTO model_policies (id, createdAt, activeLineupJson, recommendationsJson, isActive) VALUES (?, ?, ?, ?, 1)`,
+      [policy.id, policy.createdAt, lineupJson, recsJson]
+    );
+  }
+
+  // --- DESK SESSIONS ---
+
+  async getDeskSessions(limit = 7) {
+    const rows = await this.all('SELECT * FROM desk_sessions ORDER BY date DESC LIMIT ?', [limit]);
+    return rows.map(r => {
+      let stats = {}, rawEvents = [];
+      try { stats = JSON.parse(r.statsJson || '{}'); } catch(e){}
+      try { rawEvents = JSON.parse(r.rawEventsJson || '[]'); } catch(e){}
+      return {
+        ...r,
+        stats,
+        rawEvents
+      };
+    });
+  }
+
+  async saveDeskSession(session) {
+    const statsJson = JSON.stringify(session.stats || {});
+    const eventsJson = JSON.stringify(session.rawEvents || []);
+    
+    await this.run(
+      `INSERT INTO desk_sessions (id, date, startTime, endTime, summary, tags, statsJson, rawEventsJson) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET summary=excluded.summary, statsJson=excluded.statsJson, tags=excluded.tags, endTime=excluded.endTime`,
+      [session.id, session.date, session.startTime, session.endTime, session.summary, session.tags, statsJson, eventsJson]
+    );
   }
 }
 

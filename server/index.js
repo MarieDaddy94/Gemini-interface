@@ -40,7 +40,9 @@ const journalRouter = require('./routes/journalRouter');
 const performanceRouter = require('./routes/performanceRouter'); 
 const ttsRouter = require('./routes/ttsRouter');
 const { router: deskRouter } = require('./routes/deskRouter'); 
-const deskPolicyRouter = require('./routes/deskPolicyRouter'); // NEW
+const deskPolicyRouter = require('./routes/deskPolicyRouter');
+const modelPolicyRouter = require('./routes/modelPolicyRouter'); // NEW
+const sessionRouter = require('./routes/sessionRouter'); // NEW
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -67,7 +69,7 @@ const {
   modifyPosition,
 } = require('./broker/tradelockerClient');
 
-// NEW: Poller
+// Poller
 const { startTradeLockerPolling } = require('./broker/tradelockerPoller');
 
 // Phase 4: Autopilot
@@ -140,7 +142,9 @@ app.use('/api/gemini/', aiLimiter);
 app.use('/api/playbooks', aiLimiter);
 app.use('/api/journal', journalRouter);
 app.use('/api/performance', performanceRouter); 
-app.use('/api/desk/policy', deskPolicyRouter); // NEW MOUNT
+app.use('/api/desk/policy', deskPolicyRouter); 
+app.use('/api/model-policy', modelPolicyRouter); // NEW MOUNT
+app.use('/api/session', sessionRouter); // NEW MOUNT
 app.use('/api/tools/', aiLimiter);
 app.use('/api/desk/', aiLimiter);
 
@@ -209,8 +213,7 @@ app.post("/api/tools/journal-entry", async (req, res) => {
   }
 });
 
-// POST /api/tools/autopilot-proposal (Wrapper for computeAutopilotProposal)
-// Kept for simple tool usage if needed, though most logic is in Orchestrator now
+// POST /api/tools/autopilot-proposal
 const { computeAutopilotProposal } = require("./toolsData");
 app.post("/api/tools/autopilot-proposal", (req, res) => {
   try {
