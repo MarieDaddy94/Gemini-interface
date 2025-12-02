@@ -3,6 +3,8 @@
 
 
 
+
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -23,6 +25,9 @@ const { setupMarketData, getPrice } = require('./marketData');
 // --- Import OpenAI Routers ---
 const openaiRealtimeRouter = require('./routes/openaiRealtimeRouter');
 const openaiAutopilotRouter = require('./routes/openaiAutopilotRouter');
+
+// --- Import Gemini Routers ---
+const geminiAutopilotRouter = require('./routes/geminiAutopilotRouter');
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -107,6 +112,7 @@ app.use('/api/roundtable/', aiLimiter);
 app.use('/api/vision/', aiLimiter); 
 app.use('/api/history/', aiLimiter);
 app.use('/api/openai/', aiLimiter);
+app.use('/api/gemini/', aiLimiter); // Rate limit gemini too
 
 app.use(
   cors({
@@ -124,6 +130,9 @@ app.use('/api/vision', visionRouter);
 // Mount OpenAI Routers
 app.use('/api/openai', openaiRealtimeRouter);
 app.use('/api/openai', openaiAutopilotRouter);
+
+// Mount Gemini Router
+app.use('/api/gemini', geminiAutopilotRouter);
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {

@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
+import { useTradingContextForAI } from '../hooks/useTradingContextForAI';
 import {
   AutopilotMode,
   RiskConfig,
@@ -14,6 +15,7 @@ import { previewProposedTrade } from '../services/riskApi';
 import {
   planAutopilotTrade as planAutopilotTradeApi,
   AutopilotPlanResponse,
+  AutopilotProvider,
 } from '../services/autopilotApi';
 import {
   executeAutopilotPlanSimApi,
@@ -34,11 +36,16 @@ const RiskAutopilotPanel: React.FC = () => {
     addMessage,
   } = useTradingSession();
 
+  // Use this hook to get broker snapshot for Gemini
+  const { brokerSnapshot } = useTradingContextForAI();
+
   const { addEntry, updateExecution } = useAutopilotJournal();
 
   const [proposedDirection, setProposedDirection] =
     useState<TradeDirection>('long');
   const [proposedRiskPercent, setProposedRiskPercent] = useState<number>(0.5);
+  
+  const [plannerProvider, setPlannerProvider] = useState<AutopilotProvider>('standard');
 
   // Risk preview state
   const [previewResult, setPreviewResult] = useState<RiskCheckResult | null>(
@@ -164,11 +171,16 @@ const RiskAutopilotPanel: React.FC = () => {
 
     setIsPlanning(true);
     try {
-      const plan = await planAutopilotTradeApi(state, {
-        direction: proposedDirection,
-        riskPercent,
-        notes: 'Manual Autopilot plan from RiskAutopilotPanel',
-      });
+      const plan = await planAutopilotTradeApi(
+        state, 
+        {
+          direction: proposedDirection,
+          riskPercent,
+          notes: 'Manual Autopilot plan from RiskAutopilotPanel',
+        },
+        plannerProvider,
+        brokerSnapshot // Pass snapshot for Gemini
+      );
 
       setAutopilotPlan(plan);
 
@@ -194,7 +206,7 @@ const RiskAutopilotPanel: React.FC = () => {
         const instrumentLabel =
           state.instrument.displayName || state.instrument.symbol;
 
-        let content = `Autopilot Execution Plan\n\n`;
+        let content = `Autopilot Execution Plan (${plannerProvider.toUpperCase()})\n\n`;
         content += `Instrument: ${instrumentLabel}\n`;
         content += `Direction: ${proposedDirection.toUpperCase()}\n`;
         content += `Risk: ${riskPercent.toFixed(2)}% of equity\n`;
@@ -692,7 +704,20 @@ const RiskAutopilotPanel: React.FC = () => {
         {/* Autopilot Execution Plan */}
         <section className="space-y-1">
           <div className="font-semibold text-gray-300">
-            Autopilot Execution Plan (Risk + Execution Bot)
+            Autopilot Execution Plan
+          </div>
+
+          {/* Provider Selector */}
+          <div className="flex items-center gap-2 mb-2">
+             <label className="text-[11px] text-gray-400">Planner:</label>
+             <select
+               value={plannerProvider}
+               onChange={(e) => setPlannerProvider(e.target.value as AutopilotProvider)}
+               className="bg-[#101018] border border-gray-700 rounded-md px-2 py-1 text-[11px]"
+             >
+               <option value="standard">Standard (Execution Bot)</option>
+               <option value="gemini">Gemini 2.5 Pro (Deep Reasoning)</option>
+             </select>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -712,7 +737,7 @@ const RiskAutopilotPanel: React.FC = () => {
                 checked={sendPlanToChat}
                 onChange={(e) => setSendPlanToChat(e.target.checked)}
               />
-              <span>Send plan to Chat as Execution Bot</span>
+              <span>Send plan to Chat</span>
             </label>
           </div>
 
@@ -727,7 +752,7 @@ const RiskAutopilotPanel: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <span className="font-semibold">
-                    Risk verdict:
+                    Verdict:
                   </span>{' '}
                   {autopilotPlan.allowed ? (
                     <span className="text-green-400">ALLOWED</span>
@@ -737,12 +762,12 @@ const RiskAutopilotPanel: React.FC = () => {
                 </div>
                 <div>
                   <span className="font-semibold">
-                    Execution Bot:
+                    Rec:
                   </span>{' '}
                   {autopilotPlan.recommended ? (
-                    <span className="text-emerald-400">RECOMMENDS</span>
+                    <span className="text-emerald-400">YES</span>
                   ) : (
-                    <span className="text-yellow-400">DOES NOT RECOMMEND</span>
+                    <span className="text-yellow-400">NO</span>
                   )}
                 </div>
               </div>
