@@ -14,176 +14,151 @@ export type GeminiLiveToolResponse = {
   result: unknown;
 };
 
-export type GeminiLiveEvent =
-  | { type: "open" }
-  | { type: "close"; code: number; reason: string }
-  | { type: "error"; error: any }
-  | { type: "text"; text: string; isFinal?: boolean }
-  | { type: "tool_call"; calls: GeminiLiveToolCall[] }
-  | { type: "raw"; data: any };
-
-export interface GeminiLiveClientOptions {
-  onEvent?: (evt: GeminiLiveEvent) => void;
-  systemPrompt?: string;
-}
+type GeminiLiveClientOptions = {
+  apiKey?: string;
+  model?: string;
+  onServerText?: (text: string, isFinal: boolean) => void;
+  onSetupComplete?: () => void;
+  onError?: (err: unknown) => void;
+  onToolCall?: (calls: GeminiLiveToolCall[]) => void | Promise<void>;
+};
 
 export class GeminiLiveClient {
-  private ws: WebSocket | null = null;
-  private options: GeminiLiveClientOptions;
+  private apiKey?: string;
+  private model: string;
+  private socket: WebSocket | null = null;
 
-  constructor(options: GeminiLiveClientOptions = {}) {
-    this.options = options;
+  private onServerText?: (text: string, isFinal: boolean) => void;
+  private onSetupComplete?: () => void;
+  private onError?: (err: unknown) => void;
+  private onToolCall?: (calls: GeminiLiveToolCall[]) => void | Promise<void>;
+
+  constructor(opts: GeminiLiveClientOptions) {
+    this.apiKey = opts.apiKey;
+    this.model = opts.model ?? "models/gemini-2.5-flash-live";
+    this.onServerText = opts.onServerText;
+    this.onSetupComplete = opts.onSetupComplete;
+    this.onError = opts.onError;
+    this.onToolCall = opts.onToolCall;
   }
 
-  private emit(evt: GeminiLiveEvent) {
-    this.options.onEvent?.(evt);
+  get isConnected() {
+    return !!this.socket && this.socket.readyState === WebSocket.OPEN;
   }
 
   async connect() {
-    const API_BASE_URL =
-      (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
 
-    const tokenRes = await fetch(`${API_BASE_URL}/api/gemini/live/ephemeral-token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
+    let url = "";
+    if (this.apiKey) {
+      url = `${LIVE_WS_URL}?key=${this.apiKey}`;
+    } else {
+      // Fetch ephemeral token from backend
+      const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+      const tokenRes = await fetch(`${API_BASE_URL}/api/gemini/live/ephemeral-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
 
-    if (!tokenRes.ok) {
-      const text = await tokenRes.text();
-      throw new Error(
-        `Failed to get Gemini ephemeral token: ${tokenRes.status} ${text}`
-      );
+      if (!tokenRes.ok) {
+        const text = await tokenRes.text();
+        throw new Error(`Failed to get Gemini ephemeral token: ${tokenRes.status} ${text}`);
+      }
+
+      const { token } = await tokenRes.json();
+      url = `${LIVE_WS_URL}?key=${encodeURIComponent(token)}`;
     }
 
-    const { token } = await tokenRes.json();
+    this.socket = new WebSocket(url);
 
-    const url = `${LIVE_WS_URL}?key=${encodeURIComponent(token)}`;
-    this.ws = new WebSocket(url);
-
-    this.ws.binaryType = "arraybuffer";
-
-    this.ws.onopen = () => {
-      this.emit({ type: "open" });
-      this.sendSetup();
-    };
-
-    this.ws.onclose = (evt) => {
-      this.emit({
-        type: "close",
-        code: evt.code,
-        reason: evt.reason,
-      });
-    };
-
-    this.ws.onerror = (err) => {
-      this.emit({ type: "error", error: err });
-    };
-
-    this.ws.onmessage = (evt) => {
-      if (evt.data instanceof ArrayBuffer || evt.data instanceof Blob) {
-        this.emit({ type: "raw", data: evt.data });
-        return;
-      }
-
+    this.socket.onopen = () => this.sendSetup();
+    this.socket.onmessage = (evt) => {
       try {
-        const json = JSON.parse(evt.data as string);
-        this.handleServerMessage(json);
-      } catch (e) {
-        console.warn("[GeminiLiveClient] Non-JSON message:", evt.data);
+        const msg = JSON.parse(evt.data);
+        this.handleServerMessage(msg);
+      } catch (err) {
+        this.onError?.(err);
       }
+    };
+    this.socket.onerror = (evt) => this.onError?.(evt);
+    this.socket.onclose = () => {
+      this.socket = null;
     };
   }
 
-  private send(obj: any) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify(obj));
+  close() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.close();
+    }
+    this.socket = null;
   }
 
   private sendSetup() {
-    const setup = {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+
+    const setupPayload = {
       setup: {
-        model: "models/gemini-2.0-flash-exp",
+        model: this.model,
         generationConfig: {
-          responseModalities: ["AUDIO", "TEXT"],
+          candidateCount: 1,
           maxOutputTokens: 1024,
           temperature: 0.3,
+          responseModalities: ["AUDIO", "TEXT"],
         },
         systemInstruction: {
-          parts: [{
-            text: this.options.systemPrompt ??
-              "You are the lead AI in a multi-agent trading squad. You MUST use tools when you need live trading context, playbooks, or recent history. Never guess account numbers or balances."
-          }]
+          role: "system",
+          parts: [
+            {
+              text:
+                "You are a prop-firm style AI trading squad. " +
+                "You MUST call tools to get live trading context, recent chart structure, " +
+                "playbooks, and to log trades into the journal before suggesting heavy risk. " +
+                "Never guess balances or trade history.",
+            },
+          ],
         },
         tools: [
           {
             functionDeclarations: [
               {
-                name: 'get_trading_context',
+                name: "get_trading_context",
                 description:
-                  'Get the latest trading context: connected broker snapshot, current equity, open positions, journal stats, and app mode (sim/live).',
+                  "Fetch latest trading context: equity, open positions, risk limits, journal stats.",
                 parameters: {
-                  type: 'object',
+                  type: "object",
                   properties: {
                     scope: {
-                      type: 'string',
-                      enum: ['minimal', 'full'],
-                      description:
-                        'How much context to fetch. "minimal" = just equity + open trades. "full" = include journal stats and recent trade history.',
+                      type: "string",
+                      enum: ["minimal", "full"],
                     },
                   },
-                  required: ['scope'],
+                  required: ["scope"],
                 },
               },
               {
-                name: 'run_autopilot_review',
+                name: "run_autopilot_review",
                 description:
-                  'Given a proposed trade from the squad, call the backend risk engine to evaluate if it passes risk rules and return a structured verdict.',
+                  "Send a proposed trade to the backend risk engine for approval and adjusted parameters.",
                 parameters: {
-                  type: 'object',
+                  type: "object",
                   properties: {
-                    symbol: {
-                      type: 'string',
-                      description: 'Symbol to trade, e.g. US30, NAS100, XAUUSD.',
-                    },
-                    side: {
-                      type: 'string',
-                      enum: ['buy', 'sell'],
-                      description: 'Direction of the trade.',
-                    },
-                    entry: {
-                      type: 'number',
-                      description: 'Planned entry price.',
-                    },
-                    stopLoss: {
-                      type: 'number',
-                      description: 'Stop loss price.',
-                    },
-                    takeProfit: {
-                      type: 'number',
-                      description: 'Take profit price or first target.',
-                    },
-                    riskPct: {
-                      type: 'number',
-                      description: 'Percent of account equity to risk on this trade (0–100).',
-                    },
-                    timeFrame: {
-                      type: 'string',
-                      description: 'Primary timeframe used for this setup, e.g. 1m, 15m, 1h.',
-                    },
-                    reasoningSummary: {
-                      type: 'string',
-                      description:
-                        'Short natural-language summary of why this trade makes sense (pattern, liquidity, narrative).',
-                    },
+                    symbol: { type: "string" },
+                    side: { type: "string", enum: ["buy", "sell"] },
+                    entry: { type: "number" },
+                    stopLoss: { type: "number" },
+                    takeProfit: { type: "number" },
+                    riskPct: { type: "number" },
+                    timeFrame: { type: "string" },
+                    reasoningSummary: { type: "string" },
                   },
-                  required: ['symbol', 'side', 'entry', 'stopLoss', 'riskPct'],
+                  required: ["symbol", "side", "entry", "stopLoss", "riskPct"],
                 },
               },
               {
                 name: "get_chart_playbook",
                 description:
-                  "Retrieve the trader's saved playbooks for the current symbol/timeframe to see how they usually trade this setup.",
+                  "Retrieve the trader's saved playbooks for the current symbol/timeframe.",
                 parameters: {
                   type: "object",
                   properties: {
@@ -239,7 +214,7 @@ export class GeminiLiveClient {
               {
                 name: "get_recent_vision_summary",
                 description:
-                  "Get a stitched summary of the last few days of chart vision for the symbol/timeframe the user is asking about.",
+                  "Get a stitched summary of the last few days of chart vision for the symbol/timeframe.",
                 parameters: {
                   type: "object",
                   properties: {
@@ -266,11 +241,12 @@ export class GeminiLiveClient {
       },
     };
 
-    this.send(setup);
+    this.socket.send(JSON.stringify(setupPayload));
   }
 
-  sendText(text: string, endOfTurn = true) {
-    const msg = {
+  sendUserText(text: string, endOfTurn = true) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const payload = {
       clientContent: {
         turns: [
           {
@@ -278,15 +254,53 @@ export class GeminiLiveClient {
             parts: [{ text }],
           },
         ],
-        turnComplete: endOfTurn
+        turnComplete: endOfTurn,
+      },
+    };
+    this.socket.send(JSON.stringify(payload));
+  }
+
+  sendRealtimeText(textChunk: string) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    const payload = {
+      realtimeInput: {
+        text: textChunk,
+      },
+    };
+    this.socket.send(JSON.stringify(payload));
+  }
+
+  /**
+   * Send a chunk of 16-bit PCM mono audio at 16kHz.
+   * This wraps it in realtimeInput.mediaChunks with mimeType audio/pcm;rate=16000
+   */
+  sendRealtimeAudio(pcm16: Int16Array) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    if (!pcm16.length) return;
+
+    const bytes = new Uint8Array(pcm16.buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    const payload = {
+      realtimeInput: {
+        mediaChunks: [
+          {
+            mimeType: "audio/pcm;rate=16000",
+            data: base64,
+          },
+        ],
       },
     };
 
-    this.send(msg);
+    this.socket.send(JSON.stringify(payload));
   }
 
   sendToolResponse(responses: GeminiLiveToolResponse[]) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (!responses.length) return;
 
     const payload = {
@@ -299,48 +313,44 @@ export class GeminiLiveClient {
       },
     };
 
-    this.send(payload);
+    this.socket.send(JSON.stringify(payload));
   }
 
   private handleServerMessage(msg: any) {
-    if (msg.serverContent) {
-        const serverContent = msg.serverContent;
-        if (serverContent.modelTurn && serverContent.modelTurn.parts) {
-            for (const part of serverContent.modelTurn.parts) {
-                if (part.text) {
-                    const isFinal = !!serverContent.turnComplete;
-                    this.emit({ type: "text", text: part.text, isFinal });
-                }
-            }
-        }
-        return;
+    if (msg.setupComplete) {
+      this.onSetupComplete?.();
+      return;
     }
 
-    if (msg.toolCall) {
-      const toolCall = msg.toolCall;
-      const functionCalls = Array.isArray(toolCall.functionCalls)
-        ? toolCall.functionCalls
-        : [];
-
-      const calls: GeminiLiveToolCall[] = functionCalls.map((fc: any) => ({
-        id: String(fc.id ?? ''),
-        name: String(fc.name ?? ''),
-        args: fc.args ?? {},
-      }));
-
-      if (calls.length > 0) {
-        this.emit({ type: "tool_call", calls });
+    if (msg.serverContent) {
+      const sc = msg.serverContent;
+      const mt = sc.modelTurn;
+      if (mt && Array.isArray(mt.parts)) {
+        let text = "";
+        for (const part of mt.parts) {
+          if (typeof part.text === "string") text += part.text;
+        }
+        if (text) {
+          const isFinal = !!sc.turnComplete || !!sc.generationComplete;
+          this.onServerText?.(text, isFinal);
+        }
       }
       return;
     }
 
-    this.emit({ type: "raw", data: msg });
-  }
-
-  close() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.close();
+    if (msg.toolCall) {
+      const fc = Array.isArray(msg.toolCall.functionCalls)
+        ? msg.toolCall.functionCalls
+        : [];
+      const calls: GeminiLiveToolCall[] = fc.map((c: any) => ({
+        id: String(c.id ?? ""),
+        name: String(c.name ?? ""),
+        args: c.args ?? {},
+      }));
+      if (calls.length && this.onToolCall) {
+        void this.onToolCall(calls);
+      }
+      return;
     }
-    this.ws = null;
   }
 }
