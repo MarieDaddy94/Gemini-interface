@@ -11,16 +11,14 @@ const GeminiVoicePanel: React.FC = () => {
   const [pendingInput, setPendingInput] = useState("");
   const clientRef = useRef<GeminiLiveClient | null>(null);
 
-  // We can grab client-side context (e.g. journal insights) here
   const { journalInsights } = useTradingContextForAI();
-  // We'll store a ref to journalInsights so the callback can access the latest
   const journalRef = useRef(journalInsights);
   useEffect(() => { journalRef.current = journalInsights; }, [journalInsights]);
 
   useEffect(() => {
     const client = new GeminiLiveClient({
       systemPrompt:
-        "You are the Gemini Live side of the AI trading squad. You help analyze US30/NAS100/XAU, explain confluence between HTF/LTF structure and the user's account risk. You MUST use tools to get real data.",
+        "You are the Gemini Live side of the AI trading squad. You help analyze US30/NAS100/XAU, explain confluence between HTF/LTF structure and the user's account risk. You MUST use tools to get real data, playbooks, and journal history.",
       onEvent: async (evt: GeminiLiveEvent) => {
         if (evt.type === "open") {
           setConnected(true);
@@ -39,37 +37,23 @@ const GeminiVoicePanel: React.FC = () => {
           const responses: GeminiLiveToolResponse[] = [];
 
           for (const call of calls) {
-            if (call.name === 'get_trading_context') {
-               try {
-                 // Fetch broker snapshot from backend
+            try {
+              if (call.name === 'get_trading_context') {
                  const res = await fetch(`${API_BASE_URL}/api/broker/snapshot`);
                  const json = await res.json();
                  
-                 // Combine with local journal insights
                  const combinedContext = {
                     brokerSnapshot: json.snapshot,
                     journalInsights: journalRef.current,
                     scope: call.args.scope
                  };
                  
-                 responses.push({
-                   id: call.id,
-                   name: call.name,
-                   result: combinedContext
-                 });
+                 responses.push({ id: call.id, name: call.name, result: combinedContext });
                  pushLog('Fetched trading context.');
-               } catch (e) {
-                 responses.push({
-                   id: call.id,
-                   name: call.name,
-                   result: { error: "Failed to fetch context" }
-                 });
-               }
-            } else if (call.name === 'run_autopilot_review') {
-               try {
+
+              } else if (call.name === 'run_autopilot_review') {
                  const { symbol, side, entry, stopLoss, takeProfit, riskPct, reasoningSummary } = call.args as any;
                  
-                 // Construct a candidate plan object for the backend
                  const candidatePlan = {
                     symbol: symbol || "UNKNOWN",
                     direction: String(side).toLowerCase() === "buy" ? "long" : "short",
@@ -81,7 +65,6 @@ const GeminiVoicePanel: React.FC = () => {
                     timeframe: (call.args.timeFrame as string) || "15m"
                  };
 
-                 // Fetch latest snapshot again for fresh check
                  const snapRes = await fetch(`${API_BASE_URL}/api/broker/snapshot`);
                  const snapJson = await snapRes.json();
 
@@ -100,25 +83,61 @@ const GeminiVoicePanel: React.FC = () => {
                  
                  const reviewJson = await reviewRes.json();
                  
-                 responses.push({
-                   id: call.id,
-                   name: call.name,
-                   result: reviewJson
-                 });
+                 responses.push({ id: call.id, name: call.name, result: reviewJson });
                  pushLog(`Autopilot review complete. Approved: ${reviewJson.approved}`);
-               } catch (e: any) {
+
+              } else if (call.name === 'get_chart_playbook') {
+                 const res = await fetch(`${API_BASE_URL}/api/playbooks/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                       symbol: call.args.symbol,
+                       timeframe: call.args.timeframe,
+                       limit: call.args.limit ?? 5
+                    })
+                 });
+                 const json = await res.json();
+                 responses.push({ id: call.id, name: call.name, result: json });
+                 pushLog('Fetched playbooks.');
+
+              } else if (call.name === 'log_trade_journal') {
+                 const res = await fetch(`${API_BASE_URL}/api/journal/auto-log`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(call.args)
+                 });
+                 const json = await res.json();
+                 responses.push({ id: call.id, name: call.name, result: json });
+                 pushLog('Logged trade journal.');
+
+              } else if (call.name === 'get_recent_vision_summary') {
+                 const res = await fetch(`${API_BASE_URL}/api/gemini/vision/recent-summary`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                       symbol: call.args.symbol,
+                       timeframe: call.args.timeframe,
+                       days: call.args.days ?? 3
+                    })
+                 });
+                 const json = await res.json();
+                 responses.push({ id: call.id, name: call.name, result: json });
+                 pushLog('Fetched recent vision summary.');
+
+              } else {
                  responses.push({
                    id: call.id,
                    name: call.name,
-                   result: { error: `Review failed: ${e.message}` }
+                   result: { error: `Unknown tool: ${call.name}` }
                  });
-               }
-            } else {
+              }
+            } catch (e: any) {
                responses.push({
                  id: call.id,
                  name: call.name,
-                 result: { error: `Unknown tool: ${call.name}` }
+                 result: { error: `Tool execution failed: ${e.message}` }
                });
+               pushLog(`❌ Tool error (${call.name}): ${e.message}`);
             }
           }
           

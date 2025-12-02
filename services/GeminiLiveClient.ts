@@ -40,7 +40,6 @@ export class GeminiLiveClient {
   }
 
   async connect() {
-    // 1) Ask backend for an ephemeral token
     const API_BASE_URL =
       (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
@@ -59,7 +58,6 @@ export class GeminiLiveClient {
 
     const { token } = await tokenRes.json();
 
-    // 2) Open websocket with token as x-goog-api-key query param
     const url = `${LIVE_WS_URL}?key=${encodeURIComponent(token)}`;
     this.ws = new WebSocket(url);
 
@@ -84,7 +82,6 @@ export class GeminiLiveClient {
 
     this.ws.onmessage = (evt) => {
       if (evt.data instanceof ArrayBuffer || evt.data instanceof Blob) {
-        // This will be audio bytes when using native audio models.
         this.emit({ type: "raw", data: evt.data });
         return;
       }
@@ -115,7 +112,7 @@ export class GeminiLiveClient {
         systemInstruction: {
           parts: [{
             text: this.options.systemPrompt ??
-              "You are the lead AI in a multi-agent trading squad. You MUST use tools when you need live trading context or when the user asks you to validate or execute a trade. Never guess account numbers or balances."
+              "You are the lead AI in a multi-agent trading squad. You MUST use tools when you need live trading context, playbooks, or recent history. Never guess account numbers or balances."
           }]
         },
         tools: [
@@ -183,6 +180,86 @@ export class GeminiLiveClient {
                   required: ['symbol', 'side', 'entry', 'stopLoss', 'riskPct'],
                 },
               },
+              {
+                name: "get_chart_playbook",
+                description:
+                  "Retrieve the trader's saved playbooks for the current symbol/timeframe to see how they usually trade this setup.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    symbol: {
+                      type: "string",
+                      description: "Symbol, e.g. US30, NAS100, XAUUSD.",
+                    },
+                    timeframe: {
+                      type: "string",
+                      description: "Timeframe string, e.g. '1m', '5m', '15m'.",
+                    },
+                    limit: {
+                      type: "number",
+                      description: "Max number of playbooks to fetch (default 5).",
+                    },
+                  },
+                  required: ["symbol"],
+                },
+              },
+              {
+                name: "log_trade_journal",
+                description:
+                  "Log a trade (real or simulated) into the auto-journal so future coaching can reference it.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    symbol: { type: "string" },
+                    direction: {
+                      type: "string",
+                      enum: ["long", "short"],
+                    },
+                    result: {
+                      type: "string",
+                      enum: ["win", "loss", "breakeven", "open"],
+                    },
+                    rMultiple: { type: "number" },
+                    pnl: { type: "number" },
+                    environment: {
+                      type: "string",
+                      enum: ["SIM", "LIVE"],
+                    },
+                    timeframe: { type: "string" },
+                    notes: { type: "string" },
+                    source: {
+                      type: "string",
+                      enum: ["autopilot", "manual", "voice"],
+                    },
+                    meta: { type: "object" },
+                  },
+                  required: ["symbol", "direction", "environment", "timeframe"],
+                },
+              },
+              {
+                name: "get_recent_vision_summary",
+                description:
+                  "Get a stitched summary of the last few days of chart vision for the symbol/timeframe the user is asking about.",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    symbol: {
+                      type: "string",
+                      description: "Symbol, e.g. US30, NAS100.",
+                    },
+                    timeframe: {
+                      type: "string",
+                      description: "Timeframe string, e.g. '1m', '15m'.",
+                    },
+                    days: {
+                      type: "number",
+                      description:
+                        "How many days of history to summarize (default 3).",
+                    },
+                  },
+                  required: ["symbol"],
+                },
+              },
             ],
           },
         ],
@@ -192,9 +269,6 @@ export class GeminiLiveClient {
     this.send(setup);
   }
 
-  /**
-   * Send a user text message into the live session.
-   */
   sendText(text: string, endOfTurn = true) {
     const msg = {
       clientContent: {
@@ -211,9 +285,6 @@ export class GeminiLiveClient {
     this.send(msg);
   }
 
-  /**
-   * Send tool responses back to Gemini.
-   */
   sendToolResponse(responses: GeminiLiveToolResponse[]) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     if (!responses.length) return;
@@ -263,7 +334,6 @@ export class GeminiLiveClient {
       return;
     }
 
-    // Fallback
     this.emit({ type: "raw", data: msg });
   }
 
