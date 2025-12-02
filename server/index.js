@@ -9,6 +9,8 @@
 
 
 
+
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -38,6 +40,7 @@ const geminiVisionRouter = require('./routes/geminiVisionRouter');
 // --- Import New Routers ---
 const playbookRouter = require('./routes/playbookRouter');
 const journalAutoRouter = require('./routes/journalAutoRouter');
+const ttsRouter = require('./routes/ttsRouter');
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -151,6 +154,7 @@ app.use('/api/gemini', geminiVisionRouter);
 // Mount New Routers
 app.use('/api/playbooks', playbookRouter);
 app.use('/api/journal', journalAutoRouter);
+app.use('/api', ttsRouter); // mounts at /api/gemini/tts and /api/openai/tts
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {
