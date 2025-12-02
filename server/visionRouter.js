@@ -1,3 +1,4 @@
+
 const express = require('express');
 
 const visionRouter = express.Router();
@@ -12,6 +13,87 @@ function resolveProvider(inputProvider) {
   if (GEMINI_API_KEY) return 'gemini';
   if (OPENAI_API_KEY) return 'openai';
   throw new Error('No vision provider API key configured.');
+}
+
+// -----------------------------
+// Helpers
+// -----------------------------
+
+function buildChartVisionPrompt(payload) {
+  const {
+    symbol,
+    timeframe,
+    sessionContext,
+    question,
+    focusLiquidity,
+    focusFvg,
+    focusTrendStructure,
+    focusRiskWarnings,
+  } = payload;
+
+  const focusParts = [];
+  if (focusTrendStructure) focusParts.push('trend and structure (swing highs/lows, HH/HL vs LH/LL)');
+  if (focusLiquidity) focusParts.push('liquidity (equal highs/lows, stop clusters, sweeps)');
+  if (focusFvg) focusParts.push('fair value gaps / imbalances');
+  if (focusRiskWarnings) focusParts.push('risk warnings (chop, extended moves, news candles)');
+
+  const focusText = focusParts.length
+    ? `Focus especially on: ${focusParts.join(', ')}.`
+    : 'Give a balanced read of structure, liquidity, FVGs, and risk.';
+
+  return `
+You are a professional price action trader with deep experience in indices (US30, NAS100) and XAUUSD.
+You are analyzing a screenshot of a chart for symbol "${symbol}" on timeframe "${timeframe}".
+
+Session context: ${sessionContext || '(not specified)'}
+
+The user question or goal:
+${question || '(none provided)'}
+
+${focusText}
+
+You MUST respond **only** with a single JSON object in this exact TypeScript shape:
+
+interface ChartVisionAnalysis {
+  symbol: string;
+  timeframe: string;
+  sessionContext?: string;
+
+  marketBias: 'bullish' | 'bearish' | 'choppy' | 'unclear';
+  confidence: number; // 0–1
+
+  structureNotes: string;        // trend, HH/HL vs LH/LL, ranges, higher-timeframe context if visible
+  liquidityNotes: string;        // equal highs/lows, obvious stop clusters, liquidity sweeps, resting pools
+  fvgNotes: string;              // fair value gaps / imbalances worth watching (approximate descriptions)
+  keyZones: string[];            // concise labels for key zones: "PDH", "London Low", "NY Open Range High", etc.
+  patternNotes: string;          // any classic patterns, internal structure, or clear narrative in price action
+  riskWarnings: string[];        // each bullet is a short, actionable warning: "late into move", "news candle just printed"
+
+  suggestedPlaybookTags: string[]; // tags like ["PDH sweep", "NY reversal fade", "London range break"]
+}
+
+Requirements:
+- All fields must be present.
+- "confidence" must be a number between 0 and 1.
+- Do NOT include explanations outside of JSON.
+- Do NOT wrap the JSON in backticks or any markdown, just plain JSON.
+`.trim();
+}
+
+function safeExtractJsonObject(text) {
+  if (!text) return null;
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+    return null;
+  }
+  const jsonSlice = text.slice(firstBrace, lastBrace + 1);
+  try {
+    return JSON.parse(jsonSlice);
+  } catch (err) {
+    console.error('Failed to parse JSON from vision output:', err);
+    return null;
+  }
 }
 
 // -----------------------------
@@ -130,34 +212,86 @@ async function callOpenAIVision({ modelId, prompt, images }) {
 // -----------------------------
 // POST /api/vision/run
 // -----------------------------
-// Body:
-// {
-//   provider: "auto" | "gemini" | "openai",
-//   modelId?: string,
-//   task: "chart_single" | "chart_mtf" | "live_watch" | "journal",
-//   visionContext?: { ... },
-//   images?: string[] // base64 or data URLs
-// }
 visionRouter.post('/run', async (req, res) => {
   try {
     const {
       provider: rawProvider = 'auto',
       modelId,
+      mode,
       task,
       visionContext,
       images,
+      payload, 
     } = req.body || {};
 
     const provider = resolveProvider(rawProvider);
 
-    // Default models depending on provider
     const resolvedModelId =
       modelId ||
       (provider === 'gemini'
         ? 'gemini-2.5-flash'
         : 'gpt-4o-mini');
 
-    // Build a generic prompt that later steps will refine
+    // ------- Branch 1: Specialized Chart Vision mode -------
+    if (mode === 'chart_vision_v1' && payload && payload.imageBase64) {
+      const chartTask = 'chart_single';
+      const prompt = buildChartVisionPrompt(payload);
+      const imageArr = [payload.imageBase64];
+
+      let rawText;
+      if (provider === 'gemini') {
+        rawText = await callGeminiVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else if (provider === 'openai') {
+        rawText = await callOpenAIVision({
+          modelId: resolvedModelId,
+          prompt,
+          images: imageArr,
+        });
+      } else {
+        throw new Error(`Unsupported provider: ${provider}`);
+      }
+
+      const parsed = safeExtractJsonObject(rawText);
+
+      // Build ChartVisionResult shape
+      const analysis =
+        parsed && typeof parsed === 'object'
+          ? parsed
+          : {
+              symbol: payload.symbol,
+              timeframe: payload.timeframe,
+              sessionContext: payload.sessionContext,
+              marketBias: 'unclear',
+              confidence: 0,
+              structureNotes: rawText || '',
+              liquidityNotes: '',
+              fvgNotes: '',
+              keyZones: [],
+              patternNotes: '',
+              riskWarnings: [],
+              suggestedPlaybookTags: [],
+            };
+
+      const summary = `Bias: ${analysis.marketBias.toUpperCase()} (conf ${
+        Math.round((analysis.confidence || 0) * 100)
+      }%). Key zones: ${(analysis.keyZones || []).slice(0, 3).join(', ') || 'none specified'}.`;
+
+      return res.json({
+        provider,
+        modelId: resolvedModelId,
+        task: chartTask,
+        createdAt: new Date().toISOString(),
+        rawText,
+        summary,
+        analysis,
+      });
+    }
+
+    // ------- Branch 2: Generic vision (fallback) -------
     const contextSummary = visionContext
       ? `\n\nContext JSON:\n${JSON.stringify(visionContext)}`
       : '';
@@ -190,14 +324,27 @@ ${contextSummary}
       throw new Error(`Unsupported provider: ${provider}`);
     }
 
-    // For Step 1 we just return raw text + metadata.
-    // In Steps 2+ we'll parse this into a structured VisionResult.
     res.json({
       provider,
       modelId: resolvedModelId,
       task: task || 'chart_single',
       createdAt: new Date().toISOString(),
       rawText: text,
+      summary: 'Unstructured vision response (generic mode).',
+      analysis: {
+        symbol: visionContext?.instrument || 'unknown',
+        timeframe: visionContext?.frames?.[0]?.timeframe || 'unknown',
+        sessionContext: visionContext?.sessionContext || undefined,
+        marketBias: 'unclear',
+        confidence: 0,
+        structureNotes: text,
+        liquidityNotes: '',
+        fvgNotes: '',
+        keyZones: [],
+        patternNotes: '',
+        riskWarnings: [],
+        suggestedPlaybookTags: [],
+      },
     });
   } catch (err) {
     console.error('Vision router error:', err);

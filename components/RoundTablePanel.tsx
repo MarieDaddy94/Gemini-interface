@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
 import { useRoundTableAutopilotPlan } from '../hooks/useRoundTableAutopilotPlan';
 import { AutopilotCommand, RiskVerdict } from '../types';
+import { useVision } from '../context/VisionContext';
 
 interface RoundTablePanelProps {
   onCommandProposed?: (
@@ -14,6 +15,7 @@ interface RoundTablePanelProps {
 const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) => {
   const { state: sessionState } = useTradingSession();
   const { run, loading, error, lastResponse } = useRoundTableAutopilotPlan();
+  const { latestVisionResult, visionSummary } = useVision();
 
   const [question, setQuestion] = useState('');
 
@@ -22,7 +24,8 @@ const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) 
       const response = await run({
         sessionState,
         userQuestion: question,
-        visualSummary: null, // later we can inject Gemini vision summary here
+        visualSummary: visionSummary, // Fallback string if visionResult not used by backend
+        visionResult: latestVisionResult, // Full structure
       });
       
       if (onCommandProposed) {
@@ -63,8 +66,14 @@ const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) 
             onChange={(e) => setQuestion(e.target.value)}
           />
           <div className="flex justify-between items-center">
-            <div className="text-[10px] text-gray-500">
-              Context (symbol, TF, recent trades) is auto-included.
+            <div className="text-[10px] text-gray-500 flex items-center gap-2">
+              <span>Context auto-included.</span>
+              {latestVisionResult && (
+                <span className="text-blue-400 flex items-center gap-1">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                  Vision Ready
+                </span>
+              )}
             </div>
             <button
               type="button"

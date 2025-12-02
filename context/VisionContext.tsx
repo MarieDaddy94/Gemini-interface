@@ -1,18 +1,27 @@
 
 import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { VisionResult } from '../types';
 
 interface VisionContextValue {
   visionSummary: string | null;
   setVisionSummary: (summary: string | null) => void;
+  latestVisionResult: VisionResult | null;
+  setLatestVisionResult: (result: VisionResult | null) => void;
 }
 
 const VisionContext = createContext<VisionContextValue | undefined>(undefined);
 
 export const VisionProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [visionSummary, setVisionSummary] = useState<string | null>(null);
+  const [latestVisionResult, setLatestVisionResult] = useState<VisionResult | null>(null);
 
   return (
-    <VisionContext.Provider value={{ visionSummary, setVisionSummary }}>
+    <VisionContext.Provider value={{ 
+        visionSummary, 
+        setVisionSummary, 
+        latestVisionResult, 
+        setLatestVisionResult 
+    }}>
       {children}
     </VisionContext.Provider>
   );

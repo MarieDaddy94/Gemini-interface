@@ -2,7 +2,7 @@
 // hooks/useRoundTableAutopilotPlan.ts
 
 import { useCallback, useState } from 'react';
-import { AutopilotCommand, RiskVerdict } from '../types';
+import { AutopilotCommand, RiskVerdict, VisionResult } from '../types';
 
 export interface RoundTableAgentMessage {
   id: string;
@@ -70,6 +70,7 @@ export function useRoundTableAutopilotPlan() {
       userQuestion?: string;
       recentJournal?: any[];
       visualSummary?: string | null;
+      visionResult?: VisionResult | null;
     }) => {
       try {
         setLoading(true);

@@ -30,9 +30,9 @@ export async function runChartVisionRequest(
     body: JSON.stringify({
       provider,
       modelId,
+      mode: 'chart_vision_v1',
       task: 'chart_vision_v1',
-      visionContext: payload, // send payload metadata in context
-      images: [payload.imageBase64],
+      payload, // send specialized payload
     }),
   });
 
@@ -43,7 +43,6 @@ export async function runChartVisionRequest(
 
   const data = await res.json();
 
-  // Very forgiving: if the backend only returns rawText, wrap it.
   const result: VisionResult = {
     rawText: data.rawText ?? (typeof data === 'string' ? data : JSON.stringify(data)),
     summary: data.summary ?? 'Model did not return a structured summary.',

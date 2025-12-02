@@ -3,6 +3,7 @@ import React, { useState, ChangeEvent, FormEvent } from 'react';
 import { useChartVisionAgent, ChartVisionRequest } from '../services/chartVisionAgent';
 import { VisionResult } from '../types';
 import { useVisionSettings } from '../context/VisionSettingsContext';
+import { useVision } from '../context/VisionContext';
 
 const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -29,6 +30,7 @@ const fileToBase64 = (file: File): Promise<string> => {
 const ChartVisionAgentPanel: React.FC = () => {
   const { settings } = useVisionSettings();
   const { analyzeChart } = useChartVisionAgent();
+  const { setLatestVisionResult, setVisionSummary } = useVision();
 
   const selectedProvider = settings.provider === 'auto' ? 'gemini' : settings.provider;
   const selectedVisionModelId = selectedProvider === 'gemini' 
@@ -99,6 +101,9 @@ const ChartVisionAgentPanel: React.FC = () => {
     try {
       const res = await analyzeChart(payload);
       setResult(res);
+      // Share with global context for Autopilot
+      setLatestVisionResult(res);
+      setVisionSummary(res.summary);
     } catch (err: any) {
       console.error(err);
       setError(err.message ?? 'Error running chart vision.');

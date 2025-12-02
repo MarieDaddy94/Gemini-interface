@@ -1,5 +1,6 @@
 
 
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -557,6 +558,43 @@ app.post('/api/autopilot/plan-trade', async (req, res) => {
 });
 
 // ------------------------------
+// Helper: Turn VisionResult into text summary
+// ------------------------------
+function buildVisualSummaryFromVisionResult(vr) {
+  if (!vr || !vr.analysis) return vr?.summary || null;
+
+  const a = vr.analysis;
+  const lines = [];
+
+  lines.push(
+    `VISION READ (symbol=${a.symbol}, tf=${a.timeframe}, session=${a.sessionContext || 'n/a'})`,
+  );
+  lines.push(
+    `Bias: ${a.marketBias.toUpperCase()} (conf ${(a.confidence || 0) * 100}%)`,
+  );
+  if (a.structureNotes) {
+    lines.push(`Structure: ${a.structureNotes}`);
+  }
+  if (a.liquidityNotes) {
+    lines.push(`Liquidity: ${a.liquidityNotes}`);
+  }
+  if (a.fvgNotes) {
+    lines.push(`FVGs: ${a.fvgNotes}`);
+  }
+  if (Array.isArray(a.keyZones) && a.keyZones.length) {
+    lines.push(`Key zones: ${a.keyZones.join(', ')}`);
+  }
+  if (Array.isArray(a.riskWarnings) && a.riskWarnings.length) {
+    lines.push(`Risk warnings: ${a.riskWarnings.join(' | ')}`);
+  }
+  if (Array.isArray(a.suggestedPlaybookTags) && a.suggestedPlaybookTags.length) {
+    lines.push(`Playbook tags: ${a.suggestedPlaybookTags.join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
+
+// ------------------------------
 // Autopilot plan from round-table
 // ------------------------------
 app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
@@ -566,6 +604,7 @@ app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
       userQuestion,
       recentJournal,
       visualSummary,
+      visionResult,   // NEW: full ChartVisionResult from client
     } = req.body || {};
 
     if (!sessionState) {
@@ -576,11 +615,16 @@ app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
       });
     }
 
+    // If we have a full VisionResult, build a richer visualSummary string
+    const enrichedVisualSummary = visionResult
+      ? buildVisualSummaryFromVisionResult(visionResult)
+      : visualSummary ?? null;
+
     const result = await runTradingRoundTable({
       sessionState,
       userQuestion: userQuestion || '',
       recentJournal: Array.isArray(recentJournal) ? recentJournal : [],
-      visualSummary: visualSummary ?? null,
+      visualSummary: enrichedVisualSummary,
     });
 
     res.json({
@@ -593,6 +637,8 @@ app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
         riskNotes: result.riskNotes,
         riskCommandComment: result.riskCommandComment || null,
         riskCommandVerdict: result.riskCommandVerdict || 'UNKNOWN',
+        // Echo visual summary back
+        visualSummary: enrichedVisualSummary || null,
       },
       autopilotCommand: result.autopilotCommand || null,
       autopilotCommandRisk: {
