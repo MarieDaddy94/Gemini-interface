@@ -465,8 +465,8 @@ const Dashboard: React.FC = () => {
             <div className="flex-1 min-h-0 flex overflow-hidden">
                {/* Left Column: Controls & Configuration */}
                <div className="flex-1 border-r border-[#2a2e39] overflow-hidden flex flex-col">
-                  {/* 1. Risk Autopilot (Top Priority) */}
-                  <div className="flex-[2] min-h-0 flex flex-col">
+                  {/* 1. Risk Autopilot (Top Priority) - Reduced slightly to give space below */}
+                  <div className="flex-[1.5] min-h-0 flex flex-col">
                      <RiskAutopilotPanel />
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
@@ -483,8 +483,8 @@ const Dashboard: React.FC = () => {
                   </div>
                   <div className="h-[1px] bg-[#2a2e39] shrink-0" />
 
-                  {/* 4. Agent Settings (Moved from Right) */}
-                  <div className="flex-1 min-h-0 flex flex-col">
+                  {/* 4. Agent Settings (Moved from Right) - Increased weight to "drag up" */}
+                  <div className="flex-[1.5] min-h-0 flex flex-col">
                      <AgentSettingsPanel />
                   </div>
                </div>
