@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
-import { useDesk, DeskRoleId, DeskSessionPhase } from '../context/DeskContext';
+import { useDesk, DeskRoleId, DeskSessionPhase, DeskRoleState } from '../context/DeskContext';
+import { apiClient } from '../utils/apiClient';
 
 const roleColors: Record<DeskRoleId, string> = {
   strategist: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200',
@@ -12,19 +13,117 @@ const roleColors: Record<DeskRoleId, string> = {
   news: 'bg-orange-500/10 border-orange-500/30 text-orange-200',
 };
 
+type DeskChatMessage = {
+  id: string;
+  author: "you" | "desk";
+  text: string;
+  ts: number;
+};
+
 const TradingRoomFloorView: React.FC = () => {
   const {
-    state: { deskName, goal, sessionPhase, roles },
-    actions: { setDeskGoal, setSessionPhase, assignRole },
+    state: deskState,
+    actions: { setDeskGoal, setSessionPhase, assignRole, updateRoleStatus },
   } = useDesk();
 
+  const { deskName, goal, sessionPhase, roles } = deskState;
+
   const [draftGoal, setDraftGoal] = useState(goal ?? "");
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState<DeskChatMessage[]>([]);
+  const [isSending, setIsSending] = useState(false);
 
   const saveGoal = () => setDeskGoal(draftGoal);
 
   // Derived list of active vs bench agents
   const activeRoles = Object.values(roles).filter(r => r.onDesk);
   const benchRoles = Object.values(roles).filter(r => !r.onDesk);
+
+  const sendToDesk = async () => {
+    const trimmed = chatInput.trim();
+    if (!trimmed || isSending) return;
+
+    const userMsg: DeskChatMessage = {
+      id: `${Date.now()}-you`,
+      author: "you",
+      text: trimmed,
+      ts: Date.now(),
+    };
+
+    setMessages((prev) => [userMsg, ...prev]);
+    setChatInput("");
+    setIsSending(true);
+
+    try {
+      // Construct payload for the desk brain
+      const payload = {
+        input: trimmed,
+        deskState, // Send full current state for context
+      };
+
+      // Use apiClient for consistent base URL and error handling
+      const res = await apiClient.post<{
+        message: string;
+        roleUpdates?: Array<{
+          roleId: DeskRoleId;
+          status?: string;
+          lastUpdate?: string;
+        }>;
+        sessionPhase?: DeskSessionPhase;
+        goal?: string;
+      }>('/desk/roundup', payload);
+
+      const deskText: string =
+        res.message ||
+        "Desk processed your request (no message provided from coordinator).";
+
+      const deskMsg: DeskChatMessage = {
+        id: `${Date.now()}-desk`,
+        author: "desk",
+        text: deskText,
+        ts: Date.now(),
+      };
+
+      setMessages((prev) => [deskMsg, ...prev]);
+
+      // Apply role updates if present
+      if (Array.isArray(res.roleUpdates)) {
+        res.roleUpdates.forEach((update) => {
+          const roleId = update.roleId;
+          if (!roleId || !roles[roleId]) return;
+
+          // Filter out invalid status strings if TS complains, or cast
+          const status = update.status as any;
+          const lastUpdate = update.lastUpdate;
+          
+          updateRoleStatus(roleId, {
+            ...(status && { status }),
+            ...(lastUpdate && { lastUpdate }),
+          });
+        });
+      }
+
+      // Optional: Update phase/goal if coordinator wants to adjust them
+      if (res.sessionPhase && res.sessionPhase !== sessionPhase) {
+        setSessionPhase(res.sessionPhase);
+      }
+      if (typeof res.goal === "string" && res.goal !== goal) {
+        setDeskGoal(res.goal);
+        setDraftGoal(res.goal); // sync local input
+      }
+    } catch (err) {
+      console.error("Desk roundup error", err);
+      const errMsg: DeskChatMessage = {
+        id: `${Date.now()}-desk-error`,
+        author: "desk",
+        text: "⚠️ The desk could not process that request (backend error). Check the server logs.",
+        ts: Date.now(),
+      };
+      setMessages((prev) => [errMsg, ...prev]);
+    } finally {
+      setIsSending(false);
+    }
+  };
 
   return (
     <div className="flex h-full bg-[#0b0e14] text-gray-200 overflow-hidden">
@@ -165,29 +264,57 @@ const TradingRoomFloorView: React.FC = () => {
            <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">AI Assistant</span>
         </div>
         
-        <div className="flex-1 p-6 flex flex-col items-center justify-center text-gray-600 gap-3">
-           <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="opacity-20"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-           <div className="text-center">
-             <p className="text-xs font-medium">Coordinator Chat Offline</p>
-             <p className="text-[10px] mt-1 opacity-70 max-w-[200px]">
-               In Phase C, this will be a live chat where you direct the desk and get status reports.
-             </p>
-           </div>
+        {/* Chat Area */}
+        <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
+           {messages.length === 0 && (
+             <div className="text-center text-gray-600 mt-10">
+                <p className="text-xs">Chat with the Desk Coordinator.</p>
+                <p className="text-[10px] opacity-70 mt-1">
+                   Try: "Scan for buys on US30" or "Set goal to 2R today"
+                </p>
+             </div>
+           )}
+           
+           {messages.map((m) => (
+             <div key={m.id} className={`flex flex-col gap-1 ${m.author === 'you' ? 'items-end' : 'items-start'}`}>
+                <div className="flex items-center gap-2">
+                   <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${m.author === 'you' ? 'bg-emerald-900/50 text-emerald-400' : 'bg-blue-900/50 text-blue-400'}`}>
+                      {m.author === 'you' ? 'You' : 'Coordinator'}
+                   </span>
+                   <span className="text-[9px] text-gray-600">{new Date(m.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+                <div className={`text-xs p-3 rounded-lg max-w-[90%] leading-relaxed whitespace-pre-wrap border ${m.author === 'you' ? 'bg-[#161a25] border-gray-700 text-gray-300' : 'bg-[#1e222d] border-gray-600 text-white'}`}>
+                   {m.text}
+                </div>
+             </div>
+           ))}
+           
+           {isSending && (
+              <div className="flex items-center gap-2 text-xs text-gray-500 animate-pulse">
+                 <div className="w-1.5 h-1.5 rounded-full bg-gray-500"></div>
+                 Coordinator is thinking...
+              </div>
+           )}
         </div>
 
+        {/* Input */}
         <div className="p-4 border-t border-gray-800 bg-[#131722]">
-           <div className="relative">
+           <div className="flex gap-2">
              <input 
-               disabled 
-               placeholder="Ping the desk (Coming Soon)..." 
-               className="w-full bg-[#0b0e14] border border-gray-700 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed pl-3 pr-10"
+               value={chatInput}
+               onChange={(e) => setChatInput(e.target.value)}
+               onKeyDown={(e) => e.key === 'Enter' && sendToDesk()}
+               placeholder="Ping the desk..." 
+               className="flex-1 bg-[#0b0e14] border border-gray-700 rounded px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500 placeholder-gray-700 text-gray-200"
+               disabled={isSending}
              />
-             <button disabled className="absolute right-2 top-2 text-gray-600">
+             <button 
+               onClick={sendToDesk}
+               disabled={!chatInput.trim() || isSending}
+               className="bg-[#2962ff] hover:bg-[#1e53e5] text-white rounded px-3 disabled:opacity-50 disabled:cursor-not-allowed"
+             >
                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
              </button>
-           </div>
-           <div className="text-[9px] text-gray-600 mt-2 text-center">
-             Example: "Switch focus to NAS100 for PM session"
            </div>
         </div>
       </div>
