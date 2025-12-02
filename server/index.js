@@ -73,6 +73,7 @@ const { runAutopilotCoach } = require('./history/autopilotCoach');
 // Voice & Vision
 const { parseVoiceAutopilotCommand } = require('./autopilot/voiceParser');
 const { analyzeChartImage } = require('./vision/visionService');
+const { visionRouter } = require('./visionRouter');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -108,6 +109,9 @@ app.use(
 );
 
 app.use(express.json({ limit: '10mb' }));
+
+// Mount Vision Router
+app.use('/api/vision', visionRouter);
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {

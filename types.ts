@@ -647,3 +647,97 @@ export interface AutopilotExecuteResponse {
 // -----------------------------------------
 
 export type RiskVerdict = 'ALLOW' | 'ALLOW_WITH_CAUTION' | 'BLOCK' | 'UNKNOWN';
+
+// ===============================
+// Vision / Multimodal Types
+// ===============================
+
+export type VisionProvider = 'auto' | 'gemini' | 'openai';
+
+export type VisionMode = 'fast' | 'deep';
+
+export type VisionTask =
+  | 'chart_single'
+  | 'chart_mtf'
+  | 'live_watch'
+  | 'journal';
+
+// Basic vision settings for the current session
+export interface VisionSettings {
+  provider: VisionProvider;
+  mode: VisionMode;
+  defaultGeminiModel?: string;
+  defaultOpenAIModel?: string;
+}
+
+// A single chart frame (e.g., 1m, 15m, 1h) used as vision input
+export interface VisionFrameContext {
+  timeframe: string; // "1m" | "15m" | "1h" | "4h" etc.
+  description?: string; // optional note like "main execution chart"
+}
+
+// High-level context sent alongside images to the vision models
+export interface VisionContext {
+  task: VisionTask;
+  instrument?: string;       // e.g. "US30", "NAS100", "XAUUSD"
+  sessionContext?: string;   // e.g. "NY Open", "London", etc.
+  frames?: VisionFrameContext[];
+  // optional serialized broker state as JSON string
+  brokerSnapshotJson?: string;
+  // what the user actually asked ("Should I long here?" etc.)
+  userQuestion?: string;
+  // optional hint like "NY Reversal Fade", "Liquidity Sweep"
+  playbookHint?: string;
+}
+
+// Output objects we'll later populate in steps 2–3
+export type VisionBias = 'bullish' | 'bearish' | 'range' | 'unclear';
+
+export type VisionZoneType =
+  | 'demand'
+  | 'supply'
+  | 'liquidity_high'
+  | 'liquidity_low'
+  | 'fvg'
+  | 'range_high'
+  | 'range_low';
+
+export interface VisionZone {
+  id: string;
+  type: VisionZoneType;
+  timeframe?: string;
+  price?: number;
+  priceMin?: number;
+  priceMax?: number;
+  confidence?: number; // 0–1
+  note?: string;
+}
+
+export interface VisionPattern {
+  id: string;
+  name: string; // e.g. "Liquidity sweep of PDH"
+  timeframe?: string;
+  description?: string;
+  confidence?: number; // 0–1
+}
+
+// Normalized result format for any provider
+export interface VisionResult {
+  provider: VisionProvider;
+  modelId: string;
+  task: VisionTask;
+  createdAt: string;
+
+  htfBias?: VisionBias;
+  structureSummary?: string;
+
+  zones?: VisionZone[];
+  patterns?: VisionPattern[];
+
+  alignmentScore?: number; // for multi-TF cases
+
+  riskNotes?: string[];
+
+  // Raw text from the model, for logging / UI
+  rawText?: string;
+}

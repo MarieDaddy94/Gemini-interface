@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { useJournal } from '../context/JournalContext';
 import { useAgentConfig, AgentConfig } from '../context/AgentConfigContext';
+import VisionSettingsPanel from './VisionSettingsPanel';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -28,7 +28,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importStatus, setImportStatus] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'general' | 'ai'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'ai' | 'vision'>('general');
 
   // API Key State
   const [openaiKey, setOpenaiKey] = useState('');
@@ -105,6 +105,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
              className={`px-4 py-3 text-xs font-medium transition-colors border-b-2 ${activeTab === 'ai' ? 'border-[#2962ff] text-white' : 'border-transparent text-gray-400 hover:text-white'}`}
            >
              AI Squad Configuration
+           </button>
+           <button 
+             onClick={() => setActiveTab('vision')}
+             className={`px-4 py-3 text-xs font-medium transition-colors border-b-2 ${activeTab === 'vision' ? 'border-[#2962ff] text-white' : 'border-transparent text-gray-400 hover:text-white'}`}
+           >
+             Vision Settings
            </button>
         </div>
 
@@ -302,6 +308,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
               </div>
             </div>
           )}
+
+          {activeTab === 'vision' && <VisionSettingsPanel />}
         </div>
 
         {/* Footer */}
