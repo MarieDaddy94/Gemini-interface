@@ -1,4 +1,3 @@
-
 import { voiceBus } from "./voiceBus";
 
 const LIVE_WS_URL =
@@ -19,6 +18,7 @@ export type GeminiLiveToolResponse = {
 type GeminiLiveClientOptions = {
   apiKey?: string;
   model?: string;
+  voiceName?: string;
   onServerText?: (text: string, isFinal: boolean) => void;
   onSetupComplete?: () => void;
   onError?: (err: unknown) => void;
@@ -28,6 +28,7 @@ type GeminiLiveClientOptions = {
 export class GeminiLiveClient {
   private apiKey?: string;
   private model: string;
+  private voiceName: string;
   private socket: WebSocket | null = null;
 
   private onServerText?: (text: string, isFinal: boolean) => void;
@@ -38,6 +39,7 @@ export class GeminiLiveClient {
   constructor(opts: GeminiLiveClientOptions) {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? "models/gemini-2.5-flash-live";
+    this.voiceName = opts.voiceName ?? "Aoede";
     this.onServerText = opts.onServerText;
     this.onSetupComplete = opts.onSetupComplete;
     this.onError = opts.onError;
@@ -107,6 +109,13 @@ export class GeminiLiveClient {
           maxOutputTokens: 1024,
           temperature: 0.3,
           responseModalities: ["AUDIO", "TEXT"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: this.voiceName
+              }
+            }
+          }
         },
         systemInstruction: {
           role: "system",
@@ -336,7 +345,7 @@ export class GeminiLiveClient {
           if (inline?.mimeType?.startsWith("audio/pcm")) {
             // Push audio to VoiceBus for playback
             voiceBus.enqueue({
-              speakerId: "squad-gemini",
+              speakerId: "squad-gemini", // Could differentiate if needed
               base64Pcm: inline.data,
               sampleRate: 24000, 
             });

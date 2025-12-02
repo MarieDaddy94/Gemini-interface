@@ -1,16 +1,14 @@
-
-import { SQUAD_VOICES, SquadRole } from "../config/squadVoices";
 import { voiceBus } from "./voiceBus";
+import type { VoiceProfile } from "../config/squadVoices";
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
 export async function speakAgentLine(
-  role: SquadRole,
+  roleLabel: string,
   text: string,
-  forceProvider?: "gemini" | "openai"
+  profile: VoiceProfile
 ) {
-  const profile = SQUAD_VOICES[role];
-  const provider = forceProvider || profile.provider;
+  const provider = profile.provider;
 
   try {
     if (provider === "gemini") {
@@ -28,7 +26,7 @@ export async function speakAgentLine(
       const json = await res.json();
       if (json.base64Pcm) {
         voiceBus.enqueue({
-          speakerId: role,
+          speakerId: roleLabel as any,
           base64Pcm: json.base64Pcm,
           sampleRate: json.sampleRate ?? 24000,
         });
@@ -48,13 +46,13 @@ export async function speakAgentLine(
       const json = await res.json();
       if (json.base64Pcm) {
         voiceBus.enqueue({
-          speakerId: role,
+          speakerId: roleLabel as any,
           base64Pcm: json.base64Pcm,
           sampleRate: json.sampleRate ?? 24000,
         });
       }
     }
   } catch (e) {
-    console.error(`Failed to speak agent line (${role}):`, e);
+    console.error(`Failed to speak agent line (${roleLabel}):`, e);
   }
 }

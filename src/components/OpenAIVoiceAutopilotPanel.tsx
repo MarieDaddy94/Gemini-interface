@@ -192,7 +192,8 @@ Risk philosophy:
 
       // Event Handling
       client.on('conversation.updated', (event: any) => {
-        // Optional: handle transcript/audio updates if needed
+        const { item, delta } = event;
+        // Optionally handle transcript updates or audio here if needed beyond default handling
       });
 
       client.on('error', (event: any) => {

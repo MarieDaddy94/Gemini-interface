@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState } from 'react';
 import {
   AutopilotMode,
@@ -9,11 +8,11 @@ import {
   RiskVerdict,
 } from '../types';
 import { useAutopilotExecute, useBrokerSnapshot } from '../hooks/useAutopilot';
-import OpenAIVoiceAutopilotPanel from './OpenAIVoiceAutopilotPanel';
-import GeminiVoicePanel from './GeminiVoicePanel';
+import RealtimeSquadPanel from './RealtimeSquadPanel';
+import RealtimeControlBar from './RealtimeControlBar';
 import { useVoiceActivity } from '../context/VoiceActivityContext';
 
-type PanelTab = 'compose' | 'status' | 'voice' | 'gemini-live';
+type PanelTab = 'compose' | 'status' | 'voice-squad';
 
 interface AutopilotPanelProps {
   // Proposed command from the AI round-table (Execution Bot)
@@ -165,6 +164,11 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
 
   return (
     <div className="flex flex-col gap-4 h-full bg-[#050509] text-gray-300 font-sans text-xs border-l border-gray-800">
+      {/* Realtime Controls */}
+      <div className="flex-none">
+         <RealtimeControlBar />
+      </div>
+
       {/* Header */}
       <div className="flex justify-between items-center gap-4 px-4 py-3 border-b border-gray-800 bg-[#131722] shrink-0">
         <div>
@@ -173,12 +177,6 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
              <p className="text-[10px] text-gray-500 m-0">
                Manage execution logic: discuss, confirm, or auto-fire.
              </p>
-             {activeSpeaker && (
-               <div className="flex items-center gap-1 bg-green-500/10 px-1.5 py-0.5 rounded-full border border-green-500/20">
-                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                 <span className="text-[9px] text-green-400 uppercase font-bold">{activeSpeaker}</span>
-               </div>
-             )}
           </div>
         </div>
 
@@ -292,31 +290,19 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
           Last Decision
         </button>
         <button
-          onClick={() => setActiveTab('voice')}
+          onClick={() => setActiveTab('voice-squad')}
           className={`pb-2 text-[11px] font-medium transition-colors border-b-2 ${
-            activeTab === 'voice' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
+            activeTab === 'voice-squad' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
           }`}
         >
-          OpenAI Voice
-        </button>
-        <button
-          onClick={() => setActiveTab('gemini-live')}
-          className={`pb-2 text-[11px] font-medium transition-colors border-b-2 ${
-            activeTab === 'gemini-live' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
-          }`}
-        >
-          Gemini Live
+          Voice Squad
         </button>
       </div>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col gap-4 overflow-auto px-4 pb-4">
-        {activeTab === 'voice' && (
-           <OpenAIVoiceAutopilotPanel />
-        )}
-
-        {activeTab === 'gemini-live' && (
-           <GeminiVoicePanel />
+        {activeTab === 'voice-squad' && (
+           <RealtimeSquadPanel />
         )}
 
         {activeTab === 'compose' && (

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useTradingSession } from '../context/TradingSessionContext';
 import { useRoundTableAutopilotPlan } from '../hooks/useRoundTableAutopilotPlan';
@@ -8,6 +7,7 @@ import VoiceVisionConsole from './VoiceVisionConsole';
 import { speakAgentLine } from '../services/agentSpeech';
 import { SquadRole } from '../config/squadVoices';
 import { useVoiceActivity } from '../context/VoiceActivityContext';
+import { useRealtimeConfig } from '../context/RealtimeConfigContext';
 
 interface RoundTablePanelProps {
   onCommandProposed?: (
@@ -21,6 +21,7 @@ const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) 
   const { run, loading, error, lastResponse } = useRoundTableAutopilotPlan();
   const { latestVisionResult, visionSummary } = useVision();
   const { activeSpeaker } = useVoiceActivity();
+  const { getVoiceProfile } = useRealtimeConfig();
 
   const [question, setQuestion] = useState('');
   
@@ -51,13 +52,13 @@ const RoundTablePanel: React.FC<RoundTablePanelProps> = ({ onCommandProposed }) 
              let role: SquadRole = 'strategist';
              const idLower = agent.id.toLowerCase();
              if (idLower.includes('risk')) role = 'risk';
-             else if (idLower.includes('pattern')) role = 'quant'; // Mapping pattern -> quant voice for now or add pattern role
+             else if (idLower.includes('pattern') || idLower.includes('quant')) role = 'quant';
              else if (idLower.includes('exec')) role = 'execution';
              else if (idLower.includes('journal')) role = 'journal';
              
-             // Simple heuristic for content length or importance? 
-             // We just queue it all.
-             speakAgentLine(role, agent.content);
+             const profile = getVoiceProfile(role);
+             
+             speakAgentLine(role, agent.content, profile);
          });
       }
 

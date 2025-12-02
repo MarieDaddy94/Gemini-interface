@@ -25,6 +25,7 @@ import { AutopilotJournalProvider } from './context/AutopilotJournalContext';
 import { VisionProvider } from './context/VisionContext';
 import { VisionSettingsProvider } from './context/VisionSettingsContext';
 import { VoiceActivityProvider } from './context/VoiceActivityContext';
+import { RealtimeConfigProvider } from './context/RealtimeConfigContext';
 import TradeEventsToJournal from './components/TradeEventsToJournal';
 import {
   TradeLockerCredentials,
@@ -551,8 +552,10 @@ const App: React.FC = () => {
                 <TradeEventsProvider>
                   <VisionSettingsProvider>
                     <VoiceActivityProvider>
-                      <TradeEventsToJournal />
-                      <Dashboard />
+                      <RealtimeConfigProvider>
+                        <TradeEventsToJournal />
+                        <Dashboard />
+                      </RealtimeConfigProvider>
                     </VoiceActivityProvider>
                   </VisionSettingsProvider>
                 </TradeEventsProvider>
