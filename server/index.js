@@ -1,6 +1,8 @@
 
 
 
+
+
 const express = require('express');
 const http = require('http'); 
 const cors = require('cors');
@@ -17,6 +19,10 @@ const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
 const { setupMarketData, getPrice } = require('./marketData');
+
+// --- Import OpenAI Routers ---
+const openaiRealtimeRouter = require('./routes/openaiRealtimeRouter');
+const openaiAutopilotRouter = require('./routes/openaiAutopilotRouter');
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -100,6 +106,7 @@ app.use('/api/autopilot/', aiLimiter);
 app.use('/api/roundtable/', aiLimiter); 
 app.use('/api/vision/', aiLimiter); 
 app.use('/api/history/', aiLimiter);
+app.use('/api/openai/', aiLimiter);
 
 app.use(
   cors({
@@ -113,6 +120,10 @@ app.use(express.json({ limit: '10mb' }));
 
 // Mount Vision Router
 app.use('/api/vision', visionRouter);
+
+// Mount OpenAI Routers
+app.use('/api/openai', openaiRealtimeRouter);
+app.use('/api/openai', openaiAutopilotRouter);
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {
@@ -157,10 +168,6 @@ app.get('/api/proxy', async (req, res) => {
 // ------------------------------
 // Broker snapshot API (Updated)
 // ------------------------------
-//
-// Returns the latest snapshot cached by the TradeLocker poller.
-// If none is cached yet, it fetches one on-demand.
-
 app.get('/api/broker/snapshot', async (req, res) => {
   try {
     let snapshot = brokerStateStore.getSnapshot();
@@ -201,17 +208,6 @@ app.post('/api/broker/snapshot', (req, res) => {
 // ------------------------------
 // Broker controls API
 // ------------------------------
-//
-// POST /api/broker/controls
-// Body: { action: string, payload: object }
-//
-// Supported actions:
-// - "place-order"
-// - "close-position"
-// - "modify-position"
-//
-// This is the "execution bus" your AI team will hit.
-
 app.post('/api/broker/controls', async (req, res) => {
   const { action, payload } = req.body || {};
 

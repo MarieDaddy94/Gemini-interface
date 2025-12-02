@@ -1,5 +1,7 @@
 
 
+
+
 // client/src/components/AutopilotPanel.tsx
 
 import React, { useMemo, useState } from 'react';
@@ -12,8 +14,9 @@ import {
   RiskVerdict,
 } from '../types';
 import { useAutopilotExecute, useBrokerSnapshot } from '../hooks/useAutopilot';
+import OpenAIVoiceAutopilotPanel from './OpenAIVoiceAutopilotPanel';
 
-type PanelTab = 'compose' | 'status';
+type PanelTab = 'compose' | 'status' | 'voice';
 
 interface AutopilotPanelProps {
   // Proposed command from the AI round-table (Execution Bot)
@@ -282,10 +285,22 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
         >
           Last Decision
         </button>
+        <button
+          onClick={() => setActiveTab('voice')}
+          className={`pb-2 text-[11px] font-medium transition-colors border-b-2 ${
+            activeTab === 'voice' ? 'border-[#2962ff] text-[#2962ff]' : 'border-transparent text-gray-500 hover:text-gray-300'
+          }`}
+        >
+          OpenAI Voice
+        </button>
       </div>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col gap-4 overflow-auto px-4 pb-4">
+        {activeTab === 'voice' && (
+           <OpenAIVoiceAutopilotPanel />
+        )}
+
         {activeTab === 'compose' && (
           <div className="flex flex-col md:flex-row gap-4 h-full">
             {/* Left: manual composer */}
