@@ -1,17 +1,16 @@
+// src/config/geminiLiveTools.ts
 import { Tool, Type } from "@google/genai";
 
 /**
  * Tool: get_chart_playbook
- * The model calls this when it wants your backend to generate
- * a structured playbook for the current chart / account state.
  */
 export const chartPlaybookTool: Tool = {
   functionDeclarations: [
     {
       name: "get_chart_playbook",
       description:
-        "Fetches saved strategy playbooks for a given symbol/timeframe. " +
-        "Use this whenever you are planning a trade and want to anchor the plan to a known playbook.",
+        "Generate or fetch a concise, structured trading playbook for the current chart and account context. " +
+        "Use it before proposing entries, especially in Autopilot mode.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -22,15 +21,25 @@ export const chartPlaybookTool: Tool = {
           timeframe: {
             type: Type.STRING,
             description:
-              "Active chart timeframe, e.g. '1m', '5m', '15m', '1h'.",
+              "Active chart timeframe, e.g. '1m', '5m', '15m', '1h', '4h', '1d'.",
           },
-          direction: {
+          riskProfile: {
             type: Type.STRING,
-            enum: ["long", "short", "neutral"],
-            description: "Intended trade direction.",
+            description:
+              "Optional risk flavor like 'conservative', 'standard', or 'aggressive'.",
+          },
+          visionSummary: {
+            type: Type.STRING,
+            description:
+              "Optional summary of what the vision model sees on the chart (structure, liquidity, etc.).",
+          },
+          accountSnapshot: {
+            type: Type.OBJECT,
+            description:
+              "Optional account state: balance, equity, open PnL, daily drawdown, etc.",
           },
         },
-        required: ["symbol"],
+        required: ["symbol", "timeframe"],
       },
     },
   ],
@@ -38,8 +47,6 @@ export const chartPlaybookTool: Tool = {
 
 /**
  * Tool: log_trade_journal
- * The model calls this after a trade is closed or analyzed,
- * so your backend can write a structured journal entry.
  */
 export const logTradeJournalTool: Tool = {
   functionDeclarations: [
@@ -47,7 +54,7 @@ export const logTradeJournalTool: Tool = {
       name: "log_trade_journal",
       description:
         "Log a structured journal entry for a completed or planned trade. " +
-        "Call this when you finalize a trade idea or after a trade closes.",
+        "Use this right after summarizing a trade outcome or a key lesson.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -57,39 +64,102 @@ export const logTradeJournalTool: Tool = {
           },
           timeframe: {
             type: Type.STRING,
-            description: "Primary execution timeframe.",
+            description: "Primary execution timeframe, e.g. '1m', '5m'.",
           },
           direction: {
             type: Type.STRING,
-            enum: ["long", "short", "neutral"],
-            description: "Trade direction.",
+            description: "Trade direction: 'long' or 'short'.",
           },
           rMultiple: {
             type: Type.NUMBER,
-            description: "Realized R-multiple or planned R.",
-          },
-          entryPrice: { type: Type.NUMBER },
-          stopLoss: { type: Type.NUMBER },
-          takeProfit: { type: Type.NUMBER },
-          size: { type: Type.NUMBER },
-          outcome: {
-            type: Type.STRING,
-            description: "Status: 'win', 'loss', 'BE', 'planned', 'canceled'.",
+            description:
+              "Realized R-multiple of the trade (e.g. 1.5 for +1.5R, -1.0 for -1R).",
           },
           notes: {
             type: Type.STRING,
-            description: "Short summary of reasoning or lesson.",
+            description:
+              "Short summary of why the trade was taken and what was learned.",
           },
-          agentName: {
+          tags: {
+            type: Type.ARRAY,
+            description: "Optional list of tags: setup name, session, etc.",
+            items: { type: Type.STRING },
+          },
+          screenshotId: {
             type: Type.STRING,
-            description: "Which agent proposed this trade.",
+            description:
+              "Optional ID or URL for a chart screenshot associated with this trade.",
           },
-          autopilotMode: {
+        },
+        required: ["symbol", "timeframe", "direction", "rMultiple"],
+      },
+    },
+  ],
+};
+
+/**
+ * Tool: get_autopilot_proposal
+ */
+export const autopilotProposalTool: Tool = {
+  functionDeclarations: [
+    {
+      name: "get_autopilot_proposal",
+      description:
+        "Ask the backend risk engine to compute a structured trade proposal " +
+        "with position size and basic risk checks. Use this when turning a " +
+        "playbook into an actionable trade.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          symbol: {
+            type: Type.STRING,
+            description: "Symbol, e.g. 'US30'.",
+          },
+          timeframe: {
+            type: Type.STRING,
+            description: "Execution timeframe, e.g. '1m', '5m', '15m'.",
+          },
+          direction: {
+            type: Type.STRING,
+            description: "Trade direction: 'long' or 'short'.",
+          },
+          accountEquity: {
+            type: Type.NUMBER,
+            description: "Current account equity.",
+          },
+          riskPercent: {
+            type: Type.NUMBER,
+            description:
+              "Risk as percent of equity per trade (e.g. 0.5 = 0.5%).",
+          },
+          mode: {
             type: Type.STRING,
             description: "confirm | auto | sim",
           },
+          entryPrice: {
+            type: Type.NUMBER,
+            description: "Planned entry price.",
+          },
+          stopLossPrice: {
+            type: Type.NUMBER,
+            description: "Planned stop loss price.",
+          },
+          rMultipleTarget: {
+            type: Type.NUMBER,
+            description: "Target R multiple, e.g. 3 for 3R.",
+          },
+          visionSummary: {
+            type: Type.STRING,
+            description:
+              "Short summary from vision about the chart structure and liquidity.",
+          },
+          notes: {
+            type: Type.STRING,
+            description:
+              "Extra context or justification to store with this proposal.",
+          },
         },
-        required: ["symbol"],
+        required: ["symbol", "timeframe", "direction"],
       },
     },
   ],
@@ -98,4 +168,5 @@ export const logTradeJournalTool: Tool = {
 export const GEMINI_LIVE_TOOLS: Tool[] = [
   chartPlaybookTool,
   logTradeJournalTool,
+  autopilotProposalTool,
 ];

@@ -2,6 +2,11 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const {
+  getPlaybooks,
+  addJournalEntry,
+  computeAutopilotProposal,
+} = require("./server/toolsData");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -53,6 +58,57 @@ app.post('/api/playbooks', (req, res) => {
 app.get('/api/playbooks', (req, res) => {
   const entries = readLogFile();
   res.json(entries);
+});
+
+// --- SQUAD TOOLS API ---
+
+// GET /api/tools/playbooks
+app.get("/api/tools/playbooks", (req, res) => {
+  try {
+    const { symbol, timeframe, direction } = req.query;
+    const result = getPlaybooks({
+      symbol: typeof symbol === "string" ? symbol : undefined,
+      timeframe: typeof timeframe === "string" ? timeframe : undefined,
+      direction: typeof direction === "string" ? direction : undefined,
+    });
+
+    res.json(result); // Return array
+  } catch (err) {
+    console.error("Error in /api/tools/playbooks", err);
+    res.status(500).json({ error: "Failed to fetch playbooks" });
+  }
+});
+
+// POST /api/tools/journal-entry
+app.post("/api/tools/journal-entry", (req, res) => {
+  try {
+    const entry = addJournalEntry(req.body);
+    res.json({ ok: true, entry });
+  } catch (err) {
+    console.error("Error in /api/tools/journal-entry", err);
+    res.status(500).json({ error: "Failed to add journal entry" });
+  }
+});
+
+// POST /api/tools/autopilot-proposal
+// Body: { symbol, timeframe, direction, accountEquity, riskPercent, mode,
+//         entryPrice, stopLossPrice, rMultipleTarget, visionSummary, notes }
+app.post("/api/tools/autopilot-proposal", (req, res) => {
+  try {
+    const payload = req.body || {};
+    const proposal = computeAutopilotProposal(payload);
+
+    res.json({
+      ok: proposal.riskEngine?.status !== "review",
+      proposal,
+    });
+  } catch (err) {
+    console.error("Error in /api/tools/autopilot-proposal", err);
+    res.status(500).json({
+      ok: false,
+      error: "Failed to compute autopilot proposal",
+    });
+  }
 });
 
 app.listen(PORT, () => {

@@ -23,7 +23,7 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
     setLog((prev) => [...prev, line].slice(-300));
   };
 
-  // Define tools once
+  // Tools: playbook lookup, journaling, autopilot proposal
   const tools: OpenAIToolSchema[] = [
     {
       type: "function",
@@ -46,6 +46,11 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             type: "string",
             enum: ["long", "short", "neutral"],
             description: "Intended trade direction.",
+          },
+          visionSummary: {
+            type: "string",
+            description:
+              "Optional summary of what the vision model sees on the chart (structure, liquidity, etc.).",
           },
         },
         required: ["symbol"],
@@ -106,6 +111,68 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
         required: ["symbol"],
       },
     },
+    {
+      type: "function",
+      name: "get_autopilot_proposal",
+      description:
+        "Ask the backend risk engine to compute a structured trade proposal " +
+        "with position size and basic risk checks. Use this when turning a " +
+        "playbook into an actionable trade.",
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: {
+            type: "string",
+            description: "Symbol, e.g. 'US30'.",
+          },
+          timeframe: {
+            type: "string",
+            description: "Execution timeframe, e.g. '1m', '5m', '15m'.",
+          },
+          direction: {
+            type: "string",
+            enum: ["long", "short"],
+            description: "Trade direction.",
+          },
+          accountEquity: {
+            type: "number",
+            description: "Current account equity.",
+          },
+          riskPercent: {
+            type: "number",
+            description:
+              "Risk as percent of equity per trade (e.g. 0.5 = 0.5%).",
+          },
+          mode: {
+            type: "string",
+            description: "confirm | auto | sim",
+          },
+          entryPrice: {
+            type: "number",
+            description: "Planned entry price.",
+          },
+          stopLossPrice: {
+            type: "number",
+            description: "Planned stop loss price.",
+          },
+          rMultipleTarget: {
+            type: "number",
+            description: "Target R multiple, e.g. 3 for 3R.",
+          },
+          visionSummary: {
+            type: "string",
+            description:
+              "Short summary from vision about the chart (structure, liquidity, etc.).",
+          },
+          notes: {
+            type: "string",
+            description:
+              "Any extra natural-language context you want the risk engine to store.",
+          },
+        },
+        required: ["symbol", "timeframe", "direction"],
+      },
+    },
   ];
 
   useEffect(() => {
@@ -126,8 +193,9 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
         "You are an AI trading squad (strategist, risk manager, quant analyst, " +
         "and execution bot) helping manage a prop-firm style trading account. " +
         "Always respect risk limits and ask for clarification before aggressive trades. " +
-        "Use get_chart_playbook to ground your plans in stored playbooks, and " +
-        "log_trade_journal to record trades and lessons.",
+        "Use get_chart_playbook to ground your plans in stored playbooks, " +
+        "get_autopilot_proposal to compute precise risk and position sizing, " +
+        "and log_trade_journal to record trades and lessons.",
       tools,
       events: {
         onOpen: () => {
@@ -148,16 +216,20 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
       },
       onToolCall: async (name, args, callId) => {
         try {
+          // Resolve backend URL
+          const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+
           if (name === "get_chart_playbook") {
             pushLog(
               `🛠 Tool call: get_chart_playbook(${JSON.stringify(args)})`
             );
             const params = new URLSearchParams();
             if (args.symbol) params.set("symbol", String(args.symbol));
-            if (args.timeframe) params.set("timeframe", String(args.timeframe));
-            if (args.direction) params.set("direction", String(args.direction));
+            if (args.timeframe)
+              params.set("timeframe", String(args.timeframe));
+            if (args.direction)
+              params.set("direction", String(args.direction));
 
-            const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
             const resp = await fetch(
               `${API_BASE_URL}/api/tools/playbooks?${params.toString()}`
             );
@@ -167,8 +239,18 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             pushLog(
               `🛠 Tool call: log_trade_journal(${JSON.stringify(args)})`
             );
-            const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
             const resp = await fetch(`${API_BASE_URL}/api/tools/journal-entry`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(args),
+            });
+            const json = await resp.json();
+            client.sendToolResult(callId, json);
+          } else if (name === "get_autopilot_proposal") {
+            pushLog(
+              `🛠 Tool call: get_autopilot_proposal(${JSON.stringify(args)})`
+            );
+            const resp = await fetch(`${API_BASE_URL}/api/tools/autopilot-proposal`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(args),
@@ -252,9 +334,9 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
 
       <p className="mt-2 text-[10px] opacity-60">
         The squad can now call <code>get_chart_playbook</code> to fetch saved
-        playbooks and <code>log_trade_journal</code> to record trades and
-        lessons, with results streamed back through Realtime and your voice
-        bus.
+        playbooks, <code>get_autopilot_proposal</code> to compute risk and
+        position sizing (using vision notes if provided), and{" "}
+        <code>log_trade_journal</code> to record trades and lessons.
       </p>
     </div>
   );
