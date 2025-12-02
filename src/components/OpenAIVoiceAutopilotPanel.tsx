@@ -234,49 +234,84 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
             if (args.direction)
               params.set("direction", String(args.direction));
 
-            const resp = await fetch(
-              `${API_BASE_URL}/api/tools/playbooks?${params.toString()}`
-            );
-            const json = await resp.json();
-            client.sendToolResult(callId, json);
+            try {
+              const resp = await fetch(
+                `${API_BASE_URL}/api/tools/playbooks?${params.toString()}`
+              );
+              if (!resp.ok) {
+                const errText = await resp.text();
+                throw new Error(`API ${resp.status}: ${errText}`);
+              }
+              const json = await resp.json();
+              client.sendToolResult(callId, json);
+            } catch (err: any) {
+              pushLog(`❌ Error fetching playbooks: ${err.message}`);
+              client.sendToolResult(callId, { error: `Failed to get playbooks: ${err.message}` });
+            }
+
           } else if (name === "log_trade_journal") {
             pushLog(
               `🛠 Tool call: log_trade_journal(${JSON.stringify(args)})`
             );
-            const resp = await fetch(`${API_BASE_URL}/api/tools/journal-entry`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(args),
-            });
-            const json = await resp.json();
-            client.sendToolResult(callId, json);
+            try {
+              const resp = await fetch(`${API_BASE_URL}/api/tools/journal-entry`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(args),
+              });
+              if (!resp.ok) {
+                const errText = await resp.text();
+                throw new Error(`API ${resp.status}: ${errText}`);
+              }
+              const json = await resp.json();
+              client.sendToolResult(callId, json);
+              pushLog("✅ Journal entry logged successfully.");
+            } catch (err: any) {
+              pushLog(`❌ Error logging journal: ${err.message}`);
+              client.sendToolResult(callId, { error: `Failed to log journal: ${err.message}` });
+            }
+
           } else if (name === "get_autopilot_proposal") {
             pushLog(
               `🛠 Tool call: get_autopilot_proposal(${JSON.stringify(args)})`
             );
             setProposalStatus("Generating proposal…");
-            const resp = await fetch(`${API_BASE_URL}/api/tools/autopilot-proposal`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(args),
-            });
-            const json = await resp.json();
+            
+            try {
+              const resp = await fetch(`${API_BASE_URL}/api/tools/autopilot-proposal`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(args),
+              });
 
-            // Surface into UI card
-            if (json?.proposal) {
-              setProposal(json.proposal as AutopilotProposal);
-              setProposalStatus(
-                json.ok
-                  ? "Proposal ready – risk engine status OK."
-                  : "Proposal ready – risk engine flagged issues. Review before sending."
-              );
-            } else {
-              setProposal(null);
-              setProposalStatus("No proposal returned from risk engine.");
+              if (!resp.ok) {
+                const errText = await resp.text();
+                throw new Error(`API ${resp.status}: ${errText}`);
+              }
+
+              const json = await resp.json();
+
+              // Surface into UI card
+              if (json?.proposal) {
+                setProposal(json.proposal as AutopilotProposal);
+                setProposalStatus(
+                  json.ok
+                    ? "Proposal ready – risk engine status OK."
+                    : "Proposal ready – risk engine flagged issues. Review before sending."
+                );
+              } else {
+                setProposal(null);
+                setProposalStatus("No proposal returned from risk engine.");
+              }
+
+              // Also send back into the model
+              client.sendToolResult(callId, json);
+            } catch (err: any) {
+              setProposalStatus(`Error generating proposal: ${err.message}`);
+              pushLog(`❌ Error generating proposal: ${err.message}`);
+              client.sendToolResult(callId, { error: `Failed to generate proposal: ${err.message}` });
             }
 
-            // Also send back into the model
-            client.sendToolResult(callId, json);
           } else {
             pushLog(`🛠 Unknown tool: ${name}`);
             client.sendToolResult(callId, {
@@ -286,7 +321,7 @@ const OpenAIVoiceAutopilotPanel: React.FC<Props> = ({ wsUrl }) => {
           }
         } catch (err) {
           console.error("Tool handler error", err);
-          pushLog(`⚠️ Tool error: ${String((err as any)?.message ?? err)}`);
+          pushLog(`⚠️ Tool handler error: ${String((err as any)?.message ?? err)}`);
           client.sendToolResult(callId, {
             ok: false,
             error: "Tool handler threw an error",
