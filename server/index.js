@@ -9,6 +9,8 @@ const rateLimit = require('express-rate-limit');
 
 // Import Logger
 const logger = require('./logger');
+const AppError = require('./utils/AppError');
+const globalErrorHandler = require('./middleware/errorMiddleware');
 
 // Import Persistence
 const db = require('./persistence');
@@ -91,23 +93,21 @@ const { parseVoiceAutopilotCommand } = require('./autopilot/voiceParser');
 const { analyzeChartImage } = require('./vision/visionService');
 const { visionRouter } = require('./visionRouter');
 
-const app = express();
-const PORT = process.env.PORT || 4000;
-const LOG_FILE = path.join(__dirname, 'playbooks-log.json');
-const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123';
-
-const server = http.createServer(app);
-
 // --- GLOBAL SERVER CRASH PROTECTION ---
 process.on('uncaughtException', (err) => {
   logger.error('UNCAUGHT EXCEPTION - Server would have crashed', err);
-  // In a real production app, you might want to exit(1) here after logging, 
-  // but for stability in this demo we keep it alive if possible.
+  // Keep alive in this demo context, but typically you'd restart
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('UNHANDLED REJECTION', { reason });
 });
+
+const app = express();
+const PORT = process.env.PORT || 4000;
+const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123';
+
+const server = http.createServer(app);
 
 // --- SECURITY: Rate Limiting ---
 const aiLimiter = rateLimit({
@@ -127,7 +127,7 @@ app.use('/api/roundtable/', aiLimiter);
 app.use('/api/vision/', aiLimiter); 
 app.use('/api/history/', aiLimiter);
 app.use('/api/openai/', aiLimiter);
-app.use('/api/gemini/', aiLimiter); // Rate limit gemini too
+app.use('/api/gemini/', aiLimiter);
 app.use('/api/playbooks', aiLimiter);
 app.use('/api/journal', aiLimiter);
 
@@ -169,7 +169,7 @@ app.use('/api/gemini', geminiVisionRouter);
 // Mount New Routers
 app.use('/api/playbooks', playbookRouter);
 app.use('/api/journal', journalAutoRouter);
-app.use('/api', ttsRouter); // mounts at /api/gemini/tts and /api/openai/tts
+app.use('/api', ttsRouter); 
 
 // --- AUTH ROUTE ---
 app.post('/api/auth/verify', (req, res) => {
@@ -183,12 +183,12 @@ app.post('/api/auth/verify', (req, res) => {
   }
 });
 
-// --- WEB PROXY ROUTE ---
-app.get('/api/proxy', async (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl) return res.status(400).send('Missing url param');
-
+// --- PROXY ROUTE ---
+app.get('/api/proxy', async (req, res, next) => {
   try {
+    const targetUrl = req.query.url;
+    if (!targetUrl) return next(new AppError('Missing url param', 400));
+
     const response = await fetch(targetUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -208,15 +208,14 @@ app.get('/api/proxy', async (req, res) => {
       res.send(Buffer.from(buffer));
     }
   } catch (err) {
-    logger.error('Proxy Error:', err.message);
-    res.status(502).send(`Proxy Error: ${err.message}`);
+    next(new AppError(`Proxy Error: ${err.message}`, 502));
   }
 });
 
 // ------------------------------
-// Broker snapshot API (Updated)
+// Broker snapshot API
 // ------------------------------
-app.get('/api/broker/snapshot', async (req, res) => {
+app.get('/api/broker/snapshot', async (req, res, next) => {
   try {
     let snapshot = brokerStateStore.getSnapshot();
 
@@ -225,46 +224,30 @@ app.get('/api/broker/snapshot', async (req, res) => {
       brokerStateStore.updateSnapshot(snapshot);
     }
 
-    res.json({
-      ok: true,
-      snapshot,
-    });
+    res.json({ ok: true, snapshot });
   } catch (err) {
-    logger.error('[API] /api/broker/snapshot error:', err);
-    res.status(500).json({
-      ok: false,
-      error: 'BrokerSnapshotError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
-app.post('/api/broker/snapshot', (req, res) => {
+app.post('/api/broker/snapshot', (req, res, next) => {
   try {
     const payload = req.body || {};
     const snapshot = setBrokerSnapshot('default', payload);
     res.json(snapshot);
   } catch (err) {
-    logger.error('Error in POST /api/broker/snapshot:', err);
-    res.status(500).json({
-      error: 'BrokerSnapshotError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
 // ------------------------------
 // Broker controls API
 // ------------------------------
-app.post('/api/broker/controls', async (req, res) => {
+app.post('/api/broker/controls', async (req, res, next) => {
   const { action, payload } = req.body || {};
 
   if (!action) {
-    return res.status(400).json({
-      ok: false,
-      error: 'MissingAction',
-      message: 'Body must include "action".',
-    });
+    return next(new AppError('Body must include "action".', 400));
   }
 
   try {
@@ -275,71 +258,36 @@ app.post('/api/broker/controls', async (req, res) => {
         result = await placeOrder(payload || {});
         break;
       }
-
       case 'close-position': {
         const { positionId, qty } = payload || {};
-        if (!positionId && positionId !== 0) {
-          throw new Error(
-            'close-position requires payload.positionId',
-          );
-        }
-        const q =
-          qty === undefined || qty === null ? 0 : Number(qty);
+        if (!positionId && positionId !== 0) throw new AppError('close-position requires payload.positionId', 400);
+        const q = qty === undefined || qty === null ? 0 : Number(qty);
         result = await closePosition(positionId, q);
         break;
       }
-
       case 'modify-position': {
         const { positionId, slPrice, tpPrice } = payload || {};
-        if (!positionId && positionId !== 0) {
-          throw new Error(
-            'modify-position requires payload.positionId',
-          );
-        }
+        if (!positionId && positionId !== 0) throw new AppError('modify-position requires payload.positionId', 400);
         const params = {};
-        if ('slPrice' in (payload || {})) {
-          params.slPrice =
-            slPrice === null ? null : Number(slPrice);
-        }
-        if ('tpPrice' in (payload || {})) {
-          params.tpPrice =
-            tpPrice === null ? null : Number(tpPrice);
-        }
+        if ('slPrice' in (payload || {})) params.slPrice = slPrice === null ? null : Number(slPrice);
+        if ('tpPrice' in (payload || {})) params.tpPrice = tpPrice === null ? null : Number(tpPrice);
         result = await modifyPosition(positionId, params);
         break;
       }
-
       default:
-        return res.status(400).json({
-          ok: false,
-          error: 'UnknownAction',
-          message: `Unsupported action "${action}".`,
-        });
+        return next(new AppError(`Unsupported action "${action}".`, 400));
     }
 
     try {
       const snapshot = await fetchTradeLockerSnapshot();
       brokerStateStore.updateSnapshot(snapshot);
     } catch (snapErr) {
-      logger.warn(
-        '[API] /api/broker/controls – failed to refresh snapshot:',
-        snapErr.message,
-      );
+      logger.warn('[API] /api/broker/controls – failed to refresh snapshot:', snapErr.message);
     }
 
-    res.json({
-      ok: true,
-      action,
-      result,
-    });
+    res.json({ ok: true, action, result });
   } catch (err) {
-    logger.error('[API] /api/broker/controls error:', err);
-    res.status(500).json({
-      ok: false,
-      action,
-      error: 'BrokerControlError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
@@ -347,20 +295,16 @@ app.post('/api/broker/controls', async (req, res) => {
 // Agent settings / model routing
 // ------------------------------
 
-app.get('/api/agents', (req, res) => {
+app.get('/api/agents', (req, res, next) => {
   try {
     const list = getAgents();
     res.json({ agents: list });
   } catch (err) {
-    logger.error('Error in GET /api/agents:', err);
-    res.status(500).json({
-      error: 'AgentListError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
-app.post('/api/agents/:id', (req, res) => {
+app.post('/api/agents/:id', (req, res, next) => {
   try {
     const id = req.params.id;
     const { provider, model } = req.body || {};
@@ -370,47 +314,30 @@ app.post('/api/agents/:id', (req, res) => {
     if (model) patch.model = model;
 
     if (!Object.keys(patch).length) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'Nothing to update (provider/model missing).',
-      });
+      return next(new AppError('Nothing to update (provider/model missing).', 400));
     }
 
     if (provider && !['openai', 'gemini'].includes(provider)) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'provider must be "openai" or "gemini".',
-      });
+      return next(new AppError('provider must be "openai" or "gemini".', 400));
     }
 
     const updated = updateAgentConfig(id, patch);
     if (!updated) {
-      return res.status(404).json({
-        error: 'NotFound',
-        message: `Agent ${id} not found.`,
-      });
+      return next(new AppError(`Agent ${id} not found.`, 404));
     }
 
     res.json(updated);
   } catch (err) {
-    logger.error('Error in POST /api/agents/:id:', err);
-    res.status(500).json({
-      error: 'AgentUpdateError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
-app.post('/api/agents', (req, res) => {
+app.post('/api/agents', (req, res, next) => {
   try {
-    const { id, displayName, role, provider, model, capabilities } =
-      req.body || {};
+    const { id, displayName, role, provider, model, capabilities } = req.body || {};
 
     if (!id || !displayName || !role) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'id, displayName, and role are required.',
-      });
+      return next(new AppError('id, displayName, and role are required.', 400));
     }
 
     let caps = [];
@@ -429,56 +356,27 @@ app.post('/api/agents', (req, res) => {
 
     res.json(agent);
   } catch (err) {
-    logger.error('Error in POST /api/agents (create):', err);
-    if (err.code === 'Conflict') {
-      return res.status(409).json({
-        error: 'Conflict',
-        message: err.message,
-      });
-    }
-    if (err.code === 'BadRequest') {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: err.message,
-      });
-    }
-    res.status(500).json({
-      error: 'AgentCreateError',
-      message: err.message || 'Unknown error',
-    });
+    if (err.code === 'Conflict') return next(new AppError(err.message, 409));
+    next(err);
   }
 });
 
-app.delete('/api/agents/:id', (req, res) => {
+app.delete('/api/agents/:id', (req, res, next) => {
   try {
     const id = req.params.id;
     let removed;
     try {
       removed = deleteAgent(id);
     } catch (err) {
-      if (err.code === 'Protected') {
-        return res.status(400).json({
-          error: 'Protected',
-          message: err.message,
-        });
-      }
+      if (err.code === 'Protected') return next(new AppError(err.message, 400));
       throw err;
     }
 
-    if (!removed) {
-      return res.status(404).json({
-        error: 'NotFound',
-        message: `Agent ${id} not found.`,
-      });
-    }
+    if (!removed) return next(new AppError(`Agent ${id} not found.`, 404));
 
     res.json({ ok: true, removedId: id });
   } catch (err) {
-    logger.error('Error in DELETE /api/agents/:id:', err);
-    res.status(500).json({
-      error: 'AgentDeleteError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
@@ -486,12 +384,12 @@ app.delete('/api/agents/:id', (req, res) => {
 app.use(createAgentsRouter(db));
 
 // --- MULTI-AGENT CHAT ---
-app.post("/api/agents/chat", async (req, res) => {
+app.post("/api/agents/chat", async (req, res, next) => {
   try {
     const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId } = req.body || {};
 
     if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
-      return res.status(400).json({ error: "agentIds[] and userMessage are required" });
+      return next(new AppError("agentIds[] and userMessage are required", 400));
     }
     
     const apiKeys = {
@@ -514,17 +412,16 @@ app.post("/api/agents/chat", async (req, res) => {
 
     res.json({ ok: true, agents: results });
   } catch (err) {
-    logger.error("Error in /api/agents/chat:", err);
-    res.status(500).json({ error: "LLM router error", details: err.message });
+    next(err);
   }
 });
 
-app.post("/api/agents/debrief", async (req, res) => {
+app.post("/api/agents/debrief", async (req, res, next) => {
   try {
     const { previousInsights, chartContext, journalContext, agentOverrides, accountId } = req.body || {};
 
     if (!previousInsights || !Array.isArray(previousInsights)) {
-      return res.status(400).json({ error: "previousInsights array is required" });
+      return next(new AppError("previousInsights array is required", 400));
     }
 
     const apiKeys = {
@@ -544,192 +441,65 @@ app.post("/api/agents/debrief", async (req, res) => {
 
     res.json({ ok: true, insights: results });
   } catch (err) {
-    logger.error("Error in /api/agents/debrief:", err);
-    res.status(500).json({ error: "LLM debrief error", details: err.message });
+    next(err);
   }
 });
 
 // --- LEGACY AI ROUTE ---
-app.post('/api/ai/route', async (req, res) => {
+app.post('/api/ai/route', async (req, res, next) => {
   try {
     const result = await handleAiRoute(req.body, db);
     res.json(result);
   } catch (err) {
-    logger.error('AI Route Error:', err);
-    res.status(500).json({ 
-      error: err.message || 'Internal AI Error',
-      message: { role: 'assistant', content: 'I encountered an error processing your request.' }
-    });
+    next(err);
   }
 });
 
 // --- AGENT ROUTER ---
-app.post('/api/agent-router', async (req, res) => {
+app.post('/api/agent-router', async (req, res, next) => {
   try {
     const { agentId, userMessage, sessionState, history } = req.body || {};
     const result = await handleAgentRequest({ agentId, userMessage, sessionState, history });
     res.json(result);
   } catch (err) {
-    logger.error('Error in /api/agent-router:', err);
-    res.status(500).json({ error: 'Agent router error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
 // --- AUTOPILOT & RISK ROUTES ---
-app.post('/api/risk/preview-trade', async (req, res) => {
+app.post('/api/risk/preview-trade', async (req, res, next) => {
   try {
     const { sessionState, proposedTrade } = req.body || {};
     const result = await handleAutopilotProposedTrade(sessionState, proposedTrade);
     res.json(result);
   } catch (err) {
-    logger.error('Error in /api/risk/preview-trade:', err);
-    res.status(500).json({ error: 'Risk preview error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
-app.post('/api/autopilot/plan-trade', async (req, res) => {
+app.post('/api/autopilot/plan-trade', async (req, res, next) => {
   try {
     const { sessionState, proposedTrade } = req.body || {};
     if (!sessionState || !proposedTrade) {
-      return res.status(400).json({ error: "Missing sessionState or proposedTrade" });
+      return next(new AppError("Missing sessionState or proposedTrade", 400));
     }
     const result = await handleAutopilotExecutionPlan(sessionState, proposedTrade);
     res.json(result);
   } catch (err) {
-    logger.error('Error in /api/autopilot/plan-trade:', err);
-    res.status(500).json({ error: 'Autopilot planning error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
-// ------------------------------
-// Helper: Turn VisionResult into text summary
-// ------------------------------
-function buildVisualSummaryFromVisionResult(vr) {
-  if (!vr || !vr.analysis) return vr?.summary || null;
-
-  const a = vr.analysis;
-  const lines = [];
-
-  lines.push(
-    `VISION READ (symbol=${a.symbol}, tf=${a.timeframe}, session=${a.sessionContext || 'n/a'})`,
-  );
-  lines.push(
-    `Bias: ${a.marketBias.toUpperCase()} (conf ${(a.confidence || 0) * 100}%)`,
-  );
-  if (a.structureNotes) {
-    lines.push(`Structure: ${a.structureNotes}`);
-  }
-  if (a.liquidityNotes) {
-    lines.push(`Liquidity: ${a.liquidityNotes}`);
-  }
-  if (a.fvgNotes) {
-    lines.push(`FVGs: ${a.fvgNotes}`);
-  }
-  if (Array.isArray(a.keyZones) && a.keyZones.length) {
-    lines.push(`Key zones: ${a.keyZones.join(', ')}`);
-  }
-  if (Array.isArray(a.riskWarnings) && a.riskWarnings.length) {
-    lines.push(`Risk warnings: ${a.riskWarnings.join(' | ')}`);
-  }
-  if (Array.isArray(a.suggestedPlaybookTags) && a.suggestedPlaybookTags.length) {
-    lines.push(`Playbook tags: ${a.suggestedPlaybookTags.join(', ')}`);
-  }
-
-  return lines.join('\n');
-}
-
-// ------------------------------
-// Autopilot plan from round-table
-// ------------------------------
-app.post('/api/autopilot/plan-from-roundtable', async (req, res) => {
-  try {
-    const {
-      sessionState,
-      userQuestion,
-      recentJournal,
-      visualSummary,
-      visionResult,   // NEW: full ChartVisionResult from client
-    } = req.body || {};
-
-    if (!sessionState) {
-      return res.status(400).json({
-        ok: false,
-        error: 'MissingSessionState',
-        message: 'sessionState is required in the request body.',
-      });
-    }
-
-    // If we have a full VisionResult, build a richer visualSummary string
-    const enrichedVisualSummary = visionResult
-      ? buildVisualSummaryFromVisionResult(visionResult)
-      : visualSummary ?? null;
-
-    const result = await runTradingRoundTable({
-      sessionState,
-      userQuestion: userQuestion || '',
-      recentJournal: Array.isArray(recentJournal) ? recentJournal : [],
-      visualSummary: enrichedVisualSummary,
-    });
-
-    res.json({
-      ok: true,
-      roundTable: {
-        finalSummary: result.finalSummary,
-        agents: result.agents,
-        bias: result.bias,
-        executionNotes: result.executionNotes,
-        riskNotes: result.riskNotes,
-        riskCommandComment: result.riskCommandComment || null,
-        riskCommandVerdict: result.riskCommandVerdict || 'UNKNOWN',
-        // Echo visual summary back
-        visualSummary: enrichedVisualSummary || null,
-      },
-      autopilotCommand: result.autopilotCommand || null,
-      autopilotCommandRisk: {
-        verdict: result.riskCommandVerdict || 'UNKNOWN',
-        comment: result.riskCommandComment || null,
-        summary: result.autopilotCommandSummary || null,
-      },
-    });
-  } catch (err) {
-    logger.error('[API] /api/autopilot/plan-from-roundtable error:', err);
-    res.status(500).json({
-      ok: false,
-      error: 'RoundTableAutopilotPlanError',
-      message: err.message || 'Unknown error',
-    });
-  }
-});
-
-app.post('/api/autopilot/voice-parse', async (req, res) => {
-  try {
-    const { transcript, sessionState } = req.body || {};
-    const parsed = await parseVoiceAutopilotCommand({ transcript, sessionState });
-    res.json(parsed);
-  } catch (err) {
-    logger.error('Error in /api/autopilot/voice-parse:', err);
-    res.status(500).json({ error: 'VoiceParseError', message: err.message || 'Unknown error' });
-  }
-});
-
-// ------------------------------
-// Autopilot execution endpoint
-// ------------------------------
-app.post('/api/autopilot/execute', async (req, res) => {
+// --- AUTOPILOT EXECUTION ---
+app.post('/api/autopilot/execute', async (req, res, next) => {
   try {
     const { mode, source, command } = req.body || {};
 
     if (!command || !command.type) {
-      return res.status(400).json({
-        ok: false,
-        error: 'MissingCommand',
-        message:
-          'Body must include "command" with a valid "type" field.',
-      });
+      return next(new AppError('Body must include "command" with a valid "type" field.', 400));
     }
 
-    const useMode =
-      mode === 'auto' || mode === 'confirm' ? mode : 'confirm';
+    const useMode = mode === 'auto' || mode === 'confirm' ? mode : 'confirm';
 
     const result = await executeTradeCommand({
       mode: useMode,
@@ -737,206 +507,126 @@ app.post('/api/autopilot/execute', async (req, res) => {
       source: source || 'api',
     });
 
-    res.json({
-      ok: true,
-      mode: useMode,
-      result,
-    });
+    res.json({ ok: true, mode: useMode, result });
   } catch (err) {
-    logger.error('[API] /api/autopilot/execute error:', err);
-    res.status(500).json({
-      ok: false,
-      error: 'AutopilotExecuteError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
 // --- ROUND TABLE ---
-app.post('/api/roundtable/plan', async (req, res) => {
+app.post('/api/roundtable/plan', async (req, res, next) => {
   try {
     const { sessionState, userQuestion, visualSummary } = req.body || {};
 
     if (!sessionState) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'sessionState is required.',
-      });
+      return next(new AppError('sessionState is required.', 400));
     }
 
     const result = await runTradingRoundTable({
       sessionState,
       userQuestion: userQuestion || '',
       recentJournal: getSimilarAutopilotHistory(sessionState, 25),
-      visualSummary:
-        typeof visualSummary === 'string' ? visualSummary : null,
+      visualSummary: typeof visualSummary === 'string' ? visualSummary : null,
     });
 
     res.json(result);
   } catch (err) {
-    logger.error('Error in /api/roundtable/plan:', err);
-    res.status(500).json({
-      error: 'RoundTableError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
 // --- HISTORY & COACHING ---
-app.post('/api/history/autopilot/log', (req, res) => {
+app.post('/api/history/autopilot/log', (req, res, next) => {
   try {
     const { entry, sessionState } = req.body || {};
     if (!entry || !sessionState) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'entry and sessionState are required.',
-      });
+      return next(new AppError('entry and sessionState are required.', 400));
     }
     const rec = appendAutopilotHistory(entry, sessionState);
     res.json(rec);
   } catch (err) {
-    logger.error('Error in /api/history/autopilot/log:', err);
-    res.status(500).json({
-      error: 'HistoryLogError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
-app.post('/api/history/autopilot/coach', async (req, res) => {
+app.post('/api/history/autopilot/coach', async (req, res, next) => {
   try {
     const { sessionState } = req.body || {};
     if (!sessionState) {
-      return res.status(400).json({
-        error: 'BadRequest',
-        message: 'sessionState is required.',
-      });
+      return next(new AppError('sessionState is required.', 400));
     }
 
     const result = await runAutopilotCoach(sessionState);
     res.json(result);
   } catch (err) {
-    logger.error('Error in /api/history/autopilot/coach:', err);
-    res.status(500).json({
-      error: 'CoachError',
-      message: err.message || 'Unknown error',
-    });
+    next(err);
   }
 });
 
 // --- VISION ANALYSIS ---
-app.post('/api/vision/analyze', async (req, res) => {
+app.post('/api/vision/analyze', async (req, res, next) => {
   try {
     const { fileBase64, mimeType, sessionState, question } = req.body;
     
     if (!fileBase64 || !mimeType) {
-      return res.status(400).json({ error: "Missing fileBase64 or mimeType" });
+      return next(new AppError("Missing fileBase64 or mimeType", 400));
     }
 
     const summary = await analyzeChartImage({ fileBase64, mimeType, sessionState, question });
     res.json({ visionSummary: summary });
   } catch (err) {
-    logger.error('Error in /api/vision/analyze:', err);
-    res.status(500).json({ error: 'VisionError', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
 // --- SIM BROKER API ---
-app.get('/api/broker/sim/account', (_req, res) => {
+app.get('/api/broker/sim/account', (_req, res, next) => {
   try {
     const account = getSimAccount();
     res.json(account);
   } catch (err) {
-    logger.error('Error in /api/broker/sim/account:', err);
-    res.status(500).json({ error: 'Sim account error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
-app.get('/api/broker/sim/positions', (_req, res) => {
+app.get('/api/broker/sim/positions', (_req, res, next) => {
   try {
     const positions = getSimPositions();
     res.json(positions);
   } catch (err) {
-    logger.error('Error in /api/broker/sim/positions:', err);
-    res.status(500).json({ error: 'Sim positions error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
-app.post('/api/broker/sim/close-position', (req, res) => {
+app.post('/api/broker/sim/close-position', (req, res, next) => {
   try {
     const { positionId, closePrice } = req.body || {};
     if (!positionId || typeof closePrice !== 'number') {
-      return res.status(400).json({ error: 'BadRequest', message: 'positionId and closePrice are required.' });
+      return next(new AppError('positionId and closePrice are required.', 400));
     }
     const pos = closeSimPosition(positionId, closePrice);
     res.json(pos);
   } catch (err) {
-    logger.error('Error in /api/broker/sim/close-position:', err);
-    res.status(500).json({ error: 'Sim close position error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
-app.post('/api/autopilot/execute-plan-sim', async (req, res) => {
+app.post('/api/autopilot/execute-plan-sim', async (req, res, next) => {
   try {
     const { sessionState, tradeRequest, executionParams } = req.body || {};
     const result = await executeAutopilotTradeSim(sessionState, tradeRequest, executionParams);
     res.json(result);
   } catch (err) {
-    logger.error('Error in /api/autopilot/execute-plan-sim:', err);
-    res.status(500).json({ error: 'Autopilot sim exec error', message: err.message || 'Unknown error' });
+    next(err);
   }
 });
 
-// --- PLAYBOOK LOGGING ---
-function readLogFile() {
-  try {
-    if (!fs.existsSync(LOG_FILE)) return [];
-    const data = fs.readFileSync(LOG_FILE, 'utf8');
-    if (!data.trim()) return [];
-    return JSON.parse(data);
-  } catch (err) {
-    logger.error('Error reading playbook log file:', err);
-    return [];
-  }
-}
-
-function writeLogFile(entries) {
-  try {
-    fs.writeFileSync(LOG_FILE, JSON.stringify(entries, null, 2), 'utf8');
-  } catch (err) {
-    logger.error('Error writing playbook log file:', err);
-  }
-}
-
-app.post('/api/playbooks', (req, res) => {
-  const entry = req.body;
-  if (!entry || !entry.id || !entry.timestamp || !entry.sessionSummary) {
-    return res.status(400).json({ ok: false, error: 'Invalid playbook payload' });
-  }
-  const entries = readLogFile();
-  entries.push(entry);
-  writeLogFile(entries);
-  logger.info(`[Playbook] Logged ${entry.focusSymbol || 'UnknownSymbol'} @ ${entry.timestamp}`);
-  res.status(201).json({ ok: true });
-});
-
-app.get('/api/playbooks', (req, res) => {
-  const entries = readLogFile();
-  res.json(entries);
-});
-
-// --- TRADELOCKER PROXY (LEGACY / INTERACTIVE) ---
-function getBaseUrl(isDemo) {
-  return isDemo
-    ? 'https://demo.tradelocker.com/backend-api'
-    : 'https://live.tradelocker.com/backend-api';
-}
-
-app.post('/api/tradelocker/login', async (req, res) => {
+// --- TRADELOCKER PROXY ---
+app.post('/api/tradelocker/login', async (req, res, next) => {
   const { email, password, server, isDemo } = req.body || {};
-  if (!email || !password || !server) return res.status(400).send('Missing email, password or server');
+  if (!email || !password || !server) return next(new AppError('Missing email, password or server', 400));
 
-  const baseUrl = getBaseUrl(!!isDemo);
+  const baseUrl = isDemo ? 'https://demo.tradelocker.com/backend-api' : 'https://live.tradelocker.com/backend-api';
 
   try {
     const authRes = await fetch(`${baseUrl}/auth/jwt/token`, {
@@ -947,14 +637,14 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     if (!authRes.ok) {
       const errorText = await authRes.text();
-      return res.status(authRes.status).send(errorText || 'Failed to authenticate with TradeLocker');
+      return next(new AppError(errorText || 'Failed to authenticate with TradeLocker', authRes.status));
     }
 
     const authJson = await authRes.json();
     const accessToken = authJson.accessToken || authJson.access_token;
     const refreshToken = authJson.refreshToken || authJson.refresh_token;
 
-    if (!accessToken) return res.status(500).send('TradeLocker did not return an access token');
+    if (!accessToken) return next(new AppError('TradeLocker did not return an access token', 500));
 
     const accountsRes = await fetch(`${baseUrl}/auth/jwt/all-accounts`, {
       method: 'GET',
@@ -963,13 +653,13 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     if (!accountsRes.ok) {
       const errorText = await accountsRes.text();
-      return res.status(accountsRes.status).send(errorText || 'Failed to fetch TradeLocker accounts');
+      return next(new AppError(errorText || 'Failed to fetch TradeLocker accounts', accountsRes.status));
     }
 
     const accountsJson = await accountsRes.json();
     const accountsRaw = Array.isArray(accountsJson) ? accountsJson : accountsJson.accounts || [];
 
-    if (!accountsRaw.length) return res.status(400).send('No TradeLocker accounts found for this user');
+    if (!accountsRaw.length) return next(new AppError('No TradeLocker accounts found for this user', 400));
 
     const accounts = accountsRaw.map((a, idx) => {
       const id = String(a.accountId ?? a.id ?? `acc-${idx}`);
@@ -1005,331 +695,35 @@ app.post('/api/tradelocker/login', async (req, res) => {
 
     await db.setSession(sessionId, sessionData);
     
+    // Init journal if needed
     const currentJournal = await db.getJournal(sessionId);
-    if (currentJournal.length === 0) {
-       await db.setJournal(sessionId, []);
-    }
+    if (currentJournal.length === 0) await db.setJournal(sessionId, []);
 
     res.json({ sessionId, accounts, accountId, accNum });
   } catch (err) {
-    logger.error('TradeLocker login fatal error', err);
-    res.status(500).send('Internal error while connecting to TradeLocker');
+    next(err);
   }
 });
 
-async function getSessionOrThrow(sessionId, res) {
-  if (!sessionId) {
-    res.status(400).send('Missing sessionId');
-    return null;
+// --- LAST: Global Error Handler ---
+app.use(globalErrorHandler);
+
+// --- 404 Handler ---
+app.all('*', (req, res, next) => {
+  // If it's an API route that wasn't caught
+  if (req.path.startsWith('/api')) {
+    return next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
   }
-  const session = await db.getSession(sessionId);
-  if (!session) {
-    res.status(401).send('Unknown or expired sessionId');
-    return null;
-  }
-  return session;
-}
-
-app.post('/api/tradelocker/select-account', async (req, res) => {
-  const { sessionId, accountId, accNum } = req.body || {};
-  const session = await getSessionOrThrow(sessionId, res);
-  if (!session) return;
-
-  if (!accountId && accNum == null) return res.status(400).send('Provide accountId or accNum');
-
-  const accounts = session.accounts || [];
-  const target = accounts.find((a) => {
-    if (accountId && String(a.id) === String(accountId)) return true;
-    if (accNum != null && Number(a.accNum) === Number(accNum)) return true;
-    return false;
-  });
-
-  if (!target) return res.status(400).send('Account not found in this session');
-
-  session.accountId = String(target.id);
-  session.accNum = Number(target.accNum);
-  session.lastPositionsById = {};
-  session.latestState = {};
-  session.recentEventsQueue = [];
-  session.simulatedPositions = [];
-
-  await db.setSession(sessionId, session);
-
-  res.json({ ok: true, accountId: session.accountId, accNum: session.accNum });
-});
-
-app.post('/api/tradelocker/order', async (req, res) => {
-  const { sessionId, symbol, side, size, stopLoss, takeProfit } = req.body || {};
-  const session = await getSessionOrThrow(sessionId, res);
-  if (!session) return;
-
-  try {
-    const entryPrice = getPrice(symbol) || 0;
-    if (entryPrice === 0) return res.status(400).json({ error: "Market data unavailable for symbol" });
-
-    const positionId = `sim-${Date.now()}`;
-    const newPosition = {
-      id: positionId,
-      symbol,
-      side,
-      size: Number(size),
-      entryPrice,
-      currentPrice: entryPrice,
-      pnl: 0,
-      openTime: new Date().toISOString(),
-      sl: stopLoss,
-      tp: takeProfit,
-      isSimulated: true
-    };
-
-    if (!session.simulatedPositions) session.simulatedPositions = [];
-    session.simulatedPositions.push(newPosition);
-    
-    await db.setSession(sessionId, session);
-
-    res.json({ ok: true, orderId: positionId, entryPrice });
-  } catch (err) {
-    logger.error('Order execution error', err);
-    res.status(500).json({ error: 'Failed to execute order' });
-  }
-});
-
-app.get('/api/tradelocker/overview', async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const session = await getSessionOrThrow(sessionId, res);
-  if (!session) return;
-
-  const { baseUrl, accessToken, accountId, accNum } = session;
-
-  try {
-    const headers = {
-      Authorization: `Bearer ${accessToken}`,
-      accNum: String(accNum)
-    };
-
-    const [stateRes, positionsRes] = await Promise.all([
-      fetch(`${baseUrl}/trade/accounts/${accountId}/state`, { headers }),
-      fetch(`${baseUrl}/trade/accounts/${accountId}/positions`, { headers })
-    ]);
-
-    if (!stateRes.ok) return res.status(stateRes.status).send('Failed to fetch account state');
-    if (!positionsRes.ok) return res.status(positionsRes.status).send('Failed to fetch open positions');
-
-    const stateJson = await stateRes.json();
-    const positionsJson = await positionsRes.json();
-
-    const balance = Number(stateJson.balance || stateJson.accountBalance || 0);
-    const equity = Number(stateJson.equity || stateJson.accountEquity || balance);
-    const marginUsed = Number(stateJson.marginUsed || stateJson.margin || 0);
-
-    const rawPositions = Array.isArray(positionsJson) ? positionsJson : positionsJson.positions || positionsJson.data || [];
-
-    const realPositions = rawPositions.map((p) => {
-      const sideRaw = (p.side || p.direction || '').toString().toLowerCase();
-      const side = sideRaw.includes('sell') || sideRaw.includes('short') ? 'sell' : 'buy';
-      const symbol = p.symbol || p.instrument || 'UNKNOWN';
-      const size = Number(p.volume || p.lots || 0);
-      const entryPrice = Number(p.openPrice || p.entryPrice || 0);
-      const currentPrice = Number(p.currentPrice || p.lastPrice || entryPrice);
-      const pnl = Number(p.unrealizedPnL || p.pnl || 0);
-      const openTime = p.openTime || p.created || new Date().toISOString();
-
-      return { id: String(p.positionId || p.id), symbol, side, size, entryPrice, currentPrice, pnl, openTime };
-    });
-
-    const simulatedPositions = session.simulatedPositions || [];
-    const updatedSimulated = simulatedPositions.map(pos => {
-       const marketPrice = getPrice(pos.symbol) || pos.currentPrice;
-       const diff = marketPrice - pos.entryPrice;
-       let pnl = diff * pos.size; 
-       if (pos.side === 'sell') pnl = -pnl;
-       
-       if (pos.symbol.includes('US30') || pos.symbol.includes('NAS')) pnl *= 1; 
-       else if (pos.symbol.includes('BTC')) pnl *= 1; 
-       else pnl *= 10000; 
-       
-       return { ...pos, currentPrice: marketPrice, pnl };
-    });
-
-    session.simulatedPositions = updatedSimulated;
-    const positions = [...realPositions, ...updatedSimulated];
-
-    const prevPositionsById = session.lastPositionsById || {};
-    const currentPositionsById = {};
-    const events = [];
-
-    for (const pos of positions) {
-      currentPositionsById[pos.id] = pos;
-      if (!prevPositionsById[pos.id]) {
-        events.push({
-          type: 'ORDER_FILLED',
-          timestamp: new Date().toISOString(),
-          data: { id: pos.id, symbol: pos.symbol, side: pos.side, pnl: 0, size: pos.size, entryPrice: pos.entryPrice }
-        });
-      }
-    }
-
-    const closedIds = Object.keys(prevPositionsById).filter((id) => !currentPositionsById[id]);
-
-    if (closedIds.length) {
-      const journalList = await db.getJournal(sessionId);
-      let journalChanged = false;
-
-      for (const closedId of closedIds) {
-        const prev = prevPositionsById[closedId];
-        if (!prev) continue;
-
-        const finalPnl = Number(prev.pnl || 0);
-        let outcome = 'BreakEven';
-        const threshold = 0.5;
-        if (finalPnl > threshold) outcome = 'Win';
-        else if (finalPnl < -threshold) outcome = 'Loss';
-
-        let matchedEntryIndex = journalList.findIndex(e => e.linkedPositionId === closedId);
-
-        if (matchedEntryIndex !== -1) {
-          const entry = journalList[matchedEntryIndex];
-          if (entry.outcome === 'Open') {
-            journalList[matchedEntryIndex] = { ...entry, outcome, finalPnl, closedAt: new Date().toISOString(), pnl: finalPnl };
-            journalChanged = true;
-          }
-        } else {
-          const autoEntry = {
-            id: `auto-${closedId}`,
-            timestamp: new Date().toISOString(),
-            symbol: prev.symbol,
-            direction: prev.side === 'buy' ? 'long' : 'short',
-            timeframe: '15m', 
-            entryPrice: prev.entryPrice,
-            exitPrice: prev.currentPrice,
-            size: prev.size,
-            netPnl: finalPnl,
-            pnl: finalPnl,
-            currency: 'USD',
-            playbook: 'Manual Execution',
-            note: `Auto-logged from broker execution. PnL: ${finalPnl.toFixed(2)}`,
-            source: 'broker',
-            outcome,
-            linkedPositionId: closedId,
-            tags: ['AutoLog', prev.symbol],
-            sessionId: sessionId
-          };
-          journalList.unshift(autoEntry);
-          journalChanged = true;
-        }
-
-        events.push({
-          type: 'POSITION_CLOSED',
-          timestamp: new Date().toISOString(),
-          data: { id: closedId, symbol: prev.symbol, side: prev.side, size: prev.size, entryPrice: prev.entryPrice, exitPrice: prev.currentPrice, pnl: finalPnl, reason: 'Closed on Broker' }
-        });
-      }
-
-      if (journalChanged) {
-        await db.setJournal(sessionId, journalList);
-      }
-    }
-
-    session.lastPositionsById = currentPositionsById;
-    
-    const simPnL = updatedSimulated.reduce((sum, p) => sum + p.pnl, 0);
-    const adjustedEquity = equity + simPnL;
-
-    session.latestState = { balance, equity: adjustedEquity, marginUsed };
-    await db.setSession(sessionId, session);
-
-    res.json({ isConnected: true, balance, equity: adjustedEquity, marginUsed, positions, recentEvents: events });
-  } catch (err) {
-    logger.error('TradeLocker overview fatal error', err);
-    res.status(500).send('Internal error while fetching broker data');
-  }
-});
-
-// --- JOURNAL ROUTES ---
-app.get('/api/journal/entries', async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const session = await getSessionOrThrow(sessionId, res);
-  if (!session) return;
-  const entries = await db.getJournal(sessionId);
-  res.json(entries);
-});
-
-app.post('/api/journal/entry', async (req, res) => {
-  const { sessionId, entry } = req.body || {};
-  const session = await getSessionOrThrow(sessionId, res);
-  if (!session) return;
-
-  if (!entry || !entry.note) return res.status(400).send('Missing entry or note');
-
-  const id = crypto.randomUUID();
-  const timestamp = new Date().toISOString();
-  const entryType = entry.entryType === 'Post-Trade' || entry.entryType === 'SessionReview' ? entry.entryType : 'Pre-Trade';
-  const outcome = ['Open', 'Win', 'Loss', 'BreakEven'].includes(entry.outcome) ? entry.outcome : 'Open';
-  const tags = Array.isArray(entry.tags) ? entry.tags.map((t) => String(t)).filter((t) => t.trim().length > 0) : [];
-
-  const stored = {
-    id,
-    timestamp,
-    focusSymbol: entry.focusSymbol || 'Unknown',
-    bias: entry.bias || 'Neutral',
-    confidence: typeof entry.confidence === 'number' ? entry.confidence : 3,
-    note: entry.note,
-    entryType,
-    outcome,
-    tags,
-    accountSnapshot: entry.accountSnapshot || null,
-    linkedPositionId: entry.linkedPositionId || null,
-    linkedSymbol: entry.linkedSymbol || null,
-    finalPnl: entry.pnl || null,
-    pnl: entry.pnl || null,
-    closedAt: null,
-    ...entry 
-  };
-
-  const list = await db.getJournal(sessionId);
-  list.unshift(stored);
-  await db.setJournal(sessionId, list);
-
-  res.json(stored);
-});
-
-app.patch('/api/journal/entry/:id', async (req, res) => {
-  const { sessionId, updates } = req.body || {};
-  const entryId = req.params.id;
-  const session = await getSessionOrThrow(sessionId, res);
-  if (!session) return;
-
-  const list = await db.getJournal(sessionId);
-  const idx = list.findIndex((e) => e.id === entryId);
-  if (idx === -1) return res.status(404).send('Journal entry not found');
-
-  const current = list[idx];
-  const next = { ...current, ...updates };
-  list[idx] = next;
-  await db.setJournal(sessionId, list);
-
-  res.json(next);
-});
-
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, timestamp: new Date().toISOString() });
-});
-
-const clientDistPath = path.join(__dirname, '..', 'dist');
-if (fs.existsSync(clientDistPath)) {
-  console.log(`[Server] Serving static files from ${clientDistPath}`);
-  app.use(express.static(clientDistPath));
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api')) return res.status(404).json({ error: 'API endpoint not found' });
+  // Otherwise serve static
+  const clientDistPath = path.join(__dirname, '..', 'dist');
+  if (fs.existsSync(clientDistPath)) {
     res.sendFile(path.join(clientDistPath, 'index.html'));
-  });
-} else {
-  console.log('[Server] Dist folder not found. Assuming development mode.');
-}
+  } else {
+    res.status(404).send('Not found');
+  }
+});
 
 setupMarketData(server);
-
-// Start TradeLocker polling if configured (no Socket.io broadcasting yet as requested)
 startTradeLockerPolling(null);
 
 server.listen(PORT, () => {
