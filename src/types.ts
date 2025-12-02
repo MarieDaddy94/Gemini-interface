@@ -157,6 +157,14 @@ export interface AccountSnapshot {
   positionsCount: number;
 }
 
+// NEW: Model Metadata for Analytics
+export interface ModelMeta {
+  provider: 'gemini' | 'openai' | 'anthropic' | 'other';
+  model: string;
+  role?: string; // which agent role (strategist, etc.)
+  latencyMs?: number;
+}
+
 // Strict Trading Journal Entry
 export interface JournalEntry {
   id: string;
@@ -191,6 +199,9 @@ export interface JournalEntry {
   // Agent metadata
   agentId?: string;
   agentName?: string;
+  
+  // Model Experimentation Data
+  modelMeta?: ModelMeta;
 
   // Legacy fields (optional compatibility)
   focusSymbol?: string; 
@@ -763,6 +774,10 @@ export interface VisionSnapshot {
   structureTags: string[];
   levels: Array<{ type: string; price: number; strength: string }>;
   playbookHints: Array<{ playbook: string; matchScore: number }>;
+  
+  // Model Lab
+  provider?: string;
+  model?: string;
 }
 
 // Normalized result format for any provider

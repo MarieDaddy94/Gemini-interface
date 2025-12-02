@@ -19,6 +19,7 @@ import TerminalView from './views/TerminalView';
 import CommandCenterView from './views/CommandCenterView';
 import AutopilotView from './views/AutopilotView';
 import TradingRoomFloorView from './views/TradingRoomFloorView';
+import ModelLabView from './views/ModelLabView';
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
@@ -74,6 +75,7 @@ const Dashboard: React.FC = () => {
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
+    { id: 'modelLab', label: 'Model Lab' }, // NEW
   ];
 
   return (
@@ -118,6 +120,7 @@ const Dashboard: React.FC = () => {
           {currentRoom === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {currentRoom === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {currentRoom === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
+          {currentRoom === 'modelLab' && <ModelLabView />}
         </main>
       </div>
 

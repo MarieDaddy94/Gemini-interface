@@ -13,12 +13,13 @@ import React, {
  */
 export type AppRoom =
   | "terminal"
-  | "tradingRoomFloor" // NEW: The Desk View
+  | "tradingRoomFloor" 
   | "command"
   | "autopilot"
   | "journal"
   | "analysis"
-  | "analytics";
+  | "analytics"
+  | "modelLab";
 
 /**
  * 2) Overlays = global modals/dialogs.
