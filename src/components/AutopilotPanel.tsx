@@ -1,3 +1,4 @@
+
 import React, { useMemo, useState } from 'react';
 import {
   AutopilotMode,
@@ -32,8 +33,10 @@ const AutopilotPanel: React.FC<AutopilotPanelProps> = ({
   const [activeTab, setActiveTab] = useState<PanelTab>('compose');
   const { activeSpeaker } = useVoiceActivity();
 
-  // Load OpenAI Realtime URL from environment or default
-  const openaiWsUrl = (import.meta as any).env?.VITE_OPENAI_REALTIME_URL || "wss://api.openai.com/v1/realtime";
+  // Load OpenAI Realtime URL from environment or default to local proxy
+  const apiBase = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
+  const defaultWsUrl = apiBase.replace(/^http/, 'ws') + '/ws/openai-realtime';
+  const openaiWsUrl = (import.meta as any).env?.VITE_OPENAI_REALTIME_URL || defaultWsUrl;
 
   const [manualCommand, setManualCommand] = useState<AutopilotCommand | null>(() => {
     const defaultOpen: OpenTradeCommand = {

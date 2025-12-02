@@ -21,9 +21,10 @@ const createAgentsRouter = require('./routes/agents');
 const { runAgentsTurn, runAgentsDebrief } = require("./agents/llmRouter");
 const { setupMarketData, getPrice } = require('./marketData');
 
-// --- Import OpenAI Routers ---
+// --- Import OpenAI Routers & Proxy ---
 const openaiRealtimeRouter = require('./routes/openaiRealtimeRouter');
 const openaiAutopilotRouter = require('./routes/openaiAutopilotRouter');
+const { attachOpenAIRealtimeProxy } = require('./openaiRealtimeProxy');
 
 // --- Import Gemini Routers ---
 const geminiAutopilotRouter = require('./routes/geminiAutopilotRouter');
@@ -108,6 +109,9 @@ const PORT = process.env.PORT || 4000;
 const ACCESS_CODE = process.env.ACCESS_CODE || 'admin123';
 
 const server = http.createServer(app);
+
+// Attach the WS relay BEFORE listen()
+attachOpenAIRealtimeProxy(server);
 
 // --- SECURITY: Rate Limiting ---
 const aiLimiter = rateLimit({
