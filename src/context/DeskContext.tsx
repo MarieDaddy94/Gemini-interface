@@ -1,7 +1,8 @@
 
 import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from 'react';
-import { DeskPolicy } from '../types';
+import { DeskPolicy, TiltState } from '../types';
 import { getCurrentPolicy, updatePolicy, generatePolicy } from '../services/deskPolicyApi';
+import { apiClient } from '../utils/apiClient';
 
 export type DeskRoleId = 'strategist' | 'pattern' | 'quant' | 'risk' | 'execution' | 'journal' | 'news';
 
@@ -24,7 +25,8 @@ export interface TradingDeskState {
   goal: string | null; 
   sessionPhase: DeskSessionPhase;
   roles: Record<DeskRoleId, DeskRoleState>;
-  activePolicy: DeskPolicy | null; // Phase J
+  activePolicy: DeskPolicy | null;
+  tiltState: TiltState | null; // NEW
 }
 
 export interface DeskActions {
@@ -47,6 +49,9 @@ export interface DeskActions {
   refreshPolicy: () => Promise<void>;
   updateDeskPolicy: (updates: Partial<DeskPolicy>) => Promise<void>;
   regenerateDeskPolicy: () => Promise<void>;
+  
+  // Tilt Actions
+  refreshTiltState: () => Promise<void>;
 }
 
 export interface DeskContextValue {
@@ -129,12 +134,23 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     sessionPhase: 'preSession',
     roles: INITIAL_ROLES,
     activePolicy: null,
+    tiltState: null
   });
 
-  // Initial Policy Load
+  // Initial Loads
   useEffect(() => {
       getCurrentPolicy().then(p => setDeskState(prev => ({ ...prev, activePolicy: p }))).catch(console.error);
+      refreshTilt(); // Load tilt on mount
   }, []);
+
+  const refreshTilt = async () => {
+      try {
+          const state = await apiClient.get<TiltState>('/api/desk/tilt/state');
+          setDeskState(prev => ({ ...prev, tiltState: state }));
+      } catch (e) {
+          console.error("Failed to load tilt state", e);
+      }
+  };
 
   const actions = useMemo<DeskActions>(() => ({
     setDeskGoal: (goal) =>
@@ -166,7 +182,8 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         goal: 'Identify high-quality setups with 2R+ potential.',
         sessionPhase: 'preSession',
         roles: INITIAL_ROLES,
-        activePolicy: deskState.activePolicy
+        activePolicy: deskState.activePolicy,
+        tiltState: deskState.tiltState
     }),
 
     refreshPolicy: async () => {
@@ -182,7 +199,9 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     regenerateDeskPolicy: async () => {
         const p = await generatePolicy();
         setDeskState(prev => ({ ...prev, activePolicy: p }));
-    }
+    },
+
+    refreshTiltState: refreshTilt
   }), [deskState.activePolicy]);
 
   return (

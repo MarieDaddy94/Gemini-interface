@@ -412,7 +412,7 @@ export interface AgentMessage {
   metadata?: Record<string, unknown>;
 }
 
-// --- Risk & Autopilot Types (Phase 4) ---
+// --- Risk & Autopilot Types (Phase 4 + L) ---
 
 export interface RiskConfig {
   maxRiskPerTradePercent: number;   // e.g. 0.5 = 0.5% of equity per trade
@@ -897,4 +897,35 @@ export interface DeskPolicy {
     avgR: number;
     bestPlaybook: string;
   };
+}
+
+// ===============================
+// Phase L: Tilt & Defense
+// ===============================
+
+export type RiskState = 'normal' | 'warming' | 'hot' | 'tilt_risk' | 'lockdown';
+
+export type DefenseMode =
+  | 'normal'
+  | 'caution'     // smaller size, stricter filters
+  | 'defense'     // no new risk, scale-outs only
+  | 'lockdown';   // flat + no new trades
+
+export interface TiltSignal {
+  timestamp: string;
+  reason:
+    | 'rapid_losses'
+    | 'oversized_trades'
+    | 'rule_break'
+    | 'overtrading'
+    | 'big_win_euphoria'
+    | 'session_dd_hit';
+  details?: string;
+}
+
+export interface TiltState {
+  riskState: RiskState;
+  defenseMode: DefenseMode;
+  tiltSignals: TiltSignal[];
+  lastUpdate: string;
 }

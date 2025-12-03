@@ -3,6 +3,7 @@ const { gemini, GEMINI_AUTOPILOT_MODEL, GEMINI_THINKING_CONFIG } = require("../g
 const { evaluateProposedTrade } = require("../risk/riskEngine");
 const playbookPerformanceService = require("./playbookPerformanceService");
 const deskPolicyEngine = require("../services/deskPolicyEngine");
+const tiltService = require("../services/tiltService");
 
 /**
  * Generates a structured trade plan using Gemini.
@@ -17,6 +18,10 @@ async function generateAutopilotPlan({
   riskProfile,
   notes
 }) {
+  // Fetch Tilt State for context
+  const tiltState = await tiltService.getTiltState();
+  const defenseContext = `Defense Mode: ${tiltState.defenseMode.toUpperCase()} (${tiltState.riskState}). Signals: ${tiltState.tiltSignals.map(s => s.reason).join(', ') || 'None'}`;
+
   const systemInstruction = `
 You are the lead strategist of an AI trading squad.
 Your job:
@@ -31,6 +36,7 @@ Context:
 - Timeframe: ${timeframe}
 - Mode: ${mode}
 - Risk Profile: ${riskProfile || "balanced"}
+- **DEFENSE CONTEXT**: ${defenseContext}
 - **VISION CONTEXT**: ${visionSummary || "No vision data available. Rely on price structure implied by question."}
 - Extra Notes: ${notes || "none"}
 
@@ -40,6 +46,10 @@ Account:
 - Open Positions: ${brokerSnapshot?.openPositionsCount ?? 0}
 
 User Question/Directive: "${question || "Generate a plan if a setup exists."}"
+
+If Defense Mode is CAUTION, be very selective.
+If Defense Mode is DEFENSE or LOCKDOWN, do NOT propose a new trade unless it is explicitly to reduce risk (hedge).
+If blocked by defense mode, return { "summary": "Blocked by Defense Mode...", "jsonTradePlan": { ... invalid ... } }.
 
 You MUST respond in this exact JSON structure:
 {
@@ -95,10 +105,12 @@ async function reviewAutopilotPlan(plan, sessionState) {
     };
   }
 
-  // 0. Fetch Current Desk Policy
-  const currentPolicy = await deskPolicyEngine.getCurrentPolicy();
+  // 0. Fetch Current Desk Policy & Tilt State
+  const basePolicy = await deskPolicyEngine.getCurrentPolicy();
+  const tiltState = await tiltService.getTiltState();
+  const currentPolicy = tiltService.applyDefenseMode(basePolicy, tiltState.defenseMode);
 
-  // 1. Basic Risk Engine Check (now with policy)
+  // 1. Basic Risk Engine Check (now with EFFECTIVE policy)
   const proposedTrade = {
     direction: tradePlan.direction.toLowerCase(), // 'long' | 'short'
     riskPercent: tradePlan.riskPct,
@@ -132,6 +144,11 @@ async function reviewAutopilotPlan(plan, sessionState) {
      }
   }
 
+  // Add Defense Warnings
+  if (tiltState.defenseMode !== 'normal') {
+      warnings.push(`Defense Mode Active: ${tiltState.defenseMode.toUpperCase()}. Rules are tightened.`);
+  }
+
   return {
     allowed,
     reasons,
@@ -139,7 +156,8 @@ async function reviewAutopilotPlan(plan, sessionState) {
     plan,
     riskDetails: riskResult,
     playbookProfile,
-    policyUsed: currentPolicy.id // Traceability
+    policyUsed: currentPolicy.id, // Traceability
+    tiltState // Pass back for UI
   };
 }
 

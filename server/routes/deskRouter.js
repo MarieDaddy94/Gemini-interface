@@ -4,6 +4,7 @@ const router = express.Router();
 const { callLLM } = require("../llmRouter");
 const { getBrokerSnapshot } = require("../broker/brokerStateStore");
 const policyEngine = require("../services/deskPolicyEngine");
+const tiltService = require("../services/tiltService");
 
 function cleanAndParseJson(text) {
   try {
@@ -25,14 +26,18 @@ async function runDeskCoordinator(input, deskState) {
       ? `Equity: ${brokerSnapshot.equity}, Balance: ${brokerSnapshot.balance}, Daily PnL: ${brokerSnapshot.dailyPnl}, Open Positions: ${brokerSnapshot.openPositions?.length || 0}`
       : "Broker disconnected";
 
-    // Fetch live policy
-    const policy = await policyEngine.getCurrentPolicy();
+    // Fetch live policy & tilt state
+    const basePolicy = await policyEngine.getCurrentPolicy();
+    const tiltState = await tiltService.getTiltState();
+    const effectivePolicy = tiltService.applyDefenseMode(basePolicy, tiltState.defenseMode);
+
     const policyText = `
-    Mode: ${policy.mode.toUpperCase()}
-    Max Risk: ${policy.maxRiskPerTrade}%
-    Max Daily Loss: ${policy.maxDailyLossR}R
-    Allowed Playbooks: [${policy.allowedPlaybooks.join(", ")}]
-    Notes: ${policy.notes}
+    Mode: ${effectivePolicy.mode.toUpperCase()}
+    Max Risk: ${effectivePolicy.maxRiskPerTrade}%
+    Max Daily Loss: ${effectivePolicy.maxDailyLossR}R
+    Defense Mode: ${tiltState.defenseMode.toUpperCase()} (${tiltState.riskState})
+    Active Signals: ${tiltState.tiltSignals.map(s => s.reason).join(", ") || "None"}
+    Notes: ${effectivePolicy.notes}
     `;
 
     const systemPrompt = `
@@ -44,14 +49,15 @@ You manage a team of AI agents and the Autopilot system.
 - Phase: "${deskState.sessionPhase}"
 - Account: ${accountContext}
 
-**ACTIVE DESK POLICY (Rules for Today):**
+**ACTIVE DESK POLICY & DEFENSE STATE:**
 ${policyText}
 
 **Your Job:**
 1. Read the user's input.
 2. Decide how the desk should react.
 3. Update agent statuses and reply to the user.
-4. **ENFORCE POLICY**: If the user suggests something outside the policy, warn them or block it.
+4. **ENFORCE POLICY**: If Defense Mode is CAUTION/DEFENSE/LOCKDOWN, explicitly warn the user if they try to trade aggressively.
+5. **RECOVERY**: If in LOCKDOWN, suggest a "Recovery Protocol" (brief review) instead of trading.
 
 **Autopilot Operations:**
 If the trader asks to "run autopilot" or "scan for trades":
@@ -61,7 +67,7 @@ If the trader asks to "run autopilot" or "scan for trades":
    - Tell the user: "I've staged a [Direction] plan for [Symbol] in the Autopilot tab. Please review."
 3. If BLOCKED:
    - Do NOT commit.
-   - Explain why risk blocked it.
+   - Explain why risk (or defense mode) blocked it.
 
 **JSON Response Format:**
 {
@@ -127,6 +133,16 @@ router.post("/roundup", async (req, res) => {
       details: err.message
     });
   }
+});
+
+// GET /api/desk/tilt/state
+router.get("/tilt/state", async (req, res) => {
+    try {
+        const state = await tiltService.getTiltState();
+        res.json(state);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 module.exports = {

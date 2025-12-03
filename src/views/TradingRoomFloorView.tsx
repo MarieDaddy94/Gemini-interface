@@ -4,7 +4,8 @@ import { useDesk, DeskRoleId, DeskSessionPhase } from '../context/DeskContext';
 import { apiClient } from '../utils/apiClient';
 import { performanceApi, DeskInsights } from '../services/performanceApi';
 import VoiceRoomBar from '../components/VoiceRoomBar';
-import DeskPolicyPanel from '../components/DeskPolicyPanel'; // NEW
+import DeskPolicyPanel from '../components/DeskPolicyPanel'; 
+import DeskStateIndicator from '../components/DeskStateIndicator'; // NEW
 
 const roleColors: Record<DeskRoleId, string> = {
   strategist: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200',
@@ -180,6 +181,8 @@ const TradingRoomFloorView: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-3">
+                        <DeskStateIndicator /> {/* NEW: Defense Indicator */}
+                        
                         <div className="flex bg-[#0b0e14] rounded p-1 border border-gray-700">
                         {(['preSession', 'live', 'cooldown', 'postSession'] as DeskSessionPhase[]).map(phase => (
                             <button
