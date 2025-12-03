@@ -67,6 +67,7 @@ class PersistenceLayer {
       `);
 
       // Desk Sessions Table: Narratives and daily stats
+      // Updated for Phase O: gameplanJson, debriefJson
       this.db.run(`
         CREATE TABLE IF NOT EXISTS desk_sessions (
           id TEXT PRIMARY KEY,
@@ -76,7 +77,9 @@ class PersistenceLayer {
           summary TEXT,
           tags TEXT,
           statsJson TEXT,
-          rawEventsJson TEXT
+          rawEventsJson TEXT,
+          gameplanJson TEXT,
+          debriefJson TEXT
         )
       `);
 
@@ -240,31 +243,58 @@ class PersistenceLayer {
     );
   }
 
-  // --- DESK SESSIONS ---
+  // --- DESK SESSIONS (Phase O Updated) ---
 
   async getDeskSessions(limit = 7) {
     const rows = await this.all('SELECT * FROM desk_sessions ORDER BY date DESC LIMIT ?', [limit]);
     return rows.map(r => {
-      let stats = {}, rawEvents = [];
+      let stats = {}, rawEvents = [], gameplan = null, debrief = null;
       try { stats = JSON.parse(r.statsJson || '{}'); } catch(e){}
       try { rawEvents = JSON.parse(r.rawEventsJson || '[]'); } catch(e){}
+      try { gameplan = r.gameplanJson ? JSON.parse(r.gameplanJson) : null; } catch(e){}
+      try { debrief = r.debriefJson ? JSON.parse(r.debriefJson) : null; } catch(e){}
+      
       return {
         ...r,
         stats,
-        rawEvents
+        rawEvents,
+        gameplan,
+        debrief
       };
     });
+  }
+
+  async getDeskSessionById(id) {
+    const r = await this.get('SELECT * FROM desk_sessions WHERE id = ?', [id]);
+    if (!r) return null;
+    let stats = {}, rawEvents = [], gameplan = null, debrief = null;
+    try { stats = JSON.parse(r.statsJson || '{}'); } catch(e){}
+    try { rawEvents = JSON.parse(r.rawEventsJson || '[]'); } catch(e){}
+    try { gameplan = r.gameplanJson ? JSON.parse(r.gameplanJson) : null; } catch(e){}
+    try { debrief = r.debriefJson ? JSON.parse(r.debriefJson) : null; } catch(e){}
+    return { ...r, stats, rawEvents, gameplan, debrief };
   }
 
   async saveDeskSession(session) {
     const statsJson = JSON.stringify(session.stats || {});
     const eventsJson = JSON.stringify(session.rawEvents || []);
+    const gameplanJson = session.gameplan ? JSON.stringify(session.gameplan) : null;
+    const debriefJson = session.debrief ? JSON.stringify(session.debrief) : null;
     
     await this.run(
-      `INSERT INTO desk_sessions (id, date, startTime, endTime, summary, tags, statsJson, rawEventsJson) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET summary=excluded.summary, statsJson=excluded.statsJson, tags=excluded.tags, endTime=excluded.endTime`,
-      [session.id, session.date, session.startTime, session.endTime, session.summary, session.tags, statsJson, eventsJson]
+      `INSERT INTO desk_sessions (id, date, startTime, endTime, summary, tags, statsJson, rawEventsJson, gameplanJson, debriefJson) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET 
+         summary=excluded.summary, 
+         statsJson=excluded.statsJson, 
+         tags=excluded.tags, 
+         endTime=excluded.endTime,
+         gameplanJson=excluded.gameplanJson,
+         debriefJson=excluded.debriefJson`,
+      [
+        session.id, session.date, session.startTime, session.endTime, session.summary, 
+        session.tags, statsJson, eventsJson, gameplanJson, debriefJson
+      ]
     );
   }
 

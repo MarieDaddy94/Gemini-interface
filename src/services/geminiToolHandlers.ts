@@ -22,7 +22,6 @@ export type GeminiToolCall = {
   }>;
 };
 
-// Ensure this matches your Vite/env config
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
 
 async function callBackendTool(
@@ -33,8 +32,6 @@ async function callBackendTool(
 
   // --- UI CONTROL TOOL (Client Side) ---
   if (fnName === "control_app_ui") {
-    // We log it as 'ok' immediately because the AgentActionDispatcher
-    // subscribes to the bus and will execute the React state update.
     recordToolActivity({
       provider: "gemini",
       name: fnName,
@@ -42,6 +39,34 @@ async function callBackendTool(
       args: body,
     });
     return { ok: true, message: "UI action dispatched" };
+  }
+
+  // --- SESSION TOOLS ---
+  if (fnName === "start_trading_session") {
+      recordToolActivity({ provider: "gemini", name: fnName, status: "pending", args: body });
+      try {
+          const res = await fetch(`${API_BASE_URL}/api/session/gameplan`, {
+              method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+          });
+          const json = await res.json();
+          recordToolActivity({ provider: "gemini", name: fnName, status: "ok", args: body });
+          
+          // Trigger UI navigation via side effect? 
+          // Ideally the context updates and UI reacts, but for now we just return the plan text.
+          return { message: "Session started. Gameplan created.", gameplan: json.session.gameplan };
+      } catch(e) {
+          recordToolActivity({ provider: "gemini", name: fnName, status: "error", args: body });
+          return { error: "Failed to start session" };
+      }
+  }
+
+  if (fnName === "end_trading_session") {
+      recordToolActivity({ provider: "gemini", name: fnName, status: "pending", args: body });
+      // We need sessionId context, assume desk state context injection handled this or default to 'current'
+      // Since voice doesn't hold local state easily, we might need to rely on the backend finding active session
+      // For now, let's just trigger UI to navigate to debrief
+      recordToolActivity({ provider: "gemini", name: fnName, status: "ok", args: body });
+      return { message: "Please click 'Generate Debrief' on the Debrief screen." }; // Placeholder until fully wired
   }
 
   // --- BACKEND TOOLS ---
@@ -147,6 +172,18 @@ async function callBackendTool(
       args: body,
     });
     return json;
+  }
+
+  // Fallback for desk roundup
+  if (fnName === "desk_roundup") {
+      recordToolActivity({ provider: "gemini", name: fnName, status: "pending", args: body });
+      // Call backend route
+      const res = await fetch(`${API_BASE_URL}/api/desk/roundup`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: body.input, deskState: {} }) // deskState mocked for voice tool
+      });
+      const json = await res.json();
+      recordToolActivity({ provider: "gemini", name: fnName, status: "ok", args: body });
+      return json;
   }
 
   return {

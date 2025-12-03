@@ -8,10 +8,36 @@ router.get('/list', async (req, res) => {
     res.json({ sessions });
 });
 
+router.post('/gameplan', async (req, res) => {
+    try {
+        const { marketSession } = req.body;
+        const session = await sessionSummaryService.createGameplan(marketSession || 'NY');
+        res.json({ session });
+    } catch(err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+router.post('/debrief', async (req, res) => {
+    try {
+        const { sessionId } = req.body;
+        const session = await sessionSummaryService.generateDebrief(sessionId);
+        res.json({ session });
+    } catch(err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Legacy compat
 router.post('/generate-summary', async (req, res) => {
     const { date } = req.body; // YYYY-MM-DD
-    const summary = await sessionSummaryService.generateDailySummary(date);
-    res.json({ summary });
+    try {
+        // Attempt to debrief a session with this date ID pattern
+        const summary = await sessionSummaryService.generateDebrief(`sess_${date}_NY`);
+        res.json({ summary });
+    } catch(e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 module.exports = router;

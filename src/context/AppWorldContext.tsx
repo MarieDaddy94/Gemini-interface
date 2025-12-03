@@ -20,7 +20,9 @@ export type AppRoom =
   | "analysis"
   | "analytics"
   | "modelLab"
-  | "playbooks"; // Phase M
+  | "playbooks"
+  | "gameplan" // Phase O
+  | "debrief"; // Phase O
 
 /**
  * 2) Overlays = global modals/dialogs.

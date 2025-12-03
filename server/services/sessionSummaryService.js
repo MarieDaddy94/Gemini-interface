@@ -1,6 +1,9 @@
 
 const persistence = require('../persistence');
 const journalService = require('./journalService');
+const tiltService = require('./tiltService');
+const playbookService = require('./playbookService');
+const deskPolicyEngine = require('./deskPolicyEngine');
 const { callLLM } = require('../llmRouter');
 
 class SessionSummaryService {
@@ -9,59 +12,171 @@ class SessionSummaryService {
         return await persistence.getDeskSessions(10);
     }
 
-    async generateDailySummary(dateStr) {
-        // 1. Gather Data
-        // dateStr format "YYYY-MM-DD"
-        // Since journal uses ISO, we filter roughly
-        const entries = await journalService.listEntries();
-        const daysEntries = entries.filter(e => e.createdAt.startsWith(dateStr));
-        
-        if (daysEntries.length === 0) return null;
+    // PHASE O: Start of Day Gameplan
+    async createGameplan(marketSession) {
+        const today = new Date().toISOString().split('T')[0];
+        const sessionId = `sess_${today}_${marketSession}`;
 
-        const totalR = daysEntries.reduce((sum, e) => sum + (e.resultR || 0), 0);
-        const totalPnl = daysEntries.reduce((sum, e) => sum + (e.resultPnl || e.pnl || 0), 0);
-        const winCount = daysEntries.filter(e => e.outcome === 'Win').length;
-        
-        const bestTrade = daysEntries.reduce((best, e) => (e.resultR || 0) > (best?.resultR || -999) ? e : best, null);
-        
-        // 2. Generate Narrative via LLM
+        // 1. Fetch Context
+        const policy = await deskPolicyEngine.getCurrentPolicy();
+        const tiltState = await tiltService.getTiltState();
+        const lineup = await playbookService.getRecommendedLineup(); // Primary & Exp playbooks
+
+        // 2. Build Prompt for Strategist
         const prompt = `
-        You are the Chief of Staff for a trading desk.
-        Write a concise, professional end-of-day summary for ${dateStr}.
+        You are the Head Strategist. Create a trading gameplan for the ${marketSession} session.
         
-        Stats:
-        - Total Trades: ${daysEntries.length}
-        - Net R: ${totalR.toFixed(2)}R
-        - Net PnL: $${totalPnl.toFixed(2)}
-        - Win Rate: ${Math.round((winCount/daysEntries.length)*100)}%
+        Context:
+        - Desk Policy Mode: ${policy.mode} (Max Risk: ${policy.maxRiskPerTrade}%)
+        - Tilt State: ${tiltState.defenseMode} (${tiltState.riskState})
+        - Recommended Playbooks: ${lineup.primary.map(p => p.name).join(', ')}
         
-        Highlight Trade: ${bestTrade ? `${bestTrade.symbol} ${bestTrade.direction} (${bestTrade.playbook}) for ${bestTrade.resultR}R` : 'None'}
+        Task:
+        1. Set a concrete "Session Goal" (e.g. "Secure +2R using NY Reversal playbook, maintain calm").
+        2. Define a "Lockdown Trigger" (e.g. if we hit -2R, stop).
+        3. Confirm the active playbook list.
         
-        Narrative style: "Monday started slow with chop in London, but NY Open provided a clean break on US30..."
-        Keep it under 3 sentences. Focus on behavior and playbook execution.
+        Respond in JSON:
+        {
+            "highLevelGoal": string,
+            "lockdownTriggerR": number,
+            "activePlaybooks": [{ "playbookId": string, "name": string, "role": "primary"|"experimental" }],
+            "focusNotes": string
+        }
         `;
 
-        const summary = await callLLM({
+        const llmOutput = await callLLM({
             provider: 'openai',
-            model: 'gpt-4o-mini',
+            model: 'gpt-4o',
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.4
         });
 
-        // 3. Save
+        let parsed = null;
+        try {
+            parsed = JSON.parse(llmOutput.replace(/```json/g, "").replace(/```/g, "").trim());
+        } catch(e) {
+            console.error("Gameplan JSON parse failed", e);
+            // Fallback
+            parsed = {
+                highLevelGoal: "Execute standard playbooks with discipline.",
+                lockdownTriggerR: -3,
+                activePlaybooks: [],
+                focusNotes: "System failed to generate detailed plan."
+            };
+        }
+
+        // 3. Construct Gameplan Object
+        const gameplan = {
+            sessionId,
+            date: today,
+            marketSession,
+            ...parsed,
+            riskPolicySnapshot: policy,
+            createdAt: new Date().toISOString()
+        };
+
+        // 4. Create/Update Session Record
         const sessionRec = {
-            id: `sess_${dateStr}`,
-            date: dateStr,
-            startTime: daysEntries[daysEntries.length - 1].createdAt, // oldest
-            endTime: daysEntries[0].createdAt, // newest
-            summary: summary.trim(),
-            tags: totalR > 0 ? "Green Day" : "Red Day",
-            stats: { totalR, totalPnl, tradeCount: daysEntries.length },
-            rawEvents: daysEntries.map(e => ({ type: 'trade', id: e.id, r: e.resultR }))
+            id: sessionId,
+            date: today,
+            startTime: new Date().toISOString(),
+            endTime: null,
+            summary: `Session Started: ${gameplan.highLevelGoal}`,
+            tags: "Active",
+            stats: { totalR: 0, totalPnl: 0, tradeCount: 0 },
+            rawEvents: [{ type: 'plan_created', ts: Date.now(), gameplan }],
+            gameplan: gameplan,
+            debrief: null
         };
 
         await persistence.saveDeskSession(sessionRec);
         return sessionRec;
+    }
+
+    // PHASE O: End of Day Debrief
+    async generateDebrief(sessionId) {
+        const sessionRec = await persistence.getDeskSessionById(sessionId);
+        if (!sessionRec) throw new Error("Session not found");
+
+        const entries = await journalService.listEntries();
+        // Filter entries created today/during session
+        // Simple date match for now
+        const sessionEntries = entries.filter(e => e.createdAt.startsWith(sessionRec.date));
+
+        // Stats
+        let totalR = 0, totalPnl = 0, wins = 0;
+        sessionEntries.forEach(e => {
+            if (e.resultR) totalR += e.resultR;
+            if (e.resultPnl) totalPnl += e.resultPnl;
+            if (e.outcome === 'Win') wins++;
+        });
+
+        // AI Narrative
+        const prompt = `
+        You are the Desk Coach. Review this session (${sessionId}).
+        
+        Gameplan Goal: "${sessionRec.gameplan?.highLevelGoal || 'None'}"
+        Actual Results: ${totalR.toFixed(2)}R, $${totalPnl.toFixed(2)}, ${wins}/${sessionEntries.length} wins.
+        
+        Trades:
+        ${sessionEntries.map(e => `- ${e.symbol} ${e.direction}: ${e.resultR}R (${e.playbook})`).join('\n')}
+        
+        Task:
+        1. Did we hit the goal?
+        2. What was the best execution?
+        3. Suggest 1 actionable improvement for tomorrow.
+        
+        Respond in JSON:
+        {
+            "goalMet": boolean,
+            "narrative": string,
+            "bestTradeId": string | null,
+            "improvements": string[]
+        }
+        `;
+
+        const llmOutput = await callLLM({
+            provider: 'openai',
+            model: 'gpt-4o',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.4
+        });
+
+        let parsed = {};
+        try {
+            parsed = JSON.parse(llmOutput.replace(/```json/g, "").replace(/```/g, "").trim());
+        } catch(e) { parsed = { narrative: llmOutput }; }
+
+        const debrief = {
+            ...parsed,
+            scorecard: {
+                totalR,
+                totalPnl,
+                winRate: sessionEntries.length > 0 ? wins / sessionEntries.length : 0,
+                tradeCount: sessionEntries.length
+            },
+            generatedAt: new Date().toISOString()
+        };
+
+        // Update Session
+        const updatedSession = {
+            ...sessionRec,
+            endTime: new Date().toISOString(),
+            summary: debrief.narrative,
+            tags: totalR > 0 ? "Green" : "Red",
+            stats: { totalR, totalPnl, tradeCount: sessionEntries.length },
+            debrief: debrief
+        };
+
+        await persistence.saveDeskSession(updatedSession);
+        return updatedSession;
+    }
+
+    // Original Daily Summary (Legacy Compat)
+    async generateDailySummary(dateStr) {
+        // ... kept for compatibility if needed, but generateDebrief replaces it logic-wise
+        return this.generateDebrief(`sess_${dateStr}_NY`); // Defaulting to generic ID if called
     }
 }
 

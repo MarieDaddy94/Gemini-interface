@@ -188,7 +188,7 @@ export const controlAppUiTool: Tool = {
           target: {
             type: Type.STRING,
             description:
-              "For navigate: 'terminal', 'tradingRoomFloor', 'command', 'autopilot', 'journal', 'analysis', 'analytics', 'modelLab'. " +
+              "For navigate: 'terminal', 'tradingRoomFloor', 'command', 'autopilot', 'journal', 'analysis', 'analytics', 'modelLab', 'gameplan', 'debrief'. " +
               "For overlay: 'broker', 'settings'.",
           },
           message: {
@@ -232,10 +232,51 @@ export const deskRoundupTool: Tool = {
   ],
 };
 
+/**
+ * Tool: start_trading_session
+ */
+export const startSessionTool: Tool = {
+  functionDeclarations: [
+    {
+      name: "start_trading_session",
+      description: "Initialize a new trading session gameplan.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          marketSession: {
+            type: Type.STRING,
+            enum: ["London", "NY", "Asia"],
+            description: "The market session to start.",
+          },
+        },
+        required: ["marketSession"],
+      },
+    },
+  ],
+};
+
+/**
+ * Tool: end_trading_session
+ */
+export const endSessionTool: Tool = {
+  functionDeclarations: [
+    {
+      name: "end_trading_session",
+      description: "End the current session and generate a debrief.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {},
+      },
+    },
+  ],
+};
+
 export const GEMINI_LIVE_TOOLS: Tool[] = [
   chartPlaybookTool,
   logTradeJournalTool,
   autopilotProposalTool,
   controlAppUiTool,
-  deskRoundupTool
+  deskRoundupTool,
+  startSessionTool,
+  endSessionTool
 ];

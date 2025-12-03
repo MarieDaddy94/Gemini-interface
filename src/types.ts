@@ -188,6 +188,48 @@ export interface ActivePlaybook {
   usedR: number;    // Current R spent/risked
 }
 
+// --- Phase O: Session Gameplan & Debrief ---
+
+export interface SessionGameplan {
+  sessionId: string;
+  date: string;
+  marketSession: string; // "NY", "London", etc.
+  highLevelGoal: string;
+  lockdownTriggerR: number;
+  activePlaybooks: ActivePlaybook[];
+  focusNotes: string;
+  riskPolicySnapshot?: DeskPolicy;
+}
+
+export interface SessionDebrief {
+  goalMet: boolean;
+  narrative: string;
+  bestTradeId: string | null;
+  improvements: string[];
+  scorecard: {
+    totalR: number;
+    totalPnl: number;
+    winRate: number;
+    tradeCount: number;
+  };
+}
+
+export interface DeskSession {
+  id: string;
+  date: string;
+  startTime: string;
+  endTime: string | null;
+  summary: string;
+  tags: string;
+  stats: {
+    totalR: number;
+    totalPnl: number;
+    tradeCount: number;
+  };
+  gameplan: SessionGameplan | null;
+  debrief: SessionDebrief | null;
+}
+
 // --- Journaling Types ---
 
 export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';

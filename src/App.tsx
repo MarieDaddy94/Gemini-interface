@@ -20,7 +20,9 @@ import CommandCenterView from './views/CommandCenterView';
 import AutopilotView from './views/AutopilotView';
 import TradingRoomFloorView from './views/TradingRoomFloorView';
 import ModelLabView from './views/ModelLabView';
-import PlaybookLibraryView from './views/PlaybookLibraryView'; // Phase M
+import PlaybookLibraryView from './views/PlaybookLibraryView';
+import GameplanView from './views/GameplanView'; // Phase O
+import SessionDebriefView from './views/SessionDebriefView'; // Phase O
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
@@ -71,13 +73,15 @@ const Dashboard: React.FC = () => {
   const tabs: { id: AppRoom; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
     { id: 'tradingRoomFloor', label: 'Desk' },
+    { id: 'gameplan', label: 'Gameplan' }, // Phase O
     { id: 'command', label: 'Command' },
-    { id: 'playbooks', label: 'Playbooks' }, // Phase M
+    { id: 'playbooks', label: 'Playbooks' },
     { id: 'autopilot', label: 'Autopilot' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
     { id: 'modelLab', label: 'Model Lab' }, 
+    { id: 'debrief', label: 'Debrief' }, // Phase O
   ];
 
   return (
@@ -96,12 +100,12 @@ const Dashboard: React.FC = () => {
             <div className="flex items-center gap-2 text-white font-bold">
               <span>TradingView <span className="text-[#2962ff]">Pro</span></span>
             </div>
-            <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center gap-2 text-sm overflow-x-auto no-scrollbar">
               {tabs.map((tab) => (
                 <button
                   key={tab.id}
                   onClick={() => handleTabChange(tab.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${currentRoom === tab.id ? 'bg-[#2962ff]/10 text-[#2962ff]' : 'text-slate-400 hover:text-slate-100'}`}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-all whitespace-nowrap ${currentRoom === tab.id ? 'bg-[#2962ff]/10 text-[#2962ff]' : 'text-slate-400 hover:text-slate-100'}`}
                 >
                   {tab.label}
                 </button>
@@ -116,6 +120,7 @@ const Dashboard: React.FC = () => {
         <main className="flex-1 relative bg-[#131722] flex flex-col min-h-0">
           {currentRoom === 'terminal' && <TerminalView onUrlChange={handleBrowserUrlChange} />}
           {currentRoom === 'tradingRoomFloor' && <TradingRoomFloorView />}
+          {currentRoom === 'gameplan' && <GameplanView />} 
           {currentRoom === 'command' && <CommandCenterView />}
           {currentRoom === 'playbooks' && <PlaybookLibraryView />} 
           {currentRoom === 'autopilot' && <AutopilotView />}
@@ -123,6 +128,7 @@ const Dashboard: React.FC = () => {
           {currentRoom === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}
           {currentRoom === 'analytics' && <div className="flex-1 min-h-0 overflow-y-auto"><AnalyticsPanel /></div>}
           {currentRoom === 'modelLab' && <ModelLabView />}
+          {currentRoom === 'debrief' && <SessionDebriefView />}
         </main>
       </div>
 

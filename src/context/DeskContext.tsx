@@ -1,7 +1,8 @@
 
 import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from 'react';
-import { DeskPolicy, TiltState, ActivePlaybook } from '../types';
+import { DeskPolicy, TiltState, ActivePlaybook, DeskSession } from '../types';
 import { getCurrentPolicy, updatePolicy, generatePolicy } from '../services/deskPolicyApi';
+import { sessionApi } from '../services/sessionApi';
 import { apiClient } from '../utils/apiClient';
 
 export type DeskRoleId = 'strategist' | 'pattern' | 'quant' | 'risk' | 'execution' | 'journal' | 'news';
@@ -27,7 +28,8 @@ export interface TradingDeskState {
   roles: Record<DeskRoleId, DeskRoleState>;
   activePolicy: DeskPolicy | null;
   tiltState: TiltState | null;
-  activePlaybooks: ActivePlaybook[]; // NEW
+  activePlaybooks: ActivePlaybook[]; 
+  currentSession: DeskSession | null; // PHASE O
 }
 
 export interface DeskActions {
@@ -44,7 +46,7 @@ export interface DeskActions {
     updates: Partial<Pick<DeskRoleState, "status" | "lastUpdate">>
   ) => void;
 
-  updateActivePlaybooks: (playbooks: ActivePlaybook[]) => void; // NEW
+  updateActivePlaybooks: (playbooks: ActivePlaybook[]) => void; 
 
   resetDesk: () => void;
   
@@ -55,6 +57,10 @@ export interface DeskActions {
   
   // Tilt Actions
   refreshTiltState: () => Promise<void>;
+
+  // Session Actions (Phase O)
+  startGameplan: (marketSession: string) => Promise<void>;
+  endSessionDebrief: () => Promise<void>;
 }
 
 export interface DeskContextValue {
@@ -138,13 +144,14 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     roles: INITIAL_ROLES,
     activePolicy: null,
     tiltState: null,
-    activePlaybooks: []
+    activePlaybooks: [],
+    currentSession: null
   });
 
   // Initial Loads
   useEffect(() => {
       getCurrentPolicy().then(p => setDeskState(prev => ({ ...prev, activePolicy: p }))).catch(console.error);
-      refreshTilt(); // Load tilt on mount
+      refreshTilt(); 
   }, []);
 
   const refreshTilt = async () => {
@@ -191,7 +198,8 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         roles: INITIAL_ROLES,
         activePolicy: deskState.activePolicy,
         tiltState: deskState.tiltState,
-        activePlaybooks: []
+        activePlaybooks: [],
+        currentSession: null
     }),
 
     refreshPolicy: async () => {
@@ -209,8 +217,31 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         setDeskState(prev => ({ ...prev, activePolicy: p }));
     },
 
-    refreshTiltState: refreshTilt
-  }), [deskState.activePolicy]);
+    refreshTiltState: refreshTilt,
+
+    // Phase O
+    startGameplan: async (marketSession) => {
+        const session = await sessionApi.createGameplan(marketSession);
+        setDeskState(prev => ({ 
+            ...prev, 
+            currentSession: session,
+            goal: session.gameplan?.highLevelGoal || prev.goal,
+            sessionPhase: 'live', // Auto move to live
+            activePlaybooks: session.gameplan?.activePlaybooks || prev.activePlaybooks
+        }));
+    },
+
+    endSessionDebrief: async () => {
+        if (!deskState.currentSession) return;
+        const updated = await sessionApi.generateDebrief(deskState.currentSession.id);
+        setDeskState(prev => ({ 
+            ...prev, 
+            currentSession: updated,
+            sessionPhase: 'postSession' 
+        }));
+    }
+
+  }), [deskState.activePolicy, deskState.currentSession, deskState.tiltState]);
 
   return (
     <DeskContext.Provider value={{ state: deskState, actions }}>
