@@ -15,6 +15,7 @@ export class VoiceBus {
   private audioCtx: AudioContext | null = null;
   private queue: { speakerId: SpeakerId; data: Float32Array; sampleRate: number }[] = [];
   private playing = false;
+  private currentSource: AudioBufferSourceNode | null = null;
   private listeners: Set<ActivityListener> = new Set();
 
   private ensureContext(sampleRate: number) {
@@ -74,14 +75,6 @@ export class VoiceBus {
     this.playing = true;
     const { speakerId, data, sampleRate } = next;
 
-    // If sampleRate changes significantly, we might need a new context or resampling.
-    // For now, assuming relatively compatible context or recreating.
-    if (this.audioCtx.sampleRate !== sampleRate) {
-      // Basic support: If mismatch is large, recreating context is safest but heavyweight.
-      // Re-using context is preferred if sample rates match or browser handles resampling.
-      // For this demo, we'll try to stick to one context or recreate if closed.
-    }
-
     this.notifyActive(speakerId);
 
     const buffer = this.audioCtx.createBuffer(1, data.length, sampleRate);
@@ -90,18 +83,28 @@ export class VoiceBus {
     const src = this.audioCtx.createBufferSource();
     src.buffer = buffer;
     src.connect(this.audioCtx.destination);
-    src.onended = () => this.playNext();
+    
+    this.currentSource = src;
+    
+    src.onended = () => {
+        this.currentSource = null;
+        this.playNext();
+    };
     src.start();
   }
 
   stop() {
+    // Kill queue
     this.queue = [];
+    
+    // Stop current audio
+    if (this.currentSource) {
+        try { this.currentSource.stop(); } catch(e) {}
+        this.currentSource = null;
+    }
+    
     this.playing = false;
     this.notifyActive(null);
-    if (this.audioCtx) {
-      this.audioCtx.close().catch(() => {});
-      this.audioCtx = null;
-    }
   }
 }
 

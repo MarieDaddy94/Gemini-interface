@@ -7,6 +7,7 @@ const journalService = require('./services/journalService');
 const playbookPerformanceService = require('./services/playbookPerformanceService');
 const visionService = require('./services/visionService');
 const playbookService = require('./services/playbookService');
+const { brokerStateStore } = require('./broker/brokerStateStore'); // NEW Import
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -22,7 +23,7 @@ function createRuntimeContext(db, reqContext) {
     // Inject services
     journalService,
     playbookPerformanceService,
-    playbookService, // Phase M addition
+    playbookService, 
     visionService,
 
     log: (msg, data) => console.log(`[ContextLog] ${msg}`, data),
@@ -30,36 +31,31 @@ function createRuntimeContext(db, reqContext) {
     // --- Tool Impl ---
 
     getBrokerState: async (accountId) => {
-      const id = accountId || brokerSessionId;
-      if (!id) return "No broker session connected.";
+      // Ignore request accountId if we have a global store for now (Single User Mode)
+      // In multi-user, we would use accountId to lookup specific store.
+      const snapshot = brokerStateStore.getSnapshot();
       
-      const session = await db.getSession(id);
-      if (!session) return "No broker session found.";
-      
-      const state = session.latestState || {};
-      const acc = session.accounts?.[0] || {};
+      if (!snapshot) return "No broker session connected/active.";
       
       return {
-        accountId: session.accountId,
-        accountName: acc.name,
-        balance: state.balance ?? acc.balance, 
-        equity: state.equity,
-        marginUsed: state.marginUsed,
-        isDemo: session.isDemo,
-        server: session.server
+        accountId: snapshot.accountId,
+        accountName: snapshot.broker, // Mapping mismatch fix
+        balance: snapshot.balance,
+        equity: snapshot.equity,
+        marginUsed: snapshot.marginUsed,
+        openPnl: snapshot.equity - snapshot.balance,
+        openPositionsCount: snapshot.openPositions.length,
+        isDemo: true // Assume demo if not in snapshot
       };
     },
 
     getOpenPositions: async (accountId, filterSymbol) => {
-      const id = accountId || brokerSessionId;
-      if (!id) return "No broker session.";
-      
-      const session = await db.getSession(id);
-      if (!session) return "No broker session found.";
+      const snapshot = brokerStateStore.getSnapshot();
+      if (!snapshot) return "No broker session.";
 
-      const positions = Object.values(session.lastPositionsById || {});
+      const positions = snapshot.openPositions || [];
       const filtered = filterSymbol 
-        ? positions.filter(p => p.symbol.includes(filterSymbol)) 
+        ? positions.filter(p => (p.symbol || '').includes(filterSymbol)) 
         : positions;
       
       if (filtered.length === 0) return "No open positions.";
@@ -67,42 +63,9 @@ function createRuntimeContext(db, reqContext) {
     },
 
     executeOrder: async (args) => {
-      const { symbol, side, size, stopLoss, takeProfit } = args;
-      if (!brokerSessionId) return "Error: No active broker session to execute trade.";
-      
-      const session = await db.getSession(brokerSessionId);
-      if (!session) return "Error: Session expired or invalid.";
-
-      try {
-        const entryPrice = getPrice(symbol) || 0;
-        if (entryPrice === 0) return "Error: Market data unavailable for symbol.";
-
-        const positionId = `auto-${Date.now()}`;
-        const newPosition = {
-          id: positionId,
-          symbol,
-          side,
-          size: Number(size),
-          entryPrice,
-          currentPrice: entryPrice,
-          pnl: 0,
-          openTime: new Date().toISOString(),
-          sl: stopLoss,
-          tp: takeProfit,
-          isSimulated: true
-        };
-
-        if (!session.simulatedPositions) session.simulatedPositions = [];
-        session.simulatedPositions.push(newPosition);
-        
-        await db.setSession(brokerSessionId, session);
-
-        console.log(`[Autopilot] Executed ${side} ${size} ${symbol} @ ${entryPrice}`);
-        return `SUCCESS: Order executed. ID: ${positionId}. Entry: ${entryPrice}`;
-      } catch (e) {
-        console.error(`[Autopilot] Execution Error: ${e.message}`);
-        return `Error executing order: ${e.message}`;
-      }
+      // NOTE: Tools usually shouldn't execute live orders directly without guard.
+      // This tool is kept for legacy agents, but 'autopilot' is preferred.
+      return "Direct execution via chat tool is disabled for safety. Use Autopilot.";
     },
 
     getRecentTrades: async ({ limit }) => {
@@ -124,13 +87,12 @@ function createRuntimeContext(db, reqContext) {
         return visionService.getRecent(symbol, limit);
     },
 
-    // Legacy support wrapper
     appendJournalEntry: async (entry) => {
       await journalService.logEntry({
          ...entry,
          sessionId: journalSessionId
       });
-      console.log(`[AI] appended structured journal entry via legacy wrapper`);
+      return { status: "ok", message: "Journal entry saved." };
     },
     
     deskRoundup: async (args) => {
@@ -152,15 +114,14 @@ function createRuntimeContext(db, reqContext) {
     // --- Autopilot Handler ---
     runAutopilotReview: async (args) => {
       let brokerSnapshot = null;
-      if (brokerSessionId) {
-        const session = await db.getSession(brokerSessionId);
-        if (session) {
+      // Fetch fresh snapshot directly from store
+      const liveSnap = brokerStateStore.getSnapshot();
+      if (liveSnap) {
            brokerSnapshot = {
-             equity: session.latestState?.equity ?? session.accounts?.[0]?.balance ?? 0,
-             dailyPnl: session.latestState?.dailyPnl ?? 0,
-             openPositionsCount: Object.keys(session.lastPositionsById || {}).length
+             equity: liveSnap.equity,
+             dailyPnl: liveSnap.dailyPnl,
+             openPositionsCount: liveSnap.openPositions.length
            };
-        }
       }
 
       // Fetch vision context to inform the plan

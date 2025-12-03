@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   AutopilotMode,
   AutopilotCommand,
@@ -8,41 +8,41 @@ import {
 } from '../types';
 import { apiClient } from '../utils/apiClient';
 import { logger } from '../services/logger';
+import { useBroker } from '../context/BrokerContext';
 
+// Deprecated poller (kept signature for compatibility but uses Context now)
 export function useBrokerSnapshot(pollMs: number = 10_000) {
-  const [snapshot, setSnapshot] = useState<BrokerSnapshot | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const { brokerData, loading, error, refreshSnapshot } = useBroker();
 
-  const load = useCallback(async () => {
-    try {
-      // Only set loading true if we don't have data yet to avoid UI flicker on polling
-      setLoading((prev) => !prev && !snapshot); 
-      setError(null);
-      const data = await apiClient.get<{ ok: boolean; snapshot: BrokerSnapshot }>('/api/broker/snapshot');
-      if (!data.ok) {
-        throw new Error('Snapshot response ok=false');
-      }
-      setSnapshot(data.snapshot);
-    } catch (err: any) {
-      // GRACEFUL FAILURE: Log error but don't freeze app. 
-      // Keep old snapshot if available so UI doesn't blank out.
-      logger.error('Failed to fetch broker snapshot', err);
-      setError(err?.message ?? 'Connection error');
-    } finally {
-      setLoading(false);
-    }
-  }, [snapshot]);
+  // Map BrokerAccountInfo (full) to BrokerSnapshot (autopilot subset)
+  const snapshot: BrokerSnapshot | null = brokerData ? {
+      broker: 'TradeLocker',
+      accountId: 'Current', // mapped in backend
+      currency: brokerData.balance ? 'USD' : 'USD', // Simplified for now
+      balance: brokerData.balance,
+      equity: brokerData.equity,
+      marginUsed: brokerData.marginUsed,
+      marginAvailable: brokerData.equity - brokerData.marginUsed,
+      marginLevel: null,
+      dailyPnl: 0, // Needs calculation or backend update to include
+      dailyDrawdown: 0, 
+      netUnrealizedPnl: brokerData.equity - brokerData.balance,
+      openRisk: 0, // Needs calculation
+      openPositions: brokerData.positions.map(p => ({
+          id: p.id,
+          instrumentId: null,
+          symbol: p.symbol,
+          side: p.side === 'buy' ? 'LONG' : 'SHORT',
+          size: p.size,
+          entryPrice: p.entryPrice,
+          stopLoss: 0, // Not currently in lightweight BrokerPosition
+          takeProfit: 0,
+          unrealizedPnl: p.pnl
+      })),
+      updatedAt: new Date().toISOString()
+  } : null;
 
-  useEffect(() => {
-    load();
-    if (!pollMs) return;
-
-    const id = setInterval(load, pollMs);
-    return () => clearInterval(id);
-  }, [load, pollMs]);
-
-  return { snapshot, loading, error, reload: load };
+  return { snapshot, loading, error, reload: refreshSnapshot };
 }
 
 export interface UseAutopilotExecuteState {
@@ -55,6 +55,7 @@ export function useAutopilotExecute() {
   const [executing, setExecuting] = useState(false);
   const [lastResponse, setLastResponse] = useState<AutopilotExecuteResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { refreshSnapshot } = useBroker();
 
   const execute = useCallback(
     async (mode: AutopilotMode, command: AutopilotCommand, source: string = 'ui') => {
@@ -71,21 +72,26 @@ export function useAutopilotExecute() {
         });
 
         if (!data.ok) {
-          throw new Error('Execute response ok=false'); // Should be caught by apiClient but double check
+          throw new Error('Execute response ok=false'); 
         }
 
         setLastResponse(data);
+        
+        // Immediately refresh broker state after execution
+        if (data.result.executed) {
+            refreshSnapshot().catch(console.error);
+        }
+
         return data;
       } catch (err: any) {
         logger.error('Autopilot execution failed', err);
         setError(err?.message ?? 'Unknown error');
-        // Re-throw so caller can handle UI feedback if needed
         throw err;
       } finally {
         setExecuting(false);
       }
     },
-    [],
+    [refreshSnapshot],
   );
 
   return {
