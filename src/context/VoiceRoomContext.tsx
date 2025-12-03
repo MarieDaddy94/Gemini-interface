@@ -20,6 +20,10 @@ interface VoiceRoomContextValue {
   leaveRoom: () => void;
   toggleMic: () => void;
   isMicActive: boolean;
+  
+  // Expose clients for UI subscription
+  geminiClient: GeminiLiveClient | null;
+  openaiClient: OpenAIRealtimeClient | null;
 }
 
 const VoiceRoomContext = createContext<VoiceRoomContextValue | null>(null);
@@ -36,15 +40,8 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   const { getVoiceProfile } = useRealtimeConfig();
 
-  // Load provider preference
-  useEffect(() => {
-    const cfg = modelConfigService.getAssignment('voice');
-    setActiveProvider(cfg.provider);
-  }, []);
-
   const getSystemInstructions = (roomId: VoiceRoomId): string => {
     const base = "You are the AI Trading Squad. You speak as a cohesive team led by the Desk Coordinator. ";
-    
     switch (roomId) {
       case 'desk':
         return base + "You are on the Trading Floor. You have full access to desk state, market data, and agents. Your goal is to coordinate the session. Use 'desk_roundup' to change desk status or goals.";
@@ -76,24 +73,29 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
           model: voiceConfig.model || 'models/gemini-2.5-flash-live',
           voiceName: getVoiceProfile('strategist').geminiPreset || 'Aoede',
           systemInstruction: getSystemInstructions(roomId),
-          tools: tools,
-          onSetupComplete: () => {
+          tools: tools
+        });
+
+        // Attach listeners
+        client.on('setupComplete', () => {
             setConnectionStatus('connected');
             logger.info(`Joined Voice Room: ${roomId} (Gemini)`);
-          },
-          onError: (err) => {
+        });
+        
+        client.on('error', (err) => {
             console.error("Voice Room Error", err);
             setConnectionStatus('error');
-          },
-          onToolCall: async (calls) => {
+        });
+
+        client.on('toolCall', async (calls) => {
              // Use shared tool handler logic
              if (geminiClientRef.current) {
                 await handleGeminiToolCall({ 
                     sendToolResponse: (p) => geminiClientRef.current?.sendToolResponse(p.toolResponse.functionResponses as any) 
                 }, { functionCalls: calls as any });
              }
-          }
         });
+
         geminiClientRef.current = client;
         await client.connect();
       } else {
@@ -147,7 +149,6 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const toggleMic = () => {
-    // This state is consumed by the UI components (GeminiVoicePanel) to actually trigger audio API
     setIsMicActive(!isMicActive);
   };
 
@@ -160,7 +161,9 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
       joinRoom,
       leaveRoom,
       toggleMic,
-      isMicActive
+      isMicActive,
+      geminiClient: geminiClientRef.current,
+      openaiClient: openaiClientRef.current
     }}>
       {children}
     </VoiceRoomContext.Provider>

@@ -21,13 +21,11 @@ type GeminiLiveClientOptions = {
   apiKey?: string;
   model?: string;
   voiceName?: string;
-  tools?: Tool[]; // NEW: Accept tools dynamically
-  systemInstruction?: string; // NEW: Accept system prompt dynamically
-  onServerText?: (text: string, isFinal: boolean) => void;
-  onSetupComplete?: () => void;
-  onError?: (err: unknown) => void;
-  onToolCall?: (calls: GeminiLiveToolCall[]) => void | Promise<void>;
+  tools?: Tool[];
+  systemInstruction?: string;
 };
+
+type LiveEventListener = (event: string, data: any) => void;
 
 export class GeminiLiveClient {
   private apiKey?: string;
@@ -36,11 +34,7 @@ export class GeminiLiveClient {
   private tools: Tool[];
   private systemInstruction: string;
   private socket: WebSocket | null = null;
-
-  private onServerText?: (text: string, isFinal: boolean) => void;
-  private onSetupComplete?: () => void;
-  private onError?: (err: unknown) => void;
-  private onToolCall?: (calls: GeminiLiveToolCall[]) => void | Promise<void>;
+  private listeners: Set<LiveEventListener> = new Set();
 
   constructor(opts: GeminiLiveClientOptions) {
     this.apiKey = opts.apiKey;
@@ -48,10 +42,19 @@ export class GeminiLiveClient {
     this.voiceName = opts.voiceName ?? "Aoede";
     this.tools = opts.tools ?? [];
     this.systemInstruction = opts.systemInstruction ?? "You are a helpful AI trading assistant.";
-    this.onServerText = opts.onServerText;
-    this.onSetupComplete = opts.onSetupComplete;
-    this.onError = opts.onError;
-    this.onToolCall = opts.onToolCall;
+  }
+
+  // Event System
+  on(event: string, callback: (data: any) => void) {
+    const wrapper = (evt: string, data: any) => {
+        if (evt === event) callback(data);
+    };
+    this.listeners.add(wrapper);
+    return () => this.listeners.delete(wrapper);
+  }
+
+  private emit(event: string, data: any) {
+    this.listeners.forEach(fn => fn(event, data));
   }
 
   get isConnected() {
@@ -65,7 +68,6 @@ export class GeminiLiveClient {
     if (this.apiKey) {
       url = `${LIVE_WS_URL}?key=${this.apiKey}`;
     } else {
-      // Fetch ephemeral token from backend
       const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:4000';
       const tokenRes = await fetch(`${API_BASE_URL}/api/gemini/live/ephemeral-token`, {
         method: "POST",
@@ -74,8 +76,7 @@ export class GeminiLiveClient {
       });
 
       if (!tokenRes.ok) {
-        const text = await tokenRes.text();
-        throw new Error(`Failed to get Gemini ephemeral token: ${tokenRes.status} ${text}`);
+        throw new Error(`Failed to get Gemini ephemeral token: ${tokenRes.status}`);
       }
 
       const { token } = await tokenRes.json();
@@ -84,18 +85,25 @@ export class GeminiLiveClient {
 
     this.socket = new WebSocket(url);
 
-    this.socket.onopen = () => this.sendSetup();
+    this.socket.onopen = () => {
+        this.emit('open', {});
+        this.sendSetup();
+    };
+    
     this.socket.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
         this.handleServerMessage(msg);
       } catch (err) {
-        this.onError?.(err);
+        this.emit('error', err);
       }
     };
-    this.socket.onerror = (evt) => this.onError?.(evt);
+    
+    this.socket.onerror = (evt) => this.emit('error', evt);
+    
     this.socket.onclose = () => {
       this.socket = null;
+      this.emit('close', {});
     };
   }
 
@@ -152,16 +160,6 @@ export class GeminiLiveClient {
     this.socket.send(JSON.stringify(payload));
   }
 
-  sendRealtimeText(textChunk: string) {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
-    const payload = {
-      realtimeInput: {
-        text: textChunk,
-      },
-    };
-    this.socket.send(JSON.stringify(payload));
-  }
-
   sendRealtimeAudio(pcm16: Int16Array) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (!pcm16.length) return;
@@ -206,7 +204,7 @@ export class GeminiLiveClient {
 
   private handleServerMessage(msg: any) {
     if (msg.setupComplete) {
-      this.onSetupComplete?.();
+      this.emit('setupComplete', {});
       return;
     }
 
@@ -229,7 +227,7 @@ export class GeminiLiveClient {
         }
         if (text) {
           const isFinal = !!sc.turnComplete || !!sc.generationComplete;
-          this.onServerText?.(text, isFinal);
+          this.emit('text', { text, isFinal });
         }
       }
       return;
@@ -244,8 +242,8 @@ export class GeminiLiveClient {
         name: String(c.name ?? ""),
         args: c.args ?? {},
       }));
-      if (calls.length && this.onToolCall) {
-        void this.onToolCall(calls);
+      if (calls.length) {
+        this.emit('toolCall', calls);
       }
       return;
     }
