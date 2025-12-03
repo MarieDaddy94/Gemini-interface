@@ -2,8 +2,41 @@
 const persistence = require('../persistence');
 const journalService = require('./journalService');
 
+// Default Playbooks to seed if DB is empty
+const SEED_PLAYBOOKS = [
+  {
+    name: "London Breakout (Long)",
+    symbol: "US30",
+    timeframe: "15m",
+    kind: "intraday",
+    tier: "B",
+    trigger: "liquidity_sweep",
+    riskTemplate: { baseRiskR: 0.5 },
+    rulesText: "Look for liquidity sweep of Asian range low, then long back into prior high with 1:3 R:R.",
+    tags: ["US30", "index", "breakout", "liquidity", "London"],
+    performance: { trades: 0, wins: 0, losses: 0, avgR: 0, maxDrawdownR: 0 }
+  },
+  {
+    name: "NY Reversal (Short)",
+    symbol: "US30",
+    timeframe: "5m",
+    kind: "scalp",
+    tier: "A",
+    trigger: "liquidity_sweep",
+    riskTemplate: { baseRiskR: 0.5 },
+    rulesText: "Wait for 10:00 AM news flush, sweep of PDH, then reversal structure shift.",
+    tags: ["US30", "index", "reversal", "NY", "liquidity"],
+    performance: { trades: 0, wins: 0, losses: 0, avgR: 0, maxDrawdownR: 0 }
+  }
+];
+
 class PlaybookService {
   
+  constructor() {
+    // Attempt seeding on startup (fire and forget)
+    this.ensureDefaultPlaybooks().catch(console.error);
+  }
+
   async listPlaybooks(filter = {}) {
     return await persistence.getPlaybooks(filter);
   }
@@ -29,7 +62,7 @@ class PlaybookService {
       llmPrompt: data.llmPrompt || "",
       tags: data.tags || [],
       exampleSnapshotIds: data.exampleSnapshotIds || [],
-      performance: {
+      performance: data.performance || {
         trades: 0,
         wins: 0,
         losses: 0,
@@ -72,11 +105,9 @@ class PlaybookService {
     if (!playbook) return null;
 
     // Get all journal entries
-    const entries = await journalService.listEntries(); // In a real DB we'd query by playbookId
+    const entries = await journalService.listEntries(); 
     
     // Filter relevant entries
-    // 1. Match by ID if present
-    // 2. Fallback to name match (case insensitive)
     const matches = entries.filter(e => {
         if (e.playbookId === id) return true;
         if (!e.playbookId && e.playbook && e.playbook.toLowerCase().trim() === playbook.name.toLowerCase().trim()) return true;
@@ -84,7 +115,6 @@ class PlaybookService {
     });
 
     if (matches.length === 0) {
-        // No stats reset
         return this.updatePlaybook(id, {
             performance: {
                 trades: 0,
@@ -97,7 +127,6 @@ class PlaybookService {
         });
     }
 
-    // Sort by time
     matches.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
     let wins = 0;
@@ -107,7 +136,6 @@ class PlaybookService {
     let maxDD = 0;
 
     matches.forEach(t => {
-        // Infer R
         let r = t.resultR;
         if (r === undefined || r === null) {
             if (t.outcome === 'Win') r = 1;
@@ -119,7 +147,6 @@ class PlaybookService {
         if (r > 0) wins++;
         else if (r < 0) losses++;
 
-        // DD Logic
         if (r < 0) {
             currentDD += r;
             if (currentDD < maxDD) maxDD = currentDD;
@@ -145,30 +172,32 @@ class PlaybookService {
     return this.updatePlaybook(id, { performance: newStats });
   }
 
-  /**
-   * Recommend specific playbooks based on tier and stats.
-   * Phase N helper for Desk Coordinator.
-   */
   async getRecommendedLineup() {
     const playbooks = await this.listPlaybooks();
     
-    // Sort logic: Tier A first, then by AvgR
     playbooks.sort((a, b) => {
         if (a.tier === 'A' && b.tier !== 'A') return -1;
         if (b.tier === 'A' && a.tier !== 'A') return 1;
         return b.performance.avgR - a.performance.avgR;
     });
 
-    // Top 2 Primary
     const primary = playbooks.filter(p => p.tier === 'A' || p.tier === 'B').slice(0, 2);
-    
-    // 1 Experimental
     const experimental = playbooks.find(p => p.tier === 'experimental' || p.tier === 'C');
 
     return {
         primary,
         experimental: experimental ? [experimental] : []
     };
+  }
+
+  async ensureDefaultPlaybooks() {
+    const existing = await this.listPlaybooks();
+    if (existing && existing.length > 0) return;
+
+    console.log("[PlaybookService] Seeding default playbooks...");
+    for (const pb of SEED_PLAYBOOKS) {
+      await this.createPlaybook(pb);
+    }
   }
 }
 

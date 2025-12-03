@@ -42,6 +42,7 @@ const TradingRoomFloorView: React.FC = () => {
   const saveGoal = () => setDeskGoal(draftGoal);
 
   useEffect(() => {
+    // Only load insights if not already loaded recently (optimization)
     const loadInsights = async () => {
         try {
             const data = await performanceApi.getDeskInsights();
@@ -89,7 +90,7 @@ const TradingRoomFloorView: React.FC = () => {
         sessionPhase?: DeskSessionPhase;
         goal?: string;
         activePlaybooks?: ActivePlaybook[];
-      }>('/desk/roundup', payload);
+      }>('/api/desk/roundup', payload); // Ensure correct path prefix
 
       const deskText: string =
         res.message ||
@@ -134,7 +135,7 @@ const TradingRoomFloorView: React.FC = () => {
       const errMsg: DeskChatMessage = {
         id: `${Date.now()}-desk-error`,
         author: "desk",
-        text: "⚠️ The desk could not process that request (backend error). Check the server logs.",
+        text: "⚠️ The desk could not process that request. Check server logs.",
         ts: Date.now(),
       };
       setMessages((prev) => [errMsg, ...prev]);
@@ -147,13 +148,16 @@ const TradingRoomFloorView: React.FC = () => {
     <div className="flex h-full bg-[#0b0e14] text-gray-200 overflow-hidden flex-col relative">
       {/* HALT OVERLAY */}
       {tradingHalted && (
-          <div className="absolute inset-0 z-50 bg-red-900/30 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-              <div className="bg-red-950 border-2 border-red-500 rounded-lg p-8 text-center shadow-2xl pointer-events-auto">
-                  <h1 className="text-4xl font-black text-red-500 mb-2 tracking-tighter">TRADING HALTED</h1>
-                  <p className="text-red-200 mb-6 font-bold uppercase">Emergency Kill Switch Active</p>
+          <div className="absolute inset-0 z-50 bg-red-950/80 backdrop-blur-sm flex items-center justify-center animate-fade-in">
+              <div className="bg-red-900 border-2 border-red-500 rounded-lg p-10 text-center shadow-2xl max-w-lg">
+                  <div className="mb-4 text-red-500">
+                     <svg className="w-20 h-20 mx-auto animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                  </div>
+                  <h1 className="text-4xl font-black text-white mb-2 tracking-tight">TRADING HALTED</h1>
+                  <p className="text-red-200 mb-8 font-medium">Emergency Kill Switch is Active. All execution protocols suspended.</p>
                   <button 
                     onClick={toggleHalt}
-                    className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded shadow-lg"
+                    className="px-8 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded shadow-lg transition-transform hover:scale-105"
                   >
                       RESUME OPERATIONS
                   </button>

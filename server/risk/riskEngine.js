@@ -142,6 +142,114 @@ function evaluateProposedTrade(sessionState, proposedTrade, deskPolicy) {
   };
 }
 
+/**
+ * Calculate concrete trade parameters (sizing, levels) from a high-level proposal.
+ * Migrated from legacy toolsData.js.
+ * 
+ * @param {object} input - { symbol, timeframe, direction, accountEquity, riskPercent, entryPrice, stopLossPrice, rMultipleTarget, mode, notes, visionSummary }
+ */
+function calculateTradeParameters(input) {
+  const symbol = input.symbol || null;
+  const timeframe = input.timeframe || null;
+  const direction = input.direction || null;
+  const mode = input.mode || "confirm";
+
+  const accountEquity = Number(input.accountEquity) || 0;
+
+  // riskPercent is in PERCENT (e.g. 0.5 = 0.5%).
+  let riskPercent =
+    input.riskPercent !== undefined && input.riskPercent !== null
+      ? Number(input.riskPercent)
+      : 0.5; // default 0.5%
+
+  if (!isFinite(riskPercent) || riskPercent < 0) riskPercent = 0;
+  if (riskPercent > 5) riskPercent = 5; // Hard Cap for safety
+
+  const entryPrice =
+    input.entryPrice !== undefined && input.entryPrice !== null
+      ? Number(input.entryPrice)
+      : null;
+  const stopLossPrice =
+    input.stopLossPrice !== undefined && input.stopLossPrice !== null
+      ? Number(input.stopLossPrice)
+      : null;
+
+  const rMultipleTarget =
+    input.rMultipleTarget !== undefined && input.rMultipleTarget !== null
+      ? Number(input.rMultipleTarget)
+      : 3; // default 3R
+
+  const visionSummary = input.visionSummary || "";
+  const notes = input.notes || "";
+
+  // Hardcoded safety defaults for the calculation engine
+  const maxRiskPercentPerTrade = 2.0; 
+  const minEquityForTrading = 100;
+
+  const riskAmount = accountEquity * (riskPercent / 100);
+
+  let distance = null;
+  let positionSizeUnits = null;
+  let takeProfitPrice = null;
+
+  if (entryPrice !== null && stopLossPrice !== null) {
+    distance = Math.abs(entryPrice - stopLossPrice);
+    
+    // Protect against zero division or infinitesimal stops
+    if (distance > 0.000001 && riskAmount > 0) {
+      positionSizeUnits = riskAmount / distance;
+
+      const tpDistance = distance * rMultipleTarget;
+      if (direction === "long") {
+        takeProfitPrice = entryPrice + tpDistance;
+      } else if (direction === "short") {
+        takeProfitPrice = entryPrice - tpDistance;
+      }
+    }
+  }
+
+  const riskFlags = [];
+  if (accountEquity < minEquityForTrading) {
+    riskFlags.push("equity_too_low");
+  }
+  if (riskPercent > maxRiskPercentPerTrade) {
+    riskFlags.push("risk_percent_above_recommended");
+  }
+  if (!entryPrice || !stopLossPrice) {
+    riskFlags.push("missing_entry_or_stop");
+  }
+  if (distance !== null && distance <= 0) {
+    riskFlags.push("zero_or_invalid_distance");
+  }
+
+  // Determine engine status
+  const status = riskFlags.length ? "review" : "ok";
+
+  return {
+    symbol,
+    timeframe,
+    direction,
+    mode,
+    accountEquity,
+    riskPercent,
+    riskAmount,
+    entryPrice,
+    stopLossPrice,
+    takeProfitPrice,
+    rMultipleTarget,
+    positionSizeUnits,
+    visionSummary,
+    notes,
+    riskEngine: {
+      status, 
+      recommendedMaxRiskPercent: maxRiskPercentPerTrade,
+      minEquityForTrading,
+      flags: riskFlags,
+    },
+  };
+}
+
 module.exports = {
   evaluateProposedTrade,
+  calculateTradeParameters
 };

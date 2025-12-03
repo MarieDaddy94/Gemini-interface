@@ -15,9 +15,6 @@ const globalErrorHandler = require('./middleware/errorMiddleware');
 // Import Persistence
 const db = require('./persistence');
 
-// Import Tools Data
-const { getPlaybooks } = require("./toolsData");
-
 // Import AI Handlers
 const { handleAiRoute } = require('./ai-service');
 const createAgentsRouter = require('./routes/agents');
@@ -41,8 +38,8 @@ const performanceRouter = require('./routes/performanceRouter');
 const ttsRouter = require('./routes/ttsRouter');
 const { router: deskRouter } = require('./routes/deskRouter'); 
 const deskPolicyRouter = require('./routes/deskPolicyRouter');
-const modelPolicyRouter = require('./routes/modelPolicyRouter'); // NEW
-const sessionRouter = require('./routes/sessionRouter'); // NEW
+const modelPolicyRouter = require('./routes/modelPolicyRouter');
+const sessionRouter = require('./routes/sessionRouter');
 
 // Phase 2: Orchestrator
 const { handleAgentRequest } = require('./agents/orchestrator');
@@ -72,11 +69,13 @@ const {
 // Poller
 const { startTradeLockerPolling } = require('./broker/tradelockerPoller');
 
-// Phase 4: Autopilot
+// Phase 4: Autopilot & Risk
 const { 
   handleAutopilotProposedTrade,
   handleAutopilotExecutionPlan 
 } = require('./risk/autopilotController');
+
+const { calculateTradeParameters } = require('./risk/riskEngine');
 
 const {
   executeAutopilotTradeSim,
@@ -93,12 +92,9 @@ const { runTradingRoundTable } = require('./roundtable/roundTableEngine');
 const {
   appendAutopilotHistory,
   getSimilarAutopilotHistory,
-  getStatsForSession,
 } = require('./history/autopilotHistoryStore');
 const { runAutopilotCoach } = require('./history/autopilotCoach');
 
-// Voice & Vision
-const { parseVoiceAutopilotCommand } = require('./autopilot/voiceParser');
 const { analyzeChartImage } = require('./vision/visionService');
 const { visionRouter } = require('./visionRouter');
 
@@ -143,8 +139,8 @@ app.use('/api/playbooks', aiLimiter);
 app.use('/api/journal', journalRouter);
 app.use('/api/performance', performanceRouter); 
 app.use('/api/desk/policy', deskPolicyRouter); 
-app.use('/api/model-policy', modelPolicyRouter); // NEW MOUNT
-app.use('/api/session', sessionRouter); // NEW MOUNT
+app.use('/api/model-policy', modelPolicyRouter); 
+app.use('/api/session', sessionRouter);
 app.use('/api/tools/', aiLimiter);
 app.use('/api/desk/', aiLimiter);
 
@@ -174,14 +170,16 @@ app.post('/api/log', (req, res) => {
 // ---------- AI Squad Tool Endpoints ----------
 
 // GET /api/tools/playbooks
-app.get("/api/tools/playbooks", (req, res) => {
+const playbookService = require('./services/playbookService');
+app.get("/api/tools/playbooks", async (req, res) => {
   try {
     const { symbol, timeframe, direction } = req.query;
-    const result = getPlaybooks({
-      symbol: typeof symbol === "string" ? symbol : undefined,
-      timeframe: typeof timeframe === "string" ? timeframe : undefined,
-      direction: typeof direction === "string" ? direction : undefined,
-    });
+    // Map query to filter object
+    const filter = {};
+    if (symbol) filter.symbol = symbol;
+    if (timeframe) filter.timeframe = timeframe;
+    
+    const result = await playbookService.listPlaybooks(filter);
 
     res.json({
       ok: true,
@@ -214,11 +212,10 @@ app.post("/api/tools/journal-entry", async (req, res) => {
 });
 
 // POST /api/tools/autopilot-proposal
-const { computeAutopilotProposal } = require("./toolsData");
 app.post("/api/tools/autopilot-proposal", (req, res) => {
   try {
     const payload = req.body || {};
-    const proposal = computeAutopilotProposal(payload);
+    const proposal = calculateTradeParameters(payload);
     res.json({
       ok: proposal.riskEngine?.status !== "review",
       proposal,
@@ -294,8 +291,13 @@ app.get('/api/broker/snapshot', async (req, res, next) => {
     let snapshot = brokerStateStore.getSnapshot();
 
     if (!snapshot) {
-      snapshot = await fetchTradeLockerSnapshot();
-      brokerStateStore.updateSnapshot(snapshot);
+      // If we have creds, try to fetch fresh one
+      if (process.env.TRADELOCKER_EMAIL) {
+          try {
+            snapshot = await fetchTradeLockerSnapshot();
+            brokerStateStore.updateSnapshot(snapshot);
+          } catch(e) { /* ignore if not connected */ }
+      }
     }
 
     res.json({ ok: true, snapshot });
@@ -453,70 +455,6 @@ app.delete('/api/agents/:id', (req, res, next) => {
 // Mount Agents router
 app.use(createAgentsRouter(db));
 
-// --- MULTI-AGENT CHAT ---
-app.post("/api/agents/chat", async (req, res, next) => {
-  try {
-    const { agentIds, userMessage, chartContext, journalContext, screenshot, journalMode, agentOverrides, accountId, deskState } = req.body || {};
-
-    if (!userMessage || !Array.isArray(agentIds) || agentIds.length === 0) {
-      return next(new AppError("agentIds[] and userMessage are required", 400));
-    }
-    
-    const apiKeys = {
-      openai: req.headers['x-openai-key'],
-      gemini: req.headers['x-gemini-key']
-    };
-
-    const results = await runAgentsTurn({
-      agentIds,
-      userMessage,
-      chartContext: chartContext || {},
-      journalContext: journalContext || [],
-      screenshot: screenshot || null,
-      journalMode: journalMode || "live",
-      apiKeys,
-      agentOverrides,
-      db, 
-      accountId,
-      deskState 
-    });
-
-    res.json({ ok: true, agents: results });
-  } catch (err) {
-    next(err);
-  }
-});
-
-app.post("/api/agents/debrief", async (req, res, next) => {
-  try {
-    const { previousInsights, chartContext, journalContext, agentOverrides, accountId, deskState } = req.body || {};
-
-    if (!previousInsights || !Array.isArray(previousInsights)) {
-      return next(new AppError("previousInsights array is required", 400));
-    }
-
-    const apiKeys = {
-      openai: req.headers['x-openai-key'],
-      gemini: req.headers['x-gemini-key']
-    };
-
-    const results = await runAgentsDebrief({
-      previousInsights,
-      chartContext: chartContext || {},
-      journalContext: journalContext || [],
-      apiKeys,
-      agentOverrides,
-      db, 
-      accountId,
-      deskState
-    });
-
-    res.json({ ok: true, insights: results });
-  } catch (err) {
-    next(err);
-  }
-});
-
 // --- LEGACY AI ROUTE ---
 app.post('/api/ai/route', async (req, res, next) => {
   try {
@@ -586,7 +524,7 @@ app.post('/api/autopilot/execute', async (req, res, next) => {
 });
 
 // --- ROUND TABLE ---
-app.post('/api/roundtable/plan', async (req, res, next) => {
+app.post('/api/autopilot/plan-from-roundtable', async (req, res, next) => {
   try {
     const { sessionState, userQuestion, visualSummary } = req.body || {};
 
@@ -597,11 +535,10 @@ app.post('/api/roundtable/plan', async (req, res, next) => {
     const result = await runTradingRoundTable({
       sessionState,
       userQuestion: userQuestion || '',
-      recentJournal: getSimilarAutopilotHistory(sessionState, 25),
       visualSummary: typeof visualSummary === 'string' ? visualSummary : null,
     });
 
-    res.json(result);
+    res.json({ ok: true, ...result });
   } catch (err) {
     next(err);
   }
@@ -638,13 +575,13 @@ app.post('/api/history/autopilot/coach', async (req, res, next) => {
 // --- VISION ANALYSIS ---
 app.post('/api/vision/analyze', async (req, res, next) => {
   try {
-    const { fileBase64, mimeType, sessionState, question } = req.body;
+    // Legacy support for ChartVisionAgentPanel direct calls if still used
+    // New router handles this, but if older components call this directly
+    const { fileBase64, mimeType, question } = req.body;
     
-    if (!fileBase64 || !mimeType) {
-      return next(new AppError("Missing fileBase64 or mimeType", 400));
-    }
+    if (!fileBase64) return next(new AppError("Missing fileBase64", 400));
 
-    const summary = await analyzeChartImage({ fileBase64, mimeType, sessionState, question });
+    const summary = await analyzeChartImage({ fileBase64, mimeType: mimeType || 'image/jpeg', question, sessionState: {} });
     res.json({ visionSummary: summary });
   } catch (err) {
     next(err);
@@ -714,7 +651,6 @@ app.post('/api/tradelocker/login', async (req, res, next) => {
 
     const authJson = await authRes.json();
     const accessToken = authJson.accessToken || authJson.access_token;
-    const refreshToken = authJson.refreshToken || authJson.refresh_token;
 
     if (!accessToken) return next(new AppError('TradeLocker did not return an access token', 500));
 
@@ -751,18 +687,13 @@ app.post('/api/tradelocker/login', async (req, res, next) => {
     const sessionData = {
       baseUrl,
       accessToken,
-      refreshToken,
       accountId,
       accNum,
       createdAt: Date.now(),
       isDemo: !!isDemo,
       email,
       server,
-      accounts,
-      lastPositionsById: {}, 
-      latestState: {},        
-      recentEventsQueue: [],   
-      simulatedPositions: [] 
+      accounts
     };
 
     await db.setSession(sessionId, sessionData);
