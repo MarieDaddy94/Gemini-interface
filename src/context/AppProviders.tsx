@@ -15,7 +15,8 @@ import { DeskProvider } from './DeskContext';
 import { AutopilotProvider } from './AutopilotContext';
 import { VoiceRoomProvider } from './VoiceRoomContext';
 import { PlaybookProvider } from './PlaybookContext';
-import { BrokerProvider } from './BrokerContext'; // NEW
+import { BrokerProvider } from './BrokerContext'; 
+import { MarketDataProvider } from './MarketDataContext'; // NEW
 import TradeEventsToJournal from '../components/TradeEventsToJournal';
 
 interface Props {
@@ -26,36 +27,38 @@ export const AppProviders: React.FC<Props> = ({ children }) => {
   return (
     <AppWorldProvider>
       <AgentConfigProvider>
-        <TradingSessionProvider>
-          <BrokerProvider> {/* Layered here to provide data to lower contexts */}
-            <JournalProvider>
-              <AutopilotJournalProvider>
-                <VisionProvider>
-                  <TradeEventsProvider>
-                    <VisionSettingsProvider>
-                      <VoiceActivityProvider>
-                        <RealtimeConfigProvider>
-                          <ToolActivityProvider>
-                            <DeskProvider>
-                              <AutopilotProvider>
-                                <PlaybookProvider>
-                                  <VoiceRoomProvider>
-                                    <TradeEventsToJournal />
-                                    {children}
-                                  </VoiceRoomProvider>
-                                </PlaybookProvider>
-                              </AutopilotProvider>
-                            </DeskProvider>
-                          </ToolActivityProvider>
-                        </RealtimeConfigProvider>
-                      </VoiceActivityProvider>
-                    </VisionSettingsProvider>
-                  </TradeEventsProvider>
-                </VisionProvider>
-              </AutopilotJournalProvider>
-            </JournalProvider>
-          </BrokerProvider>
-        </TradingSessionProvider>
+        <BrokerProvider> {/* Broker data is foundational */}
+          <MarketDataProvider> {/* Market data is foundational */}
+            <TradingSessionProvider> {/* Session depends on Broker */}
+              <JournalProvider>
+                <AutopilotJournalProvider>
+                  <VisionProvider>
+                    <TradeEventsProvider>
+                      <VisionSettingsProvider>
+                        <VoiceActivityProvider>
+                          <RealtimeConfigProvider>
+                            <ToolActivityProvider>
+                              <DeskProvider>
+                                <AutopilotProvider>
+                                  <PlaybookProvider>
+                                    <VoiceRoomProvider>
+                                      <TradeEventsToJournal />
+                                      {children}
+                                    </VoiceRoomProvider>
+                                  </PlaybookProvider>
+                                </AutopilotProvider>
+                              </DeskProvider>
+                            </ToolActivityProvider>
+                          </RealtimeConfigProvider>
+                        </VoiceActivityProvider>
+                      </VisionSettingsProvider>
+                    </TradeEventsProvider>
+                  </VisionProvider>
+                </AutopilotJournalProvider>
+              </JournalProvider>
+            </TradingSessionProvider>
+          </MarketDataProvider>
+        </BrokerProvider>
       </AgentConfigProvider>
     </AppWorldProvider>
   );

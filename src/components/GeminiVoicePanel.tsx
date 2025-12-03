@@ -8,6 +8,7 @@ import {
 import { useTradingContextForAI } from "../hooks/useTradingContextForAI";
 import { useRealtimeConfig } from "../context/RealtimeConfigContext";
 import { apiClient } from "../utils/apiClient";
+import { voiceBus } from "../services/voiceBus"; // Import VoiceBus
 
 const GEMINI_TARGET_SAMPLE_RATE = 16000;
 
@@ -171,6 +172,10 @@ const GeminiVoicePanel: React.FC = () => {
   const handleSend = () => {
     const text = userInput.trim();
     if (!text || !clientRef.current) return;
+    
+    // Stop any ongoing AI speech
+    voiceBus.stop();
+    
     pushLog(`You: ${text}`);
     clientRef.current.sendUserText(text, true);
     setUserInput("");
@@ -184,6 +189,9 @@ const GeminiVoicePanel: React.FC = () => {
     }
 
     try {
+      // INTERRUPT: Stop AI audio when user wants to speak
+      voiceBus.stop();
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,

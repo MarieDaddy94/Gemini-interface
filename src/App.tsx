@@ -21,8 +21,8 @@ import AutopilotView from './views/AutopilotView';
 import TradingRoomFloorView from './views/TradingRoomFloorView';
 import ModelLabView from './views/ModelLabView';
 import PlaybookLibraryView from './views/PlaybookLibraryView';
-import GameplanView from './views/GameplanView'; // Phase O
-import SessionDebriefView from './views/SessionDebriefView'; // Phase O
+import GameplanView from './views/GameplanView'; 
+import SessionDebriefView from './views/SessionDebriefView'; 
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
@@ -41,8 +41,9 @@ const Dashboard: React.FC = () => {
   const { currentRoom, activeOverlay, toast } = worldState;
   const { openRoom, openOverlay, closeOverlay } = worldActions;
 
+  // Hooks now consume Contexts, so no local state management needed here
   const { brokerSessionId, brokerData, connect: connectBroker } = useBrokerSystem();
-  const { marketData } = useMarketDataFeed();
+  const { marketData, isConnected: isMarketConnected } = useMarketDataFeed();
 
   const [chartSymbol, setChartSymbol] = useState<string>('US30');
   const [chartTimeframe, setChartTimeframe] = useState<string>('15m');
@@ -51,6 +52,13 @@ const Dashboard: React.FC = () => {
   const effectiveJournalSessionId = brokerSessionId || 'local';
   const chatOverlayRef = useRef<ChatOverlayHandle | null>(null);
   
+  // Auto-detect focus symbol when broker data changes
+  React.useEffect(() => {
+    if (brokerData && brokerData.positions) {
+      setAutoFocusSymbol(detectFocusSymbolFromPositions(brokerData.positions));
+    }
+  }, [brokerData]);
+
   const handleBrowserUrlChange = (url: string) => {
     const { symbol, timeframe } = extractChartContextFromUrl(url);
     if (symbol) setChartSymbol(symbol);
@@ -67,13 +75,14 @@ const Dashboard: React.FC = () => {
   };
 
   const marketContext = useMemo(() => {
-    return `Account: ${brokerData?.equity?.toFixed(2) ?? 0} | Live Feed: ${Object.keys(marketData).length} ticks`;
+    const openPnL = brokerData ? (brokerData.equity - brokerData.balance).toFixed(2) : '0.00';
+    return `Account Equity: ${brokerData?.equity?.toFixed(2) ?? 0} | Open PnL: ${openPnL} | Live Ticks: ${Object.keys(marketData).length}`;
   }, [brokerData, marketData]);
 
   const tabs: { id: AppRoom; label: string }[] = [
     { id: 'terminal', label: 'Terminal' },
     { id: 'tradingRoomFloor', label: 'Desk' },
-    { id: 'gameplan', label: 'Gameplan' }, // Phase O
+    { id: 'gameplan', label: 'Gameplan' }, 
     { id: 'command', label: 'Command' },
     { id: 'playbooks', label: 'Playbooks' },
     { id: 'autopilot', label: 'Autopilot' },
@@ -81,7 +90,7 @@ const Dashboard: React.FC = () => {
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
     { id: 'modelLab', label: 'Model Lab' }, 
-    { id: 'debrief', label: 'Debrief' }, // Phase O
+    { id: 'debrief', label: 'Debrief' }, 
   ];
 
   return (
@@ -89,7 +98,7 @@ const Dashboard: React.FC = () => {
       <AgentActionDispatcher />
 
       {toast && (
-        <div className={`absolute top-16 right-4 z-[999] px-4 py-3 rounded-md shadow-lg border animate-fade-in-down flex items-center gap-3 bg-[#1e222d] border-blue-500/50 text-blue-400`}>
+        <div className={`absolute top-16 right-4 z-[999] px-4 py-3 rounded-md shadow-lg border animate-fade-in-down flex items-center gap-3 bg-[#1e222d] ${toast.type === 'success' ? 'border-green-500/50 text-green-400' : 'border-blue-500/50 text-blue-400'}`}>
            <span className="font-medium text-sm">{toast.msg}</span>
         </div>
       )}
@@ -113,7 +122,22 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button onClick={() => openOverlay('settings')} className="text-gray-400 hover:text-white transition-colors">Settings</button>
+             <div className="flex items-center gap-2 text-[10px] bg-[#1e222d] px-2 py-1 rounded border border-[#2a2e39]">
+                <span className={`w-1.5 h-1.5 rounded-full ${isMarketConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
+                <span className="text-gray-400">Feed</span>
+             </div>
+             <button onClick={() => openOverlay('settings')} className="text-gray-400 hover:text-white transition-colors text-xs">Settings</button>
+             {!brokerSessionId && (
+                <button onClick={() => openOverlay('broker')} className="bg-[#2962ff] hover:bg-[#1e53e5] text-white px-3 py-1 rounded text-xs font-bold transition-colors">
+                   Connect Broker
+                </button>
+             )}
+             {brokerSessionId && (
+                <div className="flex flex-col items-end text-[10px] leading-tight">
+                   <span className="text-gray-400">Equity</span>
+                   <span className="font-bold text-white">${brokerData?.equity.toFixed(2)}</span>
+                </div>
+             )}
           </div>
         </header>
 
