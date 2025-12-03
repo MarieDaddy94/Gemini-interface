@@ -9,6 +9,11 @@ if (process.env.CI) {
 
 let mainWindow;
 
+function isDevMode() {
+  // Development mode when explicitly set or when VITE_DEV_SERVER_URL is provided
+  return process.env.NODE_ENV === 'development' && process.env.VITE_DEV_SERVER_URL;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -25,9 +30,7 @@ function createWindow() {
 
   // In development, load from Vite dev server
   // In production, load from built files
-  const isDev = (process.env.NODE_ENV === 'development' || !app.isPackaged) && !process.env.ELECTRON_PROD;
-  
-  if (isDev && process.env.VITE_DEV_SERVER_URL) {
+  if (isDevMode()) {
     const viteDevUrl = process.env.VITE_DEV_SERVER_URL;
     mainWindow.loadURL(viteDevUrl);
     // Open DevTools in development
