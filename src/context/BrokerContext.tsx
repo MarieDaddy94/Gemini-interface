@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo } from 'react';
 import { BrokerAccountInfo, TradeLockerAccountSummary, TradeLockerCredentials, BrokerEvent } from '../types';
 import { fetchBrokerData, connectToTradeLocker, selectTradeLockerAccount } from '../services/tradeLockerService';
 import { useAppWorld } from './AppWorldContext';
@@ -7,9 +7,19 @@ import { useTradeEvents } from './TradeEventsContext';
 import { useJournal } from './JournalContext';
 import { fetchJournalEntries } from '../services/journalService';
 
+export interface BrokerAiSnapshot {
+  equity: number;
+  balance: number;
+  dayPnl: number;
+  openPnl: number;
+  positionCount: number;
+  maxDrawdown: number;
+}
+
 interface BrokerContextValue {
   brokerSessionId: string | null;
   brokerData: BrokerAccountInfo | null;
+  aiSnapshot: BrokerAiSnapshot | null;
   accounts: TradeLockerAccountSummary[];
   activeAccount: TradeLockerAccountSummary | null;
   loading: boolean;
@@ -41,7 +51,6 @@ export const BrokerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (brokerSessionId) {
       const fetchData = async () => {
         try {
-          // Silent poll - don't set global loading state
           const data = await fetchBrokerData(brokerSessionId);
           setBrokerData(data);
           setError(null);
@@ -89,18 +98,30 @@ export const BrokerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           }
         } catch (e: any) {
           console.warn('Failed to poll broker data', e);
-          // Don't error out the UI on transient poll fails
         }
       };
 
-      fetchData(); // Initial fetch
-      interval = setInterval(fetchData, 3000); // 3s Poll
+      fetchData(); 
+      interval = setInterval(fetchData, 3000); 
     }
 
     return () => {
       if (interval) clearInterval(interval);
     };
   }, [brokerSessionId, addEvent, showToast, setEntries]);
+
+  // Derived AI Snapshot (Memoized)
+  const aiSnapshot = useMemo<BrokerAiSnapshot | null>(() => {
+    if (!brokerData) return null;
+    return {
+      equity: brokerData.equity,
+      balance: brokerData.balance,
+      dayPnl: (brokerData as any).dailyPnl ?? 0, // Fallback if type def missing
+      openPnl: brokerData.equity - brokerData.balance,
+      positionCount: brokerData.positions.length,
+      maxDrawdown: (brokerData as any).dailyDrawdown ?? 0
+    };
+  }, [brokerData]);
 
   const connect = useCallback(async (creds: TradeLockerCredentials) => {
     setLoading(true);
@@ -137,7 +158,6 @@ export const BrokerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       await selectTradeLockerAccount(brokerSessionId, account.id, account.accNum);
       setActiveAccount(account);
       showToast(`Switched to ${account.name}`, "success");
-      // Trigger immediate refresh
       const data = await fetchBrokerData(brokerSessionId);
       setBrokerData(data);
     } catch (err: any) {
@@ -160,6 +180,7 @@ export const BrokerProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     <BrokerContext.Provider value={{
       brokerSessionId,
       brokerData,
+      aiSnapshot,
       accounts,
       activeAccount,
       loading,

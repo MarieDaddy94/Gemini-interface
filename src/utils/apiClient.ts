@@ -23,6 +23,18 @@ type FetchOptions = RequestInit & {
   headers?: Record<string, string>;
 };
 
+// # LAYER: Global Safety Net (Telemetry)
+async function logErrorToBackend(message: string, meta?: any) {
+  try {
+    // Fire and forget - do not await
+    fetch(`${API_BASE_URL}/api/log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level: 'ERROR', message, meta: { ...meta, source: 'client-api' } }),
+    }).catch(() => {}); // Ignore logging failures
+  } catch {}
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let errorMessage = `API Error: ${response.status} ${response.statusText}`;
@@ -37,6 +49,12 @@ async function handleResponse<T>(response: Response): Promise<T> {
       const text = await response.text();
       if (text) errorMessage = text;
     }
+
+    // Telemetry: Report failures
+    logErrorToBackend(errorMessage, { 
+      status: response.status, 
+      url: response.url 
+    });
 
     const error = new ApiError(errorMessage, response.status, response.statusText);
     logger.error('API Request Failed', { 

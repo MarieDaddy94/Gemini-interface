@@ -20,7 +20,7 @@ import {
   RiskRuntimeState,
   AutopilotConfig,
 } from '../types';
-import { useBroker } from './BrokerContext'; // Import Broker Context
+import { useBroker } from './BrokerContext';
 
 // -------------------------------
 // Default values
@@ -91,9 +91,9 @@ const defaultAgents: AgentDefinition[] = [
 ];
 
 const defaultRiskConfig: RiskConfig = {
-  maxRiskPerTradePercent: 0.5, // 0.5% per trade
-  maxDailyLossPercent: 3,      // 3% daily cap
-  maxWeeklyLossPercent: 8,     // 8% weekly cap
+  maxRiskPerTradePercent: 0.5,
+  maxDailyLossPercent: 3,
+  maxWeeklyLossPercent: 8,
   maxTradesPerDay: 5,
 };
 
@@ -124,6 +124,8 @@ const defaultSessionState: TradingSessionState = {
   isVisionActive: false,
 };
 
+const STORAGE_KEY = 'trading_session_settings_v1';
+
 // -------------------------------
 // Context shape
 // -------------------------------
@@ -142,7 +144,6 @@ interface TradingSessionContextValue {
   setNewsHighImpactNow: (flag: boolean) => void;
   setVisionActive: (flag: boolean) => void;
 
-  // Risk & autopilot setters
   setRiskConfig: (cfg: Partial<RiskConfig>) => void;
   updateRiskRuntime: (runtime: Partial<RiskRuntimeState>) => void;
   setAutopilotConfig: (cfg: Partial<AutopilotConfig>) => void;
@@ -163,10 +164,37 @@ interface TradingSessionProviderProps {
 export const TradingSessionProvider: React.FC<TradingSessionProviderProps> = ({
   children,
 }) => {
-  const [state, setState] = useState<TradingSessionState>(defaultSessionState);
+  // Initialize with fallback to LocalStorage
+  const [state, setState] = useState<TradingSessionState>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return {
+          ...defaultSessionState,
+          riskConfig: { ...defaultRiskConfig, ...parsed.riskConfig },
+          autopilotConfig: { ...defaultAutopilotConfig, ...parsed.autopilotConfig },
+          environment: parsed.environment || defaultSessionState.environment,
+          // Do not persist volatile state like messages or active accounts
+        };
+      }
+    } catch (e) {
+      console.error("Failed to load session settings", e);
+    }
+    return defaultSessionState;
+  });
   
-  // Consume Broker Data to Auto-Sync
   const { brokerData, brokerSessionId } = useBroker();
+
+  // EFFECT: Persist settings on change
+  useEffect(() => {
+    const settingsToSave = {
+      riskConfig: state.riskConfig,
+      autopilotConfig: state.autopilotConfig,
+      environment: state.environment
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settingsToSave));
+  }, [state.riskConfig, state.autopilotConfig, state.environment]);
 
   // EFFECT: Sync Broker -> Session Account State
   useEffect(() => {
@@ -177,13 +205,13 @@ export const TradingSessionProvider: React.FC<TradingSessionProviderProps> = ({
             account: {
                 ...prev.account,
                 accountId: brokerSessionId,
-                accountName: 'TradeLocker Account', // or fetch name if available
+                accountName: 'TradeLocker Account',
                 balance: brokerData.balance,
                 equity: brokerData.equity,
-                currency: 'USD' // simplifying for now
+                currency: 'USD'
             }
         }));
-    } else {
+    } else if (!brokerSessionId) {
         setState(prev => ({
             ...prev,
             isBrokerConnected: false
@@ -192,125 +220,62 @@ export const TradingSessionProvider: React.FC<TradingSessionProviderProps> = ({
   }, [brokerData, brokerSessionId]);
 
   const setEnvironment = (env: TradingEnvironment) => {
-    setState((prev) => ({
-      ...prev,
-      environment: env,
-    }));
+    setState((prev) => ({ ...prev, environment: env }));
   };
 
   const setAutopilotMode = (mode: AutopilotMode) => {
-    setState((prev) => ({
-      ...prev,
-      autopilotMode: mode,
-    }));
+    setState((prev) => ({ ...prev, autopilotMode: mode }));
   };
 
   const setInstrument = (instrument: TradingInstrument) => {
-    setState((prev) => ({
-      ...prev,
-      instrument,
-    }));
+    setState((prev) => ({ ...prev, instrument }));
   };
 
   const setTimeframe = (timeframe: Partial<TimeframeState>) => {
-    setState((prev) => ({
-      ...prev,
-      timeframe: {
-        ...prev.timeframe,
-        ...timeframe,
-      },
-    }));
+    setState((prev) => ({ ...prev, timeframe: { ...prev.timeframe, ...timeframe } }));
   };
 
   const setAccount = (account: Partial<AccountState>) => {
-    setState((prev) => ({
-      ...prev,
-      account: {
-        ...prev.account,
-        ...account,
-      },
-    }));
+    setState((prev) => ({ ...prev, account: { ...prev.account, ...account } }));
   };
 
   const setAgents = (agents: AgentDefinition[]) => {
-    setState((prev) => ({
-      ...prev,
-      agents,
-    }));
+    setState((prev) => ({ ...prev, agents }));
   };
 
   const addMessage = (msg: Omit<AgentMessage, 'id' | 'createdAt'>) => {
     const id = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const createdAt = new Date().toISOString();
-
-    const fullMessage: AgentMessage = {
-      id,
-      createdAt,
-      ...msg,
-    };
-
-    setState((prev) => ({
-      ...prev,
-      messages: [...prev.messages, fullMessage],
-    }));
+    const fullMessage: AgentMessage = { id, createdAt, ...msg };
+    setState((prev) => ({ ...prev, messages: [...prev.messages, fullMessage] }));
   };
 
   const clearMessages = () => {
-    setState((prev) => ({
-      ...prev,
-      messages: [],
-    }));
+    setState((prev) => ({ ...prev, messages: [] }));
   };
 
   const setBrokerConnected = (connected: boolean) => {
-    setState((prev) => ({
-      ...prev,
-      isBrokerConnected: connected,
-    }));
+    setState((prev) => ({ ...prev, isBrokerConnected: connected }));
   };
 
   const setNewsHighImpactNow = (flag: boolean) => {
-    setState((prev) => ({
-      ...prev,
-      isNewsHighImpactNow: flag,
-    }));
+    setState((prev) => ({ ...prev, isNewsHighImpactNow: flag }));
   };
 
   const setVisionActive = (flag: boolean) => {
-    setState((prev) => ({
-      ...prev,
-      isVisionActive: flag,
-    }));
+    setState((prev) => ({ ...prev, isVisionActive: flag }));
   };
 
   const setRiskConfig = (cfg: Partial<RiskConfig>) => {
-    setState((prev) => ({
-      ...prev,
-      riskConfig: {
-        ...prev.riskConfig,
-        ...cfg,
-      },
-    }));
+    setState((prev) => ({ ...prev, riskConfig: { ...prev.riskConfig, ...cfg } }));
   };
 
   const updateRiskRuntime = (runtime: Partial<RiskRuntimeState>) => {
-    setState((prev) => ({
-      ...prev,
-      riskRuntime: {
-        ...prev.riskRuntime,
-        ...runtime,
-      },
-    }));
+    setState((prev) => ({ ...prev, riskRuntime: { ...prev.riskRuntime, ...runtime } }));
   };
 
   const setAutopilotConfig = (cfg: Partial<AutopilotConfig>) => {
-    setState((prev) => ({
-      ...prev,
-      autopilotConfig: {
-        ...prev.autopilotConfig,
-        ...cfg,
-      },
-    }));
+    setState((prev) => ({ ...prev, autopilotConfig: { ...prev.autopilotConfig, ...cfg } }));
   };
 
   const value: TradingSessionContextValue = useMemo(
@@ -341,16 +306,10 @@ export const TradingSessionProvider: React.FC<TradingSessionProviderProps> = ({
   );
 };
 
-// -------------------------------
-// Hook
-// -------------------------------
-
 export const useTradingSession = (): TradingSessionContextValue => {
   const ctx = useContext(TradingSessionContext);
   if (!ctx) {
-    throw new Error(
-      'useTradingSession must be used within a TradingSessionProvider'
-    );
+    throw new Error('useTradingSession must be used within a TradingSessionProvider');
   }
   return ctx;
 };

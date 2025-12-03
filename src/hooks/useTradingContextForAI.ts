@@ -7,7 +7,7 @@ import { useBroker } from "../context/BrokerContext";
 export function useTradingContextForAI() {
   const { state: sessionState } = useTradingSession();
   const { entries } = useJournal();
-  const { brokerData } = useBroker();
+  const { aiSnapshot } = useBroker();
 
   const value = useMemo(() => {
     const last5 = (entries ?? []).slice(0, 5); 
@@ -24,23 +24,26 @@ export function useTradingContextForAI() {
         .flatMap((e) => e.tags ?? []),
     };
 
-    // Construct a safe broker snapshot from Live Broker Data
-    // Fallback to session config if broker disconnected
-    const brokerSnapshot = {
-        balance: brokerData?.balance ?? sessionState.account?.balance ?? 0,
-        equity: brokerData?.equity ?? sessionState.account?.equity ?? 0,
-        openPnL: brokerData 
-            ? (brokerData.equity - brokerData.balance) 
-            : (sessionState.account?.equity ?? 0) - (sessionState.account?.balance ?? 0),
+    // Use optimized AI snapshot from Broker Context, or fallback to session defaults
+    const brokerSnapshot = aiSnapshot ? {
+        balance: aiSnapshot.balance,
+        equity: aiSnapshot.equity,
+        openPnL: aiSnapshot.openPnl,
+        maxDailyDrawdownPct: sessionState.riskConfig.maxDailyLossPercent, // Config driven
+        openPositionsCount: aiSnapshot.positionCount
+    } : {
+        balance: sessionState.account?.balance ?? 0,
+        equity: sessionState.account?.equity ?? 0,
+        openPnL: (sessionState.account?.equity ?? 0) - (sessionState.account?.balance ?? 0),
         maxDailyDrawdownPct: sessionState.riskConfig.maxDailyLossPercent,
-        openPositionsCount: brokerData?.positions.length ?? 0
+        openPositionsCount: 0
     };
 
     return {
       brokerSnapshot,
       journalInsights,
     };
-  }, [sessionState, entries, brokerData]);
+  }, [sessionState, entries, aiSnapshot]);
 
   return value;
 }
