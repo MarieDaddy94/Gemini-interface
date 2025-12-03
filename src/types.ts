@@ -190,10 +190,13 @@ export interface ActivePlaybook {
 
 // --- Phase O: Session Gameplan & Debrief ---
 
+export type ExecutionMode = 'sim' | 'live-confirm' | 'live-auto';
+
 export interface SessionGameplan {
   sessionId: string;
   date: string;
   marketSession: string; // "NY", "London", etc.
+  executionMode: ExecutionMode;
   highLevelGoal: string;
   lockdownTriggerR: number;
   activePlaybooks: ActivePlaybook[];

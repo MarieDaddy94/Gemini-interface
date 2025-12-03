@@ -6,6 +6,7 @@ const { getBrokerSnapshot } = require("../broker/brokerStateStore");
 const policyEngine = require("../services/deskPolicyEngine");
 const tiltService = require("../services/tiltService");
 const playbookService = require("../services/playbookService");
+const sessionSummaryService = require("../services/sessionSummaryService"); // NEW
 
 function cleanAndParseJson(text) {
   try {
@@ -27,6 +28,9 @@ async function runDeskCoordinator(input, deskState) {
       ? `Equity: ${brokerSnapshot.equity}, Balance: ${brokerSnapshot.balance}, Daily PnL: ${brokerSnapshot.dailyPnl}, Open Positions: ${brokerSnapshot.openPositions?.length || 0}`
       : "Broker disconnected";
 
+    // Fetch unified state
+    const currentSession = await sessionSummaryService.getCurrentSessionState();
+    
     // Fetch live policy & tilt state
     const basePolicy = await policyEngine.getCurrentPolicy();
     const tiltState = await tiltService.getTiltState();
@@ -43,8 +47,14 @@ async function runDeskCoordinator(input, deskState) {
         ? deskState.activePlaybooks.map(ap => `${ap.name} (${ap.role})`).join(', ')
         : "None selected yet.";
 
+    const sessionContext = `
+    Mode: ${currentSession.executionMode.toUpperCase()}
+    Halted: ${currentSession.tradingHalted ? "YES (KILL SWITCH)" : "NO"}
+    Session R: ${currentSession.stats.totalR.toFixed(2)}R (Cap: ${currentSession.risk.maxSessionRiskR}R)
+    `;
+
     const policyText = `
-    Mode: ${effectivePolicy.mode.toUpperCase()}
+    Desk Policy Mode: ${effectivePolicy.mode.toUpperCase()}
     Max Risk: ${effectivePolicy.maxRiskPerTrade}%
     Max Daily Loss: ${effectivePolicy.maxDailyLossR}R
     Defense Mode: ${tiltState.defenseMode.toUpperCase()} (${tiltState.riskState})
@@ -61,6 +71,9 @@ You manage a team of AI agents, playbooks, and the Autopilot system.
 - Phase: "${deskState.sessionPhase}"
 - Account: ${accountContext}
 
+**SESSION STATUS:**
+${sessionContext}
+
 **ACTIVE DESK POLICY & DEFENSE STATE:**
 ${policyText}
 
@@ -75,6 +88,7 @@ ${lineupText}
    - Set risk caps (e.g., 2R for primary, 1R for experimental).
 3. Decide how the desk should react to input.
 4. **ENFORCE POLICY**: If Defense Mode is CAUTION/DEFENSE/LOCKDOWN, warn the user.
+5. If Trading is HALTED, refuse any trading operations.
 
 **JSON Response Format:**
 {
@@ -130,7 +144,6 @@ Respond with JSON updates.
 
     // Map playbook names back to IDs if LLM missed them
     if (parsed.activePlaybooks) {
-        // We need the full list to map names
         const allPlaybooks = await playbookService.listPlaybooks();
         parsed.activePlaybooks = parsed.activePlaybooks.map(ap => {
             const match = allPlaybooks.find(p => p.name.toLowerCase() === ap.name.toLowerCase() || p.id === ap.playbookId);
@@ -149,7 +162,7 @@ Respond with JSON updates.
       roleUpdates: Array.isArray(parsed.roleUpdates) ? parsed.roleUpdates : [],
       sessionPhase: parsed.sessionPhase || deskState.sessionPhase,
       goal: parsed.goal !== undefined ? parsed.goal : deskState.goal,
-      activePlaybooks: parsed.activePlaybooks // Pass back to frontend to update state
+      activePlaybooks: parsed.activePlaybooks
     };
 }
 

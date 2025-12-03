@@ -95,6 +95,14 @@ class PersistenceLayer {
           updatedAt TEXT
         )
       `);
+      
+      // --- PHASE P: VOLATILE DESK STATE ---
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS desk_state (
+          id TEXT PRIMARY KEY,
+          data TEXT
+        )
+      `);
     });
   }
 
@@ -352,6 +360,22 @@ class PersistenceLayer {
          updatedAt=excluded.updatedAt`,
       [id, symbol, timeframe, tier, dataJson, isArchived ? 1 : 0, now]
     );
+  }
+  
+  // --- DESK STATE (Volatile but persisted) ---
+  
+  async getDeskState(key = 'current') {
+      const row = await this.get('SELECT data FROM desk_state WHERE id = ?', [key]);
+      if (!row) return null;
+      try { return JSON.parse(row.data); } catch(e) { return null; }
+  }
+  
+  async saveDeskState(key = 'current', state) {
+      await this.run(
+          `INSERT INTO desk_state (id, data) VALUES (?, ?) 
+           ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
+          [key, JSON.stringify(state)]
+      );
   }
 }
 

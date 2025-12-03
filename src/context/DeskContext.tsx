@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from 'react';
-import { DeskPolicy, TiltState, ActivePlaybook, DeskSession } from '../types';
+import { DeskPolicy, TiltState, ActivePlaybook, DeskSession, ExecutionMode } from '../types';
 import { getCurrentPolicy, updatePolicy, generatePolicy } from '../services/deskPolicyApi';
 import { sessionApi } from '../services/sessionApi';
 import { apiClient } from '../utils/apiClient';
@@ -30,6 +30,7 @@ export interface TradingDeskState {
   tiltState: TiltState | null;
   activePlaybooks: ActivePlaybook[]; 
   currentSession: DeskSession | null; // PHASE O
+  tradingHalted: boolean; // PHASE P
 }
 
 export interface DeskActions {
@@ -58,9 +59,12 @@ export interface DeskActions {
   // Tilt Actions
   refreshTiltState: () => Promise<void>;
 
-  // Session Actions (Phase O)
-  startGameplan: (marketSession: string) => Promise<void>;
+  // Session Actions (Phase O/P)
+  startGameplan: (marketSession: string, mode: ExecutionMode, riskCapR: number) => Promise<void>;
   endSessionDebrief: () => Promise<void>;
+  
+  // Safety (Phase P)
+  toggleHalt: () => Promise<void>;
 }
 
 export interface DeskContextValue {
@@ -145,13 +149,15 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     activePolicy: null,
     tiltState: null,
     activePlaybooks: [],
-    currentSession: null
+    currentSession: null,
+    tradingHalted: false
   });
 
   // Initial Loads
   useEffect(() => {
       getCurrentPolicy().then(p => setDeskState(prev => ({ ...prev, activePolicy: p }))).catch(console.error);
       refreshTilt(); 
+      refreshSessionState();
   }, []);
 
   const refreshTilt = async () => {
@@ -161,6 +167,16 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } catch (e) {
           console.error("Failed to load tilt state", e);
       }
+  };
+
+  const refreshSessionState = async () => {
+      try {
+          const sessionState = await apiClient.get<any>('/api/session/current');
+          setDeskState(prev => ({ 
+              ...prev, 
+              tradingHalted: sessionState.tradingHalted 
+          }));
+      } catch(e) {}
   };
 
   const actions = useMemo<DeskActions>(() => ({
@@ -199,7 +215,8 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         activePolicy: deskState.activePolicy,
         tiltState: deskState.tiltState,
         activePlaybooks: [],
-        currentSession: null
+        currentSession: null,
+        tradingHalted: false
     }),
 
     refreshPolicy: async () => {
@@ -219,15 +236,16 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     refreshTiltState: refreshTilt,
 
-    // Phase O
-    startGameplan: async (marketSession) => {
-        const session = await sessionApi.createGameplan(marketSession);
+    // Phase O & P
+    startGameplan: async (marketSession, mode, riskCapR) => {
+        const session = await sessionApi.createGameplan(marketSession, mode, riskCapR);
         setDeskState(prev => ({ 
             ...prev, 
             currentSession: session,
             goal: session.gameplan?.highLevelGoal || prev.goal,
             sessionPhase: 'live', // Auto move to live
-            activePlaybooks: session.gameplan?.activePlaybooks || prev.activePlaybooks
+            activePlaybooks: session.gameplan?.activePlaybooks || prev.activePlaybooks,
+            tradingHalted: false // Reset halt on new session
         }));
     },
 
@@ -239,9 +257,15 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             currentSession: updated,
             sessionPhase: 'postSession' 
         }));
+    },
+
+    toggleHalt: async () => {
+        const newState = !deskState.tradingHalted;
+        await apiClient.post('/api/session/halt', { halted: newState });
+        setDeskState(prev => ({ ...prev, tradingHalted: newState }));
     }
 
-  }), [deskState.activePolicy, deskState.currentSession, deskState.tiltState]);
+  }), [deskState.activePolicy, deskState.currentSession, deskState.tiltState, deskState.tradingHalted]);
 
   return (
     <DeskContext.Provider value={{ state: deskState, actions }}>

@@ -1,10 +1,10 @@
 
-import { DeskSession, SessionGameplan, SessionDebrief } from '../types';
+import { DeskSession, SessionGameplan, SessionDebrief, ExecutionMode } from '../types';
 import { apiClient } from '../utils/apiClient';
 
 export const sessionApi = {
-    createGameplan: async (marketSession: string): Promise<DeskSession> => {
-        return apiClient.post<{ session: DeskSession }>('/api/session/gameplan', { marketSession })
+    createGameplan: async (marketSession: string, executionMode: ExecutionMode, riskCapR: number): Promise<DeskSession> => {
+        return apiClient.post<{ session: DeskSession }>('/api/session/gameplan', { marketSession, executionMode, riskCapR })
             .then(res => res.session);
     },
 

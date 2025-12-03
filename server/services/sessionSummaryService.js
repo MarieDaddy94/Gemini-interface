@@ -5,6 +5,7 @@ const tiltService = require('./tiltService');
 const playbookService = require('./playbookService');
 const deskPolicyEngine = require('./deskPolicyEngine');
 const { callLLM } = require('../llmRouter');
+const { getBrokerSnapshot } = require('../broker/brokerStateStore');
 
 class SessionSummaryService {
 
@@ -12,8 +13,60 @@ class SessionSummaryService {
         return await persistence.getDeskSessions(10);
     }
 
-    // PHASE O: Start of Day Gameplan
-    async createGameplan(marketSession) {
+    // --- Unified Session Accessor ---
+    async getCurrentSessionState() {
+        // 1. Get active desk session record
+        const sessions = await persistence.getDeskSessions(1);
+        const currentSession = sessions.length > 0 && !sessions[0].endTime ? sessions[0] : null;
+        
+        // 2. Get volatile desk state (halted?)
+        const deskState = await persistence.getDeskState() || { tradingHalted: false };
+        
+        // 3. Get Tilt/Policy
+        const tilt = await tiltService.getTiltState();
+        const policy = await deskPolicyEngine.getCurrentPolicy();
+        
+        // 4. Calculate Live PnL for session
+        let livePnl = 0;
+        let totalR = 0;
+        
+        if (currentSession) {
+            // Recalculate stats from journal for today
+            const entries = await journalService.listEntries();
+            const sessionEntries = entries.filter(e => e.createdAt >= currentSession.startTime);
+            sessionEntries.forEach(e => {
+                if (e.resultPnl) livePnl += e.resultPnl;
+                if (e.resultR) totalR += e.resultR;
+            });
+        }
+
+        return {
+            sessionId: currentSession ? currentSession.id : null,
+            isActive: !!currentSession,
+            gameplan: currentSession ? currentSession.gameplan : null,
+            executionMode: currentSession?.gameplan?.executionMode || 'sim',
+            tradingHalted: deskState.tradingHalted,
+            stats: {
+                totalR,
+                totalPnl: livePnl,
+            },
+            risk: {
+                tiltMode: tilt.defenseMode,
+                policyMode: policy.mode,
+                maxSessionRiskR: currentSession?.gameplan?.lockdownTriggerR || -3
+            }
+        };
+    }
+
+    async toggleTradingHalt(halted) {
+        const current = await persistence.getDeskState() || {};
+        current.tradingHalted = halted;
+        await persistence.saveDeskState('current', current);
+        return current;
+    }
+
+    // PHASE O: Start of Day Gameplan (Updated for Phase P)
+    async createGameplan({ marketSession, executionMode, riskCapR }) {
         const today = new Date().toISOString().split('T')[0];
         const sessionId = `sess_${today}_${marketSession}`;
 
@@ -25,6 +78,7 @@ class SessionSummaryService {
         // 2. Build Prompt for Strategist
         const prompt = `
         You are the Head Strategist. Create a trading gameplan for the ${marketSession} session.
+        Mode: ${executionMode || 'SIM'}
         
         Context:
         - Desk Policy Mode: ${policy.mode} (Max Risk: ${policy.maxRiskPerTrade}%)
@@ -33,7 +87,7 @@ class SessionSummaryService {
         
         Task:
         1. Set a concrete "Session Goal" (e.g. "Secure +2R using NY Reversal playbook, maintain calm").
-        2. Define a "Lockdown Trigger" (e.g. if we hit -2R, stop).
+        2. Define a "Lockdown Trigger" (Recommend: ${riskCapR || -3}R).
         3. Confirm the active playbook list.
         
         Respond in JSON:
@@ -60,7 +114,7 @@ class SessionSummaryService {
             // Fallback
             parsed = {
                 highLevelGoal: "Execute standard playbooks with discipline.",
-                lockdownTriggerR: -3,
+                lockdownTriggerR: riskCapR || -3,
                 activePlaybooks: [],
                 focusNotes: "System failed to generate detailed plan."
             };
@@ -71,6 +125,7 @@ class SessionSummaryService {
             sessionId,
             date: today,
             marketSession,
+            executionMode: executionMode || 'sim',
             ...parsed,
             riskPolicySnapshot: policy,
             createdAt: new Date().toISOString()
@@ -91,6 +146,10 @@ class SessionSummaryService {
         };
 
         await persistence.saveDeskSession(sessionRec);
+        
+        // Reset Halt state on new session
+        await this.toggleTradingHalt(false);
+        
         return sessionRec;
     }
 
@@ -102,7 +161,7 @@ class SessionSummaryService {
         const entries = await journalService.listEntries();
         // Filter entries created today/during session
         // Simple date match for now
-        const sessionEntries = entries.filter(e => e.createdAt.startsWith(sessionRec.date));
+        const sessionEntries = entries.filter(e => e.createdAt >= sessionRec.startTime);
 
         // Stats
         let totalR = 0, totalPnl = 0, wins = 0;
@@ -175,8 +234,7 @@ class SessionSummaryService {
 
     // Original Daily Summary (Legacy Compat)
     async generateDailySummary(dateStr) {
-        // ... kept for compatibility if needed, but generateDebrief replaces it logic-wise
-        return this.generateDebrief(`sess_${dateStr}_NY`); // Defaulting to generic ID if called
+        return this.generateDebrief(`sess_${dateStr}_NY`); 
     }
 }
 

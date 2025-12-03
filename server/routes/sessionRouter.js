@@ -8,10 +8,25 @@ router.get('/list', async (req, res) => {
     res.json({ sessions });
 });
 
+router.get('/current', async (req, res) => {
+    const state = await sessionSummaryService.getCurrentSessionState();
+    res.json(state);
+});
+
+router.post('/halt', async (req, res) => {
+    const { halted } = req.body;
+    const state = await sessionSummaryService.toggleTradingHalt(halted);
+    res.json(state);
+});
+
 router.post('/gameplan', async (req, res) => {
     try {
-        const { marketSession } = req.body;
-        const session = await sessionSummaryService.createGameplan(marketSession || 'NY');
+        const { marketSession, executionMode, riskCapR } = req.body;
+        const session = await sessionSummaryService.createGameplan({ 
+            marketSession: marketSession || 'NY',
+            executionMode,
+            riskCapR
+        });
         res.json({ session });
     } catch(err) {
         res.status(500).json({ error: err.message });

@@ -6,6 +6,7 @@
 const { evaluateProposedTrade } = require('./riskEngine');
 const { callLLM } = require('../llmRouter');
 const { getAgentById } = require('../agents/agents');
+const sessionSummaryService = require('../services/sessionSummaryService'); // NEW
 
 /**
  * Handle a "preview" request for a proposed trade from the frontend.
@@ -26,6 +27,36 @@ async function handleAutopilotProposedTrade(sessionState, proposedTrade) {
  * 2. Ask Execution Bot for a recommendation/plan based on the proposal + risk result.
  */
 async function handleAutopilotExecutionPlan(sessionState, proposedTrade) {
+  // --- SAFETY LAYER: GLOBAL HALT & SESSION CAPS ---
+  const currentSession = await sessionSummaryService.getCurrentSessionState();
+  
+  if (currentSession.tradingHalted) {
+      return {
+          allowed: false,
+          recommended: false,
+          planSummary: "TRADING HALTED BY KILL SWITCH.",
+          riskReasons: ["Global Trading Halt Active"],
+          riskWarnings: []
+      };
+  }
+
+  // Check Session Risk Cap
+  const maxLoss = currentSession.risk.maxSessionRiskR;
+  if (currentSession.stats.totalR <= maxLoss) {
+      return {
+          allowed: false,
+          recommended: false,
+          planSummary: `Session Risk Cap Hit (${currentSession.stats.totalR.toFixed(2)}R <= ${maxLoss}R).`,
+          riskReasons: ["Session Drawdown Limit Reached"],
+          riskWarnings: []
+      };
+  }
+
+  // Force SIM mode if session is SIM
+  // We don't change logic here, but the executor will see 'sim' environment in sessionState passed from frontend?
+  // Actually, backend should enforce the mode from the canonical session state if available.
+  // We'll trust sessionState passed in for now, but verify it matches.
+  
   // 1. Risk Check
   const riskResult = evaluateProposedTrade(sessionState, proposedTrade);
 

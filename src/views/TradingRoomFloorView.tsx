@@ -28,10 +28,10 @@ type DeskChatMessage = {
 const TradingRoomFloorView: React.FC = () => {
   const {
     state: deskState,
-    actions: { setDeskGoal, setSessionPhase, assignRole, updateRoleStatus, updateActivePlaybooks },
+    actions: { setDeskGoal, setSessionPhase, assignRole, updateRoleStatus, updateActivePlaybooks, toggleHalt },
   } = useDesk();
 
-  const { deskName, goal, sessionPhase, roles, activePlaybooks } = deskState;
+  const { deskName, goal, sessionPhase, roles, activePlaybooks, currentSession, tradingHalted } = deskState;
 
   const [draftGoal, setDraftGoal] = useState(goal ?? "");
   const [chatInput, setChatInput] = useState("");
@@ -144,7 +144,23 @@ const TradingRoomFloorView: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full bg-[#0b0e14] text-gray-200 overflow-hidden flex-col">
+    <div className="flex h-full bg-[#0b0e14] text-gray-200 overflow-hidden flex-col relative">
+      {/* HALT OVERLAY */}
+      {tradingHalted && (
+          <div className="absolute inset-0 z-50 bg-red-900/30 backdrop-blur-sm flex items-center justify-center pointer-events-none">
+              <div className="bg-red-950 border-2 border-red-500 rounded-lg p-8 text-center shadow-2xl pointer-events-auto">
+                  <h1 className="text-4xl font-black text-red-500 mb-2 tracking-tighter">TRADING HALTED</h1>
+                  <p className="text-red-200 mb-6 font-bold uppercase">Emergency Kill Switch Active</p>
+                  <button 
+                    onClick={toggleHalt}
+                    className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded shadow-lg"
+                  >
+                      RESUME OPERATIONS
+                  </button>
+              </div>
+          </div>
+      )}
+
       <VoiceRoomBar />
 
       <div className="flex-1 flex overflow-hidden">
@@ -159,6 +175,11 @@ const TradingRoomFloorView: React.FC = () => {
                         <span className="px-2 py-0.5 rounded text-[9px] bg-gray-700 text-gray-300 uppercase tracking-wider font-medium">
                             {sessionPhase}
                         </span>
+                        {currentSession?.gameplan && (
+                            <span className={`px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold ${currentSession.gameplan.executionMode === 'sim' ? 'bg-blue-600 text-white' : 'bg-emerald-600 text-white animate-pulse'}`}>
+                                {currentSession.gameplan.executionMode}
+                            </span>
+                        )}
                         </div>
                         <div className="flex items-center gap-2 text-xs">
                         <span className="text-gray-500">Goal:</span>
@@ -179,6 +200,13 @@ const TradingRoomFloorView: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-3">
+                        <button 
+                            onClick={toggleHalt}
+                            className={`px-3 py-1 rounded text-[10px] font-bold uppercase tracking-wider shadow-lg transition-all ${tradingHalted ? 'bg-gray-700 text-gray-400' : 'bg-red-600 text-white hover:bg-red-500'}`}
+                        >
+                            {tradingHalted ? 'RESUME' : 'HALT DESK'}
+                        </button>
+
                         <DeskStateIndicator />
                         
                         <div className="flex bg-[#0b0e14] rounded p-1 border border-gray-700">
