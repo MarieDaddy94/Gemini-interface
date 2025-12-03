@@ -124,9 +124,6 @@ class PlaybookService {
             currentDD += r;
             if (currentDD < maxDD) maxDD = currentDD;
         } else {
-            // Reset streak logic or peak-to-valley logic. 
-            // Simple accumulation reset on win for "winning streak breaks DD" approach,
-            // or just track run. Let's stick to simple running drawdown.
             if (currentDD < 0) currentDD += r;
             if (currentDD > 0) currentDD = 0; 
         }
@@ -146,6 +143,32 @@ class PlaybookService {
     };
 
     return this.updatePlaybook(id, { performance: newStats });
+  }
+
+  /**
+   * Recommend specific playbooks based on tier and stats.
+   * Phase N helper for Desk Coordinator.
+   */
+  async getRecommendedLineup() {
+    const playbooks = await this.listPlaybooks();
+    
+    // Sort logic: Tier A first, then by AvgR
+    playbooks.sort((a, b) => {
+        if (a.tier === 'A' && b.tier !== 'A') return -1;
+        if (b.tier === 'A' && a.tier !== 'A') return 1;
+        return b.performance.avgR - a.performance.avgR;
+    });
+
+    // Top 2 Primary
+    const primary = playbooks.filter(p => p.tier === 'A' || p.tier === 'B').slice(0, 2);
+    
+    // 1 Experimental
+    const experimental = playbooks.find(p => p.tier === 'experimental' || p.tier === 'C');
+
+    return {
+        primary,
+        experimental: experimental ? [experimental] : []
+    };
   }
 }
 

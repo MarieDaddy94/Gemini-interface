@@ -179,6 +179,15 @@ export interface Playbook {
   archived?: boolean;
 }
 
+// Phase N: Active Desk Playbooks
+export interface ActivePlaybook {
+  playbookId: string;
+  name: string;
+  role: "primary" | "secondary" | "experimental";
+  riskCapR: number; // Max R allowed for this playbook today
+  usedR: number;    // Current R spent/risked
+}
+
 // --- Journaling Types ---
 
 export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';

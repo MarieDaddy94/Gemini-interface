@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, useMemo, ReactNode, useEffect } from 'react';
-import { DeskPolicy, TiltState } from '../types';
+import { DeskPolicy, TiltState, ActivePlaybook } from '../types';
 import { getCurrentPolicy, updatePolicy, generatePolicy } from '../services/deskPolicyApi';
 import { apiClient } from '../utils/apiClient';
 
@@ -26,7 +26,8 @@ export interface TradingDeskState {
   sessionPhase: DeskSessionPhase;
   roles: Record<DeskRoleId, DeskRoleState>;
   activePolicy: DeskPolicy | null;
-  tiltState: TiltState | null; // NEW
+  tiltState: TiltState | null;
+  activePlaybooks: ActivePlaybook[]; // NEW
 }
 
 export interface DeskActions {
@@ -42,6 +43,8 @@ export interface DeskActions {
     roleId: DeskRoleId,
     updates: Partial<Pick<DeskRoleState, "status" | "lastUpdate">>
   ) => void;
+
+  updateActivePlaybooks: (playbooks: ActivePlaybook[]) => void; // NEW
 
   resetDesk: () => void;
   
@@ -134,7 +137,8 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     sessionPhase: 'preSession',
     roles: INITIAL_ROLES,
     activePolicy: null,
-    tiltState: null
+    tiltState: null,
+    activePlaybooks: []
   });
 
   // Initial Loads
@@ -177,13 +181,17 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         },
       })),
 
+    updateActivePlaybooks: (playbooks) => 
+      setDeskState(prev => ({ ...prev, activePlaybooks: playbooks })),
+
     resetDesk: () => setDeskState({
         deskName: 'Main Trading Desk',
         goal: 'Identify high-quality setups with 2R+ potential.',
         sessionPhase: 'preSession',
         roles: INITIAL_ROLES,
         activePolicy: deskState.activePolicy,
-        tiltState: deskState.tiltState
+        tiltState: deskState.tiltState,
+        activePlaybooks: []
     }),
 
     refreshPolicy: async () => {

@@ -5,7 +5,8 @@ import { apiClient } from '../utils/apiClient';
 import { performanceApi, DeskInsights } from '../services/performanceApi';
 import VoiceRoomBar from '../components/VoiceRoomBar';
 import DeskPolicyPanel from '../components/DeskPolicyPanel'; 
-import DeskStateIndicator from '../components/DeskStateIndicator'; // NEW
+import DeskStateIndicator from '../components/DeskStateIndicator'; 
+import { ActivePlaybook } from '../types';
 
 const roleColors: Record<DeskRoleId, string> = {
   strategist: 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200',
@@ -27,10 +28,10 @@ type DeskChatMessage = {
 const TradingRoomFloorView: React.FC = () => {
   const {
     state: deskState,
-    actions: { setDeskGoal, setSessionPhase, assignRole, updateRoleStatus },
+    actions: { setDeskGoal, setSessionPhase, assignRole, updateRoleStatus, updateActivePlaybooks },
   } = useDesk();
 
-  const { deskName, goal, sessionPhase, roles } = deskState;
+  const { deskName, goal, sessionPhase, roles, activePlaybooks } = deskState;
 
   const [draftGoal, setDraftGoal] = useState(goal ?? "");
   const [chatInput, setChatInput] = useState("");
@@ -40,7 +41,6 @@ const TradingRoomFloorView: React.FC = () => {
 
   const saveGoal = () => setDeskGoal(draftGoal);
 
-  // Load insights periodically
   useEffect(() => {
     const loadInsights = async () => {
         try {
@@ -51,11 +51,10 @@ const TradingRoomFloorView: React.FC = () => {
         }
     };
     loadInsights();
-    const interval = setInterval(loadInsights, 60000); // 1 min refresh
+    const interval = setInterval(loadInsights, 60000); 
     return () => clearInterval(interval);
   }, []);
 
-  // Derived list of active vs bench agents
   const activeRoles = Object.values(roles).filter(r => r.onDesk);
   const benchRoles = Object.values(roles).filter(r => !r.onDesk);
 
@@ -75,13 +74,11 @@ const TradingRoomFloorView: React.FC = () => {
     setIsSending(true);
 
     try {
-      // Construct payload for the desk brain
       const payload = {
         input: trimmed,
-        deskState, // Send full current state for context
+        deskState, 
       };
 
-      // Use apiClient for consistent base URL and error handling
       const res = await apiClient.post<{
         message: string;
         roleUpdates?: Array<{
@@ -91,6 +88,7 @@ const TradingRoomFloorView: React.FC = () => {
         }>;
         sessionPhase?: DeskSessionPhase;
         goal?: string;
+        activePlaybooks?: ActivePlaybook[];
       }>('/desk/roundup', payload);
 
       const deskText: string =
@@ -106,7 +104,6 @@ const TradingRoomFloorView: React.FC = () => {
 
       setMessages((prev) => [deskMsg, ...prev]);
 
-      // Apply role updates if present
       if (Array.isArray(res.roleUpdates)) {
         res.roleUpdates.forEach((update) => {
           const roleId = update.roleId;
@@ -129,6 +126,9 @@ const TradingRoomFloorView: React.FC = () => {
         setDeskGoal(res.goal);
         setDraftGoal(res.goal); 
       }
+      if (res.activePlaybooks) {
+          updateActivePlaybooks(res.activePlaybooks);
+      }
     } catch (err) {
       console.error("Desk roundup error", err);
       const errMsg: DeskChatMessage = {
@@ -145,14 +145,12 @@ const TradingRoomFloorView: React.FC = () => {
 
   return (
     <div className="flex h-full bg-[#0b0e14] text-gray-200 overflow-hidden flex-col">
-      {/* Voice Bar Integration */}
       <VoiceRoomBar />
 
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT: Desk Overview & Agents */}
         <div className="flex-1 flex flex-col min-w-0 border-r border-gray-800">
             
-            {/* Top Bar: Desk Config */}
             <div className="flex flex-col border-b border-gray-800 bg-[#131722] shrink-0">
                 <div className="flex items-center justify-between px-4 py-2 border-b border-gray-800/50">
                     <div className="flex flex-col gap-1">
@@ -181,7 +179,7 @@ const TradingRoomFloorView: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-3">
-                        <DeskStateIndicator /> {/* NEW: Defense Indicator */}
+                        <DeskStateIndicator />
                         
                         <div className="flex bg-[#0b0e14] rounded p-1 border border-gray-700">
                         {(['preSession', 'live', 'cooldown', 'postSession'] as DeskSessionPhase[]).map(phase => (
@@ -201,28 +199,24 @@ const TradingRoomFloorView: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Desk Insights Strip */}
-                {insights && (
+                {/* Desk Insights & Active Playbooks */}
                 <div className="px-4 py-1.5 flex items-center gap-4 bg-[#080812] text-[10px] overflow-hidden">
-                    <span className="font-bold text-gray-500 uppercase tracking-wider">Desk Insights</span>
-                    {insights.green.map((p, i) => (
-                        <div key={i} className="flex items-center gap-1 text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                            <span className="font-bold">🔥 {p.playbook}</span>
-                            <span className="opacity-70">({(p.winRate * 100).toFixed(0)}%)</span>
+                    <span className="font-bold text-gray-500 uppercase tracking-wider">Active Playbooks</span>
+                    {activePlaybooks.length > 0 ? activePlaybooks.map((pb, i) => (
+                        <div key={i} className={`flex items-center gap-1 px-2 py-0.5 rounded border ${
+                            pb.role === 'primary' 
+                                ? 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30' 
+                                : 'bg-purple-500/10 text-purple-300 border-purple-500/30'
+                        }`}>
+                            <span className="font-bold">{pb.name}</span>
+                            <span className="opacity-70 text-[9px] uppercase">({pb.role})</span>
                         </div>
-                    ))}
-                    {insights.red.map((p, i) => (
-                        <div key={i} className="flex items-center gap-1 text-red-400 bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
-                            <span className="font-bold">⚠️ Avoid: {p.playbook}</span>
-                            <span className="opacity-70">({p.avgR.toFixed(2)}R)</span>
-                        </div>
-                    ))}
-                    {insights.green.length === 0 && insights.red.length === 0 && <span className="text-gray-600 italic">Collecting data...</span>}
+                    )) : (
+                        <span className="text-gray-600 italic">No playbooks active. Ask coordinator to setup.</span>
+                    )}
                 </div>
-                )}
             </div>
 
-            {/* Agent Grid */}
             <div className="flex-1 overflow-y-auto p-4 bg-[#0b0e14]">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {activeRoles.map((role) => (
@@ -280,7 +274,6 @@ const TradingRoomFloorView: React.FC = () => {
                 </div>
                 ))}
                 
-                {/* Add Agent Button / Bench */}
                 <div className="rounded-lg border border-dashed border-gray-800 p-4 flex flex-col items-center justify-center gap-3 text-gray-500 bg-[#101216] min-h-[200px]">
                 <span className="text-xs uppercase font-bold tracking-wide opacity-70">Available Agents ({benchRoles.length})</span>
                 <div className="flex flex-wrap justify-center gap-2">
@@ -310,13 +303,12 @@ const TradingRoomFloorView: React.FC = () => {
             <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">AI Assistant</span>
             </div>
             
-            {/* Chat Area */}
             <div className="flex-1 p-4 overflow-y-auto flex flex-col gap-3">
             {messages.length === 0 && (
                 <div className="text-center text-gray-600 mt-10">
                     <p className="text-xs">Chat with the Desk Coordinator.</p>
                     <p className="text-[10px] opacity-70 mt-1">
-                    Try: "Scan for buys on US30" or "Set goal to 2R today"
+                    Try: "Set up the desk for London Open" or "Assign playbooks"
                     </p>
                 </div>
             )}
@@ -343,7 +335,6 @@ const TradingRoomFloorView: React.FC = () => {
             )}
             </div>
 
-            {/* Input */}
             <div className="p-4 border-t border-gray-800 bg-[#131722]">
             <div className="flex gap-2">
                 <input 
@@ -364,7 +355,6 @@ const TradingRoomFloorView: React.FC = () => {
             </div>
             </div>
             
-            {/* NEW: Policy Panel at bottom */}
             <DeskPolicyPanel />
         </div>
       </div>

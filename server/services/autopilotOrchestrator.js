@@ -4,7 +4,7 @@ const { evaluateProposedTrade } = require("../risk/riskEngine");
 const playbookPerformanceService = require("./playbookPerformanceService");
 const deskPolicyEngine = require("../services/deskPolicyEngine");
 const tiltService = require("../services/tiltService");
-const playbookService = require("../services/playbookService"); // Phase M
+const playbookService = require("../services/playbookService"); 
 
 /**
  * Generates a structured trade plan using Gemini.
@@ -17,17 +17,17 @@ async function generateAutopilotPlan({
   brokerSnapshot,
   visionSummary,
   riskProfile,
-  notes
+  notes,
+  activePlaybooks // NEW: Array of {name, id} passed from desk state
 }) {
   // Fetch Tilt State for context
   const tiltState = await tiltService.getTiltState();
   const defenseContext = `Defense Mode: ${tiltState.defenseMode.toUpperCase()} (${tiltState.riskState}). Signals: ${tiltState.tiltSignals.map(s => s.reason).join(', ') || 'None'}`;
 
-  // Fetch relevant playbooks (Phase M)
-  const relevantPlaybooks = await playbookService.listPlaybooks({ symbol });
-  const playbookText = relevantPlaybooks.map(pb => 
-    `- ${pb.name} (Tier ${pb.tier}, WR ${pb.performance.trades > 0 ? Math.round(pb.performance.wins/pb.performance.trades*100) : 0}%)`
-  ).join('\n') || "No playbooks found.";
+  // If no specific active playbooks passed, fall back to "Any" but prioritize known ones
+  const allowedPlaybookNames = activePlaybooks && activePlaybooks.length > 0 
+      ? activePlaybooks.map(p => `"${p.name}" (Risk Cap: ${p.riskCapR}R)`).join(', ')
+      : "Any valid setup, but PREFER standard playbooks.";
 
   const systemInstruction = `
 You are the lead strategist of an AI trading squad.
@@ -35,8 +35,9 @@ Your job:
 - Read the account snapshot, risk context, **VISION SNAPSHOTS**, and question.
 - Propose ONE structured trade plan as JSON.
 - Respect strict risk: never exceed requested risk% or blow daily drawdown.
-- **IMPORTANT**: You must assign a "playbook" name to this trade (e.g. "NY Liquidity Sweep", "Trend Pullback").
-  Prefer using one of the EXISTING PLAYBOOKS below if it matches.
+- **MANDATORY**: You must assign a "playbook" name to this trade.
+  **YOU MUST CHOOSE FROM THESE ACTIVE PLAYBOOKS**: [${allowedPlaybookNames}]
+  If the trade does not fit one of these, DO NOT TRADE. Return "none" for direction or explain why.
 
 Context:
 - Symbol: ${symbol}
@@ -45,8 +46,6 @@ Context:
 - Risk Profile: ${riskProfile || "balanced"}
 - **DEFENSE CONTEXT**: ${defenseContext}
 - **VISION CONTEXT**: ${visionSummary || "No vision data available. Rely on price structure implied by question."}
-- **AVAILABLE PLAYBOOKS**:
-${playbookText}
 - Extra Notes: ${notes || "none"}
 
 Account:
@@ -58,7 +57,6 @@ User Question/Directive: "${question || "Generate a plan if a setup exists."}"
 
 If Defense Mode is CAUTION, be very selective.
 If Defense Mode is DEFENSE or LOCKDOWN, do NOT propose a new trade unless it is explicitly to reduce risk (hedge).
-If blocked by defense mode, return { "summary": "Blocked by Defense Mode...", "jsonTradePlan": { ... invalid ... } }.
 
 You MUST respond in this exact JSON structure:
 {
@@ -73,7 +71,7 @@ You MUST respond in this exact JSON structure:
     "stopLoss": number | null,
     "takeProfits": [{ "level": number, "sizePct": number }],
     "riskPct": number,
-    "playbook": string  // REQUIRED: Name of the setup
+    "playbook": string  // MUST BE ONE OF THE ACTIVE PLAYBOOKS
   },
   "checklist": string[],
   "warnings": string[]
@@ -119,7 +117,7 @@ async function reviewAutopilotPlan(plan, sessionState) {
   const tiltState = await tiltService.getTiltState();
   const currentPolicy = tiltService.applyDefenseMode(basePolicy, tiltState.defenseMode);
 
-  // 1. Basic Risk Engine Check (now with EFFECTIVE policy)
+  // 1. Basic Risk Engine Check
   const proposedTrade = {
     direction: tradePlan.direction.toLowerCase(), // 'long' | 'short'
     riskPercent: tradePlan.riskPct,
@@ -132,14 +130,14 @@ async function reviewAutopilotPlan(plan, sessionState) {
   const warnings = [...riskResult.warnings];
   let allowed = riskResult.allowed;
 
-  // 2. Playbook Performance Check (Historical)
+  // 2. Playbook Performance Check
   let playbookProfile = null;
   if (tradePlan.playbook && tradePlan.symbol) {
      playbookProfile = await playbookPerformanceService.getProfileForPlaybook(tradePlan.playbook, tradePlan.symbol);
      
      if (playbookProfile) {
         if (playbookProfile.health === 'red') {
-           allowed = false; // Block RED strategies automatically
+           allowed = false; 
            reasons.push(`Playbook '${tradePlan.playbook}' is marked RED (Health Check Failed).`);
            reasons.push(`Stats: Win ${Math.round(playbookProfile.winRate*100)}%, Avg ${playbookProfile.avgR.toFixed(2)}R.`);
         } else if (playbookProfile.health === 'amber') {
@@ -153,7 +151,6 @@ async function reviewAutopilotPlan(plan, sessionState) {
      }
   }
 
-  // Add Defense Warnings
   if (tiltState.defenseMode !== 'normal') {
       warnings.push(`Defense Mode Active: ${tiltState.defenseMode.toUpperCase()}. Rules are tightened.`);
   }
@@ -165,8 +162,8 @@ async function reviewAutopilotPlan(plan, sessionState) {
     plan,
     riskDetails: riskResult,
     playbookProfile,
-    policyUsed: currentPolicy.id, // Traceability
-    tiltState // Pass back for UI
+    policyUsed: currentPolicy.id, 
+    tiltState 
   };
 }
 
