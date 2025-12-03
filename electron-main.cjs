@@ -69,13 +69,6 @@ function createWindow() {
     }
     return { action: 'allow' };
   });
-
-  // Enable internet access - allow navigation
-  mainWindow.webContents.session.webRequest.onBeforeSendHeaders(
-    (details, callback) => {
-      callback({ requestHeaders: details.requestHeaders });
-    }
-  );
 }
 
 // This method will be called when Electron has finished initialization
