@@ -317,6 +317,29 @@ app.post('/api/broker/snapshot', (req, res, next) => {
 });
 
 // ------------------------------
+// Broker Compatibility Adapter (CRITICAL FIX)
+// ------------------------------
+app.get('/api/tradelocker/overview', (req, res) => {
+    // Adapter to map brokerStateStore to the old BrokerAccountInfo shape
+    const snapshot = brokerStateStore.getSnapshot();
+    
+    if (!snapshot) {
+        return res.json({ isConnected: false, positions: [] });
+    }
+
+    const data = {
+        isConnected: true,
+        balance: snapshot.balance,
+        equity: snapshot.equity,
+        marginUsed: snapshot.marginUsed,
+        positions: snapshot.openPositions || [],
+        recentEvents: [] 
+    };
+    
+    res.json(data);
+});
+
+// ------------------------------
 // Broker controls API
 // ------------------------------
 app.post('/api/broker/controls', async (req, res, next) => {
