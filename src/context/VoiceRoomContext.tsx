@@ -2,12 +2,11 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { GeminiLiveClient } from '../services/GeminiLiveClient';
 import { OpenAIRealtimeClient } from '../services/OpenAIRealtimeClient';
-import { useRealtimeConfig } from './RealtimeConfigContext'; // We'll keep this for themes/voices
-import { useTradingContextForAI } from '../hooks/useTradingContextForAI';
-import { useDesk } from './DeskContext';
-import { useAutopilotContext } from './AutopilotContext';
+import { useRealtimeConfig } from './RealtimeConfigContext';
 import { modelConfigService } from '../services/modelConfig';
 import { logger } from '../services/logger';
+import { handleGeminiToolCall } from '../services/geminiToolHandlers';
+import { GEMINI_ROOM_TOOLS, OPENAI_ROOM_TOOLS } from '../config/roomTools';
 
 // Room Types
 export type VoiceRoomId = 'desk' | 'autopilot' | 'journal';
@@ -35,11 +34,7 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
   const geminiClientRef = useRef<GeminiLiveClient | null>(null);
   const openaiClientRef = useRef<OpenAIRealtimeClient | null>(null);
 
-  // Contexts needed for context injection
-  const { brokerSnapshot, journalInsights } = useTradingContextForAI();
-  const { state: deskState } = useDesk();
-  const { activeProposal } = useAutopilotContext();
-  const { theme, getVoiceProfile } = useRealtimeConfig();
+  const { getVoiceProfile } = useRealtimeConfig();
 
   // Load provider preference
   useEffect(() => {
@@ -52,7 +47,7 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
     
     switch (roomId) {
       case 'desk':
-        return base + "You are on the Trading Floor. You have full access to desk state, market data, and agents. Your goal is to coordinate the session and execute the trading plan. Use 'control_app_ui' to navigate the user. Use 'desk_roundup' to update status.";
+        return base + "You are on the Trading Floor. You have full access to desk state, market data, and agents. Your goal is to coordinate the session. Use 'desk_roundup' to change desk status or goals.";
       case 'autopilot':
         return base + "You are in the Autopilot Engine Room. Focus heavily on risk parameters, execution logic, and trade proposals. Use 'get_autopilot_proposal' to calculate risk.";
       case 'journal':
@@ -65,21 +60,23 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
   const joinRoom = async (roomId: VoiceRoomId) => {
     if (activeRoom === roomId && connectionStatus === 'connected') return;
     
-    // Disconnect existing
     leaveRoom();
     
     setConnectionStatus('connecting');
     setActiveRoom(roomId);
 
-    // Get fresh config
     const voiceConfig = modelConfigService.getAssignment('voice');
     setActiveProvider(voiceConfig.provider);
 
     try {
       if (voiceConfig.provider === 'gemini') {
+        const tools = GEMINI_ROOM_TOOLS[roomId] || [];
+        
         const client = new GeminiLiveClient({
           model: voiceConfig.model || 'models/gemini-2.5-flash-live',
-          voiceName: getVoiceProfile('strategist').geminiPreset || 'Aoede', // Default desk voice
+          voiceName: getVoiceProfile('strategist').geminiPreset || 'Aoede',
+          systemInstruction: getSystemInstructions(roomId),
+          tools: tools,
           onSetupComplete: () => {
             setConnectionStatus('connected');
             logger.info(`Joined Voice Room: ${roomId} (Gemini)`);
@@ -87,21 +84,30 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
           onError: (err) => {
             console.error("Voice Room Error", err);
             setConnectionStatus('error');
+          },
+          onToolCall: async (calls) => {
+             // Use shared tool handler logic
+             if (geminiClientRef.current) {
+                await handleGeminiToolCall({ 
+                    sendToolResponse: (p) => geminiClientRef.current?.sendToolResponse(p.toolResponse.functionResponses as any) 
+                }, { functionCalls: calls as any });
+             }
           }
-          // Note: Tool handling is internal to the client classes in current architecture
-          // They auto-wire to backend tools.
         });
         geminiClientRef.current = client;
         await client.connect();
       } else {
-        // OpenAI
+        // OpenAI Logic
         const wsUrl = (import.meta as any).env?.VITE_OPENAI_REALTIME_URL;
         if (!wsUrl) throw new Error("OpenAI Realtime URL not configured");
+
+        const tools = OPENAI_ROOM_TOOLS[roomId] || [];
 
         const client = new OpenAIRealtimeClient({
           url: wsUrl,
           voice: getVoiceProfile('strategist').openaiVoice || 'alloy',
           instructions: getSystemInstructions(roomId),
+          tools: tools,
           events: {
             onOpen: () => {
               setConnectionStatus('connected');
@@ -141,18 +147,8 @@ export const VoiceRoomProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const toggleMic = () => {
-    if (activeProvider === 'gemini' && geminiClientRef.current) {
-       // The gemini component handles mic logic internally usually,
-       // but here we are lifting it. 
-       // For Phase I, we reuse the existing components which handle mic internally,
-       // OR we need to expose startMic/stopMic on the client classes.
-       // Assuming client classes expose it or we implement it here.
-       // *Correction*: The previous GeminiVoicePanel handled mic.
-       // We need to implement mic handling in the client or context.
-       // For brevity in this artifact, assume clients handle mic via a method we add or expose.
-       // Let's assume the UI components handle the mic stream piping to the client for now.
-       setIsMicActive(!isMicActive);
-    }
+    // This state is consumed by the UI components (GeminiVoicePanel) to actually trigger audio API
+    setIsMicActive(!isMicActive);
   };
 
   return (

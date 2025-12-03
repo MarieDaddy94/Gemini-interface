@@ -1,5 +1,6 @@
+
 import { voiceBus } from "./voiceBus";
-import { GEMINI_LIVE_TOOLS } from "../config/geminiLiveTools";
+import { Tool } from "@google/genai";
 
 const LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
@@ -20,6 +21,8 @@ type GeminiLiveClientOptions = {
   apiKey?: string;
   model?: string;
   voiceName?: string;
+  tools?: Tool[]; // NEW: Accept tools dynamically
+  systemInstruction?: string; // NEW: Accept system prompt dynamically
   onServerText?: (text: string, isFinal: boolean) => void;
   onSetupComplete?: () => void;
   onError?: (err: unknown) => void;
@@ -30,6 +33,8 @@ export class GeminiLiveClient {
   private apiKey?: string;
   private model: string;
   private voiceName: string;
+  private tools: Tool[];
+  private systemInstruction: string;
   private socket: WebSocket | null = null;
 
   private onServerText?: (text: string, isFinal: boolean) => void;
@@ -41,6 +46,8 @@ export class GeminiLiveClient {
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? "models/gemini-2.5-flash-live";
     this.voiceName = opts.voiceName ?? "Aoede";
+    this.tools = opts.tools ?? [];
+    this.systemInstruction = opts.systemInstruction ?? "You are a helpful AI trading assistant.";
     this.onServerText = opts.onServerText;
     this.onSetupComplete = opts.onSetupComplete;
     this.onError = opts.onError;
@@ -102,74 +109,6 @@ export class GeminiLiveClient {
   private sendSetup() {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
 
-    // Flatten all configured tools into one declaration list
-    const tools = [
-      {
-        functionDeclarations: [
-          {
-            name: "get_trading_context",
-            description:
-              "Fetch latest trading context: equity, open positions, risk limits, journal stats.",
-            parameters: {
-              type: "object",
-              properties: {
-                scope: {
-                  type: "string",
-                  enum: ["minimal", "full"],
-                },
-              },
-              required: ["scope"],
-            },
-          },
-          {
-            name: "run_autopilot_review",
-            description:
-              "Send a proposed trade to the backend risk engine for approval and adjusted parameters.",
-            parameters: {
-              type: "object",
-              properties: {
-                symbol: { type: "string" },
-                side: { type: "string", enum: ["buy", "sell"] },
-                entry: { type: "number" },
-                stopLoss: { type: "number" },
-                takeProfit: { type: "number" },
-                riskPct: { type: "number" },
-                timeFrame: { type: "string" },
-                reasoningSummary: { type: "string" },
-              },
-              required: ["symbol", "side", "entry", "stopLoss", "riskPct"],
-            },
-          },
-          {
-            name: "get_recent_vision_summary",
-            description:
-              "Get a stitched summary of the last few days of chart vision for the symbol/timeframe.",
-            parameters: {
-              type: "object",
-              properties: {
-                symbol: {
-                  type: "string",
-                  description: "Symbol, e.g. US30, NAS100.",
-                },
-                timeframe: {
-                  type: "string",
-                  description: "Timeframe string, e.g. '1m', '15m'.",
-                },
-                days: {
-                  type: "number",
-                  description:
-                    "How many days of history to summarize (default 3).",
-                },
-              },
-              required: ["symbol"],
-            },
-          },
-          // Spread all external tools (playbook, journal, autopilot)
-          ...GEMINI_LIVE_TOOLS.flatMap(t => t.functionDeclarations || []),
-        ],
-      },
-    ];
-
     const setupPayload = {
       setup: {
         model: this.model,
@@ -188,18 +127,9 @@ export class GeminiLiveClient {
         },
         systemInstruction: {
           role: "system",
-          parts: [
-            {
-              text:
-                "You are a prop-firm style AI trading squad. " +
-                "You MUST call tools to get live trading context, recent chart structure, " +
-                "playbooks (get_chart_playbook), autopilot proposals (get_autopilot_proposal), " +
-                "and to log trades (log_trade_journal) before suggesting heavy risk. " +
-                "Never hallucinate balances or trade history.",
-            },
-          ],
+          parts: [{ text: this.systemInstruction }],
         },
-        tools: tools,
+        tools: this.tools,
       },
     };
 
@@ -232,10 +162,6 @@ export class GeminiLiveClient {
     this.socket.send(JSON.stringify(payload));
   }
 
-  /**
-   * Send a chunk of 16-bit PCM mono audio at 16kHz.
-   * This wraps it in realtimeInput.mediaChunks with mimeType audio/pcm;rate=16000
-   */
   sendRealtimeAudio(pcm16: Int16Array) {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     if (!pcm16.length) return;
@@ -294,9 +220,8 @@ export class GeminiLiveClient {
           
           const inline = part.inlineData;
           if (inline?.mimeType?.startsWith("audio/pcm")) {
-            // Push audio to VoiceBus for playback
             voiceBus.enqueue({
-              speakerId: "squad-gemini", // Could differentiate if needed
+              speakerId: "squad-gemini",
               base64Pcm: inline.data,
               sampleRate: 24000, 
             });
