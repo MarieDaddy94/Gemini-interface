@@ -6,6 +6,7 @@ import { useMarketDataFeed } from './hooks/useMarketDataFeed';
 import { detectFocusSymbolFromPositions, FocusSymbol } from './symbolMap';
 import { PlaybookReviewPayload } from './types';
 import { buildPlaybookReviewPrompt } from './utils/journalPrompts';
+import { useDesk } from './context/DeskContext';
 
 import ChatOverlay, { ChatOverlayHandle } from './components/ChatOverlay';
 import ConnectBrokerModal from './components/ConnectBrokerModal';
@@ -41,9 +42,10 @@ const Dashboard: React.FC = () => {
   const { currentRoom, activeOverlay, toast } = worldState;
   const { openRoom, openOverlay, closeOverlay } = worldActions;
 
-  // Hooks now consume Contexts, so no local state management needed here
+  // Hooks now consume Contexts
   const { brokerSessionId, brokerData, connect: connectBroker } = useBrokerSystem();
   const { marketData, isConnected: isMarketConnected } = useMarketDataFeed();
+  const { state: deskState } = useDesk(); // For halt check
 
   const [chartSymbol, setChartSymbol] = useState<string>('US30');
   const [chartTimeframe, setChartTimeframe] = useState<string>('15m');
@@ -97,6 +99,11 @@ const Dashboard: React.FC = () => {
     <div className="flex h-screen w-full bg-[#131722] text-[#d1d4dc] overflow-hidden relative">
       <AgentActionDispatcher />
 
+      {/* GLOBAL HALT BANNER */}
+      {deskState.tradingHalted && (
+         <div className="absolute top-0 left-0 right-0 h-1 z-[1000] bg-red-600 animate-pulse pointer-events-none"></div>
+      )}
+
       {toast && (
         <div className={`absolute top-16 right-4 z-[999] px-4 py-3 rounded-md shadow-lg border animate-fade-in-down flex items-center gap-3 bg-[#1e222d] ${toast.type === 'success' ? 'border-green-500/50 text-green-400' : 'border-blue-500/50 text-blue-400'}`}>
            <span className="font-medium text-sm">{toast.msg}</span>
@@ -109,6 +116,14 @@ const Dashboard: React.FC = () => {
             <div className="flex items-center gap-2 text-white font-bold">
               <span>TradingView <span className="text-[#2962ff]">Pro</span></span>
             </div>
+            
+            {/* Conditional HALTED badge in header */}
+            {deskState.tradingHalted && (
+               <div className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded animate-pulse">
+                  SYSTEM HALTED
+               </div>
+            )}
+
             <div className="flex items-center gap-2 text-sm overflow-x-auto no-scrollbar">
               {tabs.map((tab) => (
                 <button
@@ -122,6 +137,14 @@ const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-3">
+             {/* Current Session Indicator */}
+             {deskState.currentSession && (
+                <div className="flex items-center gap-1 bg-[#101216] px-2 py-1 rounded border border-gray-700 text-[10px]">
+                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                   <span className="text-gray-400">{deskState.currentSession.gameplan?.marketSession || 'Active'}</span>
+                </div>
+             )}
+
              <div className="flex items-center gap-2 text-[10px] bg-[#1e222d] px-2 py-1 rounded border border-[#2a2e39]">
                 <span className={`w-1.5 h-1.5 rounded-full ${isMarketConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
                 <span className="text-gray-400">Feed</span>

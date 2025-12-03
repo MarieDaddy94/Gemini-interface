@@ -160,6 +160,12 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       refreshSessionState();
   }, []);
 
+  // Heartbeat Poller: Keep session state (halts, phases) in sync
+  useEffect(() => {
+      const interval = setInterval(refreshSessionState, 5000); // 5s heartbeat
+      return () => clearInterval(interval);
+  }, []);
+
   const refreshTilt = async () => {
       try {
           const state = await apiClient.get<TiltState>('/api/desk/tilt/state');
@@ -174,7 +180,8 @@ export const DeskProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           const sessionState = await apiClient.get<any>('/api/session/current');
           setDeskState(prev => ({ 
               ...prev, 
-              tradingHalted: sessionState.tradingHalted 
+              tradingHalted: sessionState.tradingHalted,
+              currentSession: sessionState.isActive ? { ...sessionState.gameplan, ...sessionState } : prev.currentSession 
           }));
       } catch(e) {}
   };

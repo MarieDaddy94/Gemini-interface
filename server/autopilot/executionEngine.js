@@ -12,6 +12,7 @@
 // - brokerStateStore: to read latest snapshot
 // - executionGuard: to enforce risk rules
 // - tradelockerClient: to actually place/modify/close trades
+// - sessionSummaryService: to check global kill switch
 
 const { brokerStateStore } = require('../broker/brokerStateStore');
 const { evaluateTradeCommand } = require('./executionGuard');
@@ -20,67 +21,35 @@ const {
   closePosition,
   modifyPosition,
 } = require('../broker/tradelockerClient');
+const sessionSummaryService = require('../services/sessionSummaryService');
 
 const ALLOW_AUTO_EXECUTE =
   String(process.env.AUTOPILOT_ALLOW_AUTO_EXECUTE || 'false').toLowerCase() ===
   'true';
 
 /**
- * @typedef {"open"|"close"|"modify"} CommandType
- *
- * @typedef {Object} OpenCommand
- * @property {"open"} type
- * @property {number} tradableInstrumentId
- * @property {string} [symbol]
- * @property {"BUY"|"SELL"|"BOTH"} side
- * @property {number} qty
- * @property {"market"|"limit"|"stop"} entryType
- * @property {number} [price]
- * @property {number} [stopPrice]
- * @property {number} [slPrice]
- * @property {number} [tpPrice]
- * @property {number|string} [routeId]
- * @property {string} [clientOrderId]
- *
- * @typedef {Object} CloseCommand
- * @property {"close"} type
- * @property {string|number} positionId
- * @property {number} [qty]  // 0 or omitted → close full
- *
- * @typedef {Object} ModifyCommand
- * @property {"modify"} type
- * @property {string|number} positionId
- * @property {number|null} [slPrice]
- * @property {number|null} [tpPrice]
- */
-
-/**
- * @typedef {Object} ExecuteOptions
- * @property {"confirm"|"auto"} mode
- * @property {OpenCommand|CloseCommand|ModifyCommand} command
- * @property {string} [source]
- */
-
-/**
  * Execute (or propose) a trade command depending on mode.
- *
- * Returns a structured result:
- * {
- *   mode,
- *   executed: boolean,
- *   requiresConfirmation: boolean,
- *   allowedByGuard: boolean,
- *   reasons: string[],
- *   warnings: string[],
- *   guardMetrics: object,
- *   brokerSnapshot: object | null,
- *   brokerResult: any | null
- * }
- *
- * No matter what, you always get a full explanation.
  */
 async function executeTradeCommand(options) {
   const { mode, command, source } = options || {};
+
+  // LAYER: Global Safety Net (Kill Switch Check)
+  const sessionState = await sessionSummaryService.getCurrentSessionState();
+  if (sessionState.tradingHalted) {
+    return {
+      mode: mode || 'confirm',
+      source: source || 'unknown',
+      executed: false,
+      requiresConfirmation: false,
+      allowedByGuard: false,
+      hardBlocked: true,
+      reasons: ['GLOBAL_KILL_SWITCH_ACTIVE'],
+      warnings: ['Trading is currently halted by the desk.'],
+      guardMetrics: {},
+      brokerSnapshot: null,
+      brokerResult: null,
+    };
+  }
 
   const snapshot = brokerStateStore.getSnapshot() || null;
 
