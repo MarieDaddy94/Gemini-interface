@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => {
   
   return {
     plugins: [react()],
+    // Use relative base path for Electron compatibility
+    base: './',
     resolve: {
       alias: {
         "@": path.resolve((process as any).cwd(), "./src"),
