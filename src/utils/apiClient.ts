@@ -101,6 +101,20 @@ export const apiClient = {
     return handleResponse<T>(response);
   },
 
+  patch: async <T>(endpoint: string, body: any, options: FetchOptions = {}): Promise<T> => {
+    const url = `${API_BASE_URL}${endpoint}`;
+    const response = await fetch(url, {
+      method: 'PATCH',
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+      body: JSON.stringify(body),
+    });
+    return handleResponse<T>(response);
+  },
+
   delete: async <T>(endpoint: string, options: FetchOptions = {}): Promise<T> => {
     const url = `${API_BASE_URL}${endpoint}`;
     const response = await fetch(url, {

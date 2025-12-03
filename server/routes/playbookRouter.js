@@ -1,67 +1,68 @@
 
 const express = require("express");
 const router = express.Router();
+const playbookService = require("../services/playbookService");
 
-// Simple in-memory store
-const playbooks = [];
-
-// Utility to get latest by symbol & timeframe
-function queryPlaybooks(symbol, timeframe, limit = 5) {
-  let list = playbooks.slice().sort((a, b) => {
-    const timeA = a.lastUsedAt || a.createdAt;
-    const timeB = b.lastUsedAt || b.createdAt;
-    return timeB.localeCompare(timeA);
-  });
-
-  if (symbol) {
-    list = list.filter((pb) => pb.symbol.toUpperCase() === symbol.toUpperCase());
+// POST /api/playbooks/query (List/Search)
+router.post("/query", async (req, res, next) => {
+  try {
+    const { symbol, timeframe, tier } = req.body;
+    const results = await playbookService.listPlaybooks({ symbol, timeframe, tier });
+    res.json({ playbooks: results });
+  } catch (err) {
+    next(err);
   }
-  if (timeframe) {
-    list = list.filter((pb) => pb.timeframe === timeframe);
-  }
-
-  return list.slice(0, limit);
-}
-
-// POST /api/playbooks/query
-router.post("/query", (req, res) => {
-  const { symbol, timeframe, limit } = req.body;
-  const results = queryPlaybooks(symbol, timeframe, limit || 5);
-  res.json({ playbooks: results });
 });
 
-// POST /api/playbooks/save
-router.post("/save", (req, res) => {
-  const { symbol, timeframe, name, description, tags, notes } = req.body;
-
-  if (!symbol || !timeframe || !name || !description) {
-    return res.status(400).json({ error: "symbol, timeframe, name, description are required" });
+// GET /api/playbooks/:id
+router.get("/:id", async (req, res, next) => {
+  try {
+    const playbook = await playbookService.getPlaybook(req.params.id);
+    if (!playbook) return res.status(404).json({ error: "Playbook not found" });
+    res.json(playbook);
+  } catch (err) {
+    next(err);
   }
-
-  const now = new Date().toISOString();
-  const pb = {
-    id: `pb_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-    symbol: symbol.toUpperCase(),
-    timeframe,
-    name,
-    description,
-    tags: tags || [],
-    createdAt: now,
-    lastUsedAt: now,
-    notes,
-  };
-
-  playbooks.push(pb);
-  res.json(pb);
 });
 
-// POST /api/playbooks/mark-used
-router.post("/mark-used", (req, res) => {
-  const { id } = req.body;
-  const pb = playbooks.find((p) => p.id === id);
-  if (!pb) return res.status(404).json({ error: "Playbook not found" });
-  pb.lastUsedAt = new Date().toISOString();
-  res.json(pb);
+// POST /api/playbooks (Create)
+router.post("/", async (req, res, next) => {
+  try {
+    const playbook = await playbookService.createPlaybook(req.body);
+    res.json(playbook);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/playbooks/:id (Update)
+router.patch("/:id", async (req, res, next) => {
+  try {
+    const updated = await playbookService.updatePlaybook(req.params.id, req.body);
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/playbooks/:id/refresh-stats
+router.post("/:id/refresh-stats", async (req, res, next) => {
+  try {
+    const updated = await playbookService.recomputePlaybookStats(req.params.id);
+    res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/playbooks/save (Legacy compat alias -> Create)
+router.post("/save", async (req, res, next) => {
+  try {
+    const playbook = await playbookService.createPlaybook(req.body);
+    res.json(playbook);
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;

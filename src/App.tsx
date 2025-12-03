@@ -20,6 +20,7 @@ import CommandCenterView from './views/CommandCenterView';
 import AutopilotView from './views/AutopilotView';
 import TradingRoomFloorView from './views/TradingRoomFloorView';
 import ModelLabView from './views/ModelLabView';
+import PlaybookLibraryView from './views/PlaybookLibraryView'; // Phase M
 import JournalPanel from './components/JournalPanel';
 import PlaybookArchive from './components/PlaybookArchive';
 import AnalyticsPanel from './components/AnalyticsPanel';
@@ -71,11 +72,12 @@ const Dashboard: React.FC = () => {
     { id: 'terminal', label: 'Terminal' },
     { id: 'tradingRoomFloor', label: 'Desk' },
     { id: 'command', label: 'Command' },
+    { id: 'playbooks', label: 'Playbooks' }, // Phase M
     { id: 'autopilot', label: 'Autopilot' },
     { id: 'journal', label: 'Journal' },
     { id: 'analysis', label: 'Analysis' },
     { id: 'analytics', label: 'Analytics' },
-    { id: 'modelLab', label: 'Model Lab' }, // NEW
+    { id: 'modelLab', label: 'Model Lab' }, 
   ];
 
   return (
@@ -108,7 +110,6 @@ const Dashboard: React.FC = () => {
           </div>
           <div className="flex items-center gap-3">
              <button onClick={() => openOverlay('settings')} className="text-gray-400 hover:text-white transition-colors">Settings</button>
-             {/* Broker connection UI logic could go here */}
           </div>
         </header>
 
@@ -116,6 +117,7 @@ const Dashboard: React.FC = () => {
           {currentRoom === 'terminal' && <TerminalView onUrlChange={handleBrowserUrlChange} />}
           {currentRoom === 'tradingRoomFloor' && <TradingRoomFloorView />}
           {currentRoom === 'command' && <CommandCenterView />}
+          {currentRoom === 'playbooks' && <PlaybookLibraryView />} 
           {currentRoom === 'autopilot' && <AutopilotView />}
           {currentRoom === 'journal' && <div className="flex-1 min-h-0 flex flex-col"><JournalPanel onRequestPlaybookReview={handleRequestPlaybookReview} /></div>}
           {currentRoom === 'analysis' && <div className="flex-1 min-h-0 p-4 overflow-y-auto"><PlaybookArchive /></div>}

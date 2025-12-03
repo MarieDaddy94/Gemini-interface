@@ -141,6 +141,44 @@ export interface SessionSummary {
   riskNotes?: string;
 }
 
+// --- Playbook Types (Phase M) ---
+
+export type PlaybookTier = "A" | "B" | "C" | "experimental";
+export type PlaybookKind = "scalp" | "intraday" | "swing" | "news" | "other";
+export type PlaybookTrigger = "liquidity_sweep" | "breakout_retest" | "trend_continuation" | "mean_reversion" | "session_open_drive" | "custom";
+
+export interface PlaybookStats {
+  trades: number;
+  wins: number;
+  losses: number;
+  avgR: number;
+  maxDrawdownR: number;
+  lastUsedAt?: string;
+}
+
+export interface Playbook {
+  id: string;
+  name: string;
+  symbol: string;         // e.g. "US30", "NAS100"
+  timeframe: string;      // "1m", "5m", etc.
+  kind: PlaybookKind;
+  tier: PlaybookTier;
+  trigger: PlaybookTrigger;
+  riskTemplate: {
+    baseRiskR: number;    // e.g. 0.5R per trade
+    maxStackedTrades?: number;
+    dailyStopR?: number;
+  };
+  rulesText: string;      // human-readable rules
+  llmPrompt?: string;     // compact version agents use
+  tags: string[];         // e.g. ["NYO", "liquidity", "reversal"]
+  exampleSnapshotIds: string[];   // link to vision_snapshots
+  performance: PlaybookStats;
+  createdAt: string;
+  updatedAt: string;
+  archived?: boolean;
+}
+
 // --- Journaling Types ---
 
 export type TradeBias = 'Bullish' | 'Bearish' | 'Neutral';
@@ -187,6 +225,8 @@ export interface JournalEntry {
   rMultiple?: number;        // PnL measured in R
 
   playbook?: string;         // Name of setup
+  playbookId?: string;       // Link to Playbook object (Phase M)
+  
   preTradePlan?: string;     // Plan
   postTradeNotes?: string;   // Review
   sentiment?: string;        // "A+", "B", "Tilt"

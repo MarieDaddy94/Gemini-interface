@@ -4,6 +4,7 @@ const { evaluateProposedTrade } = require("../risk/riskEngine");
 const playbookPerformanceService = require("./playbookPerformanceService");
 const deskPolicyEngine = require("../services/deskPolicyEngine");
 const tiltService = require("../services/tiltService");
+const playbookService = require("../services/playbookService"); // Phase M
 
 /**
  * Generates a structured trade plan using Gemini.
@@ -22,6 +23,12 @@ async function generateAutopilotPlan({
   const tiltState = await tiltService.getTiltState();
   const defenseContext = `Defense Mode: ${tiltState.defenseMode.toUpperCase()} (${tiltState.riskState}). Signals: ${tiltState.tiltSignals.map(s => s.reason).join(', ') || 'None'}`;
 
+  // Fetch relevant playbooks (Phase M)
+  const relevantPlaybooks = await playbookService.listPlaybooks({ symbol });
+  const playbookText = relevantPlaybooks.map(pb => 
+    `- ${pb.name} (Tier ${pb.tier}, WR ${pb.performance.trades > 0 ? Math.round(pb.performance.wins/pb.performance.trades*100) : 0}%)`
+  ).join('\n') || "No playbooks found.";
+
   const systemInstruction = `
 You are the lead strategist of an AI trading squad.
 Your job:
@@ -29,7 +36,7 @@ Your job:
 - Propose ONE structured trade plan as JSON.
 - Respect strict risk: never exceed requested risk% or blow daily drawdown.
 - **IMPORTANT**: You must assign a "playbook" name to this trade (e.g. "NY Liquidity Sweep", "Trend Pullback").
-  This will be used to check historical performance stats.
+  Prefer using one of the EXISTING PLAYBOOKS below if it matches.
 
 Context:
 - Symbol: ${symbol}
@@ -38,6 +45,8 @@ Context:
 - Risk Profile: ${riskProfile || "balanced"}
 - **DEFENSE CONTEXT**: ${defenseContext}
 - **VISION CONTEXT**: ${visionSummary || "No vision data available. Rely on price structure implied by question."}
+- **AVAILABLE PLAYBOOKS**:
+${playbookText}
 - Extra Notes: ${notes || "none"}
 
 Account:

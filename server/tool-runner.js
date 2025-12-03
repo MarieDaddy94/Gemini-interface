@@ -6,6 +6,7 @@ const { generateAutopilotPlan, reviewAutopilotPlan } = require('./services/autop
 const journalService = require('./services/journalService');
 const playbookPerformanceService = require('./services/playbookPerformanceService');
 const visionService = require('./services/visionService');
+const playbookService = require('./services/playbookService');
 
 /**
  * Creates a runtime context object that the Unified AI Runner can use 
@@ -21,6 +22,8 @@ function createRuntimeContext(db, reqContext) {
     // Inject services
     journalService,
     playbookPerformanceService,
+    playbookService, // Phase M addition
+    visionService,
 
     log: (msg, data) => console.log(`[ContextLog] ${msg}`, data),
 
@@ -111,18 +114,10 @@ function createRuntimeContext(db, reqContext) {
         outcome: e.status === 'closed' ? (e.resultPnl > 0 ? 'Win' : 'Loss') : e.status,
         pnl: e.resultPnl,
         note: e.notes,
-        tags: e.tags
+        tags: e.tags,
+        playbook: e.playbook
       }));
       return trades;
-    },
-
-    getPlaybooks: async ({ symbol }) => {
-      // Return definition templates (static or DB based)
-      return [
-        { name: "Trend_Pullback_V1", symbol: symbol || "General" },
-        { name: "Breakout_Rejection", symbol: symbol || "General" },
-        { name: "NY_Liquidity_Sweep", symbol: symbol || "General" }
-      ];
     },
 
     getRecentVisionSnapshots: async (symbol, limit) => {

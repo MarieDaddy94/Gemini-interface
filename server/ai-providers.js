@@ -426,16 +426,13 @@ const brokerAndJournalTools = [
         resultPnl: { type: "number" },
         notes: { type: "string" },
         playbook: { type: "string" },
+        playbookId: { type: "string" },
         deskGoal: { type: "string" },
       },
     },
     handler: async (args, ctx) => {
       if (ctx.journalService) {
-        if (args.phase === 'planned') {
-           return ctx.journalService.logEntry(args);
-        } else {
-           return ctx.journalService.logEntry(args);
-        }
+        return ctx.journalService.logEntry(args);
       }
       if (ctx.appendJournalEntry) {
          await ctx.appendJournalEntry(args);
@@ -451,11 +448,12 @@ const brokerAndJournalTools = [
       type: "object",
       properties: {
         symbol: { type: "string" },
+        timeframe: { type: "string" }
       },
     },
     handler: async (args, ctx) => {
-      if (!ctx.getPlaybooks) throw new Error("Missing getPlaybooks ctx");
-      return ctx.getPlaybooks({ symbol: args.symbol });
+      if (!ctx.playbookService) throw new Error("Missing playbookService ctx");
+      return ctx.playbookService.listPlaybooks({ symbol: args.symbol, timeframe: args.timeframe });
     },
   },
   {
@@ -486,7 +484,7 @@ const brokerAndJournalTools = [
         },
         target: { 
           type: "string", 
-          description: "Target room ID (e.g. 'journal', 'autopilot') or overlay ID ('broker', 'settings')."
+          description: "Target room ID (e.g. 'journal', 'autopilot', 'playbooks') or overlay ID ('broker', 'settings')."
         },
         message: { 
           type: "string",

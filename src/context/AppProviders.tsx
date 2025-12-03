@@ -13,7 +13,8 @@ import { RealtimeConfigProvider } from './RealtimeConfigContext';
 import { ToolActivityProvider } from './ToolActivityContext';
 import { DeskProvider } from './DeskContext'; 
 import { AutopilotProvider } from './AutopilotContext';
-import { VoiceRoomProvider } from './VoiceRoomContext'; // NEW
+import { VoiceRoomProvider } from './VoiceRoomContext';
+import { PlaybookProvider } from './PlaybookContext'; // Phase M
 import TradeEventsToJournal from '../components/TradeEventsToJournal';
 
 interface Props {
@@ -35,10 +36,12 @@ export const AppProviders: React.FC<Props> = ({ children }) => {
                         <ToolActivityProvider>
                           <DeskProvider>
                             <AutopilotProvider>
-                              <VoiceRoomProvider>
-                                <TradeEventsToJournal />
-                                {children}
-                              </VoiceRoomProvider>
+                              <PlaybookProvider> {/* Phase M */}
+                                <VoiceRoomProvider>
+                                  <TradeEventsToJournal />
+                                  {children}
+                                </VoiceRoomProvider>
+                              </PlaybookProvider>
                             </AutopilotProvider>
                           </DeskProvider>
                         </ToolActivityProvider>

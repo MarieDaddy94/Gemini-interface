@@ -79,6 +79,19 @@ class PersistenceLayer {
           rawEventsJson TEXT
         )
       `);
+
+      // --- PHASE M: PLAYBOOKS ---
+      this.db.run(`
+        CREATE TABLE IF NOT EXISTS playbooks (
+          id TEXT PRIMARY KEY,
+          symbol TEXT,
+          timeframe TEXT,
+          tier TEXT,
+          data TEXT,
+          isArchived INTEGER DEFAULT 0,
+          updatedAt TEXT
+        )
+      `);
     });
   }
 
@@ -252,6 +265,62 @@ class PersistenceLayer {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET summary=excluded.summary, statsJson=excluded.statsJson, tags=excluded.tags, endTime=excluded.endTime`,
       [session.id, session.date, session.startTime, session.endTime, session.summary, session.tags, statsJson, eventsJson]
+    );
+  }
+
+  // --- PLAYBOOKS (Phase M) ---
+
+  async getPlaybooks(filter) {
+    let sql = 'SELECT * FROM playbooks WHERE isArchived = 0';
+    const params = [];
+
+    if (filter.symbol) {
+        sql += ' AND symbol = ?';
+        params.push(filter.symbol);
+    }
+    if (filter.timeframe) {
+        sql += ' AND timeframe = ?';
+        params.push(filter.timeframe);
+    }
+    if (filter.tier) {
+        sql += ' AND tier = ?';
+        params.push(filter.tier);
+    }
+
+    sql += ' ORDER BY updatedAt DESC';
+
+    const rows = await this.all(sql, params);
+    return rows.map(r => {
+      let data = {};
+      try { data = JSON.parse(r.data || '{}'); } catch(e){}
+      return { ...data, id: r.id, symbol: r.symbol, timeframe: r.timeframe, tier: r.tier };
+    });
+  }
+
+  async getPlaybook(id) {
+    const row = await this.get('SELECT * FROM playbooks WHERE id = ?', [id]);
+    if (!row) return null;
+    let data = {};
+    try { data = JSON.parse(row.data || '{}'); } catch(e){}
+    return { ...data, id: row.id, symbol: row.symbol, timeframe: row.timeframe, tier: row.tier };
+  }
+
+  async savePlaybook(playbook) {
+    const { id, symbol, timeframe, tier, isArchived, ...rest } = playbook;
+    const dataJson = JSON.stringify(rest);
+    const now = new Date().toISOString();
+    
+    await this.run(
+      `INSERT INTO playbooks (id, symbol, timeframe, tier, data, isArchived, updatedAt) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET 
+         symbol=excluded.symbol, 
+         timeframe=excluded.timeframe, 
+         tier=excluded.tier, 
+         data=excluded.data, 
+         isArchived=excluded.isArchived,
+         updatedAt=excluded.updatedAt`,
+      [id, symbol, timeframe, tier, dataJson, isArchived ? 1 : 0, now]
     );
   }
 }
